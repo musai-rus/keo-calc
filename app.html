@@ -1,0 +1,242 @@
+<title>Калькулятор КЕО</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Макет: рабочий лист расчёта — слева пошаговая форма, справа «штамп» с результатом и схемой; ниже — разбор по разделам */
+:root{
+  --bg:#edf0f2; --surface:#ffffff; --surface-2:#f5f7f8; --ink:#16202a; --muted:#5a6773; --line:#d3dae0; --line-2:#a7b2bc;
+  --accent:#2d5d8b; --accent-ink:#ffffff; --accent-soft:#e2ebf4;
+  --sky:#d39a12; --sky-soft:#f9eccb;
+  --ok:#1d7443; --ok-soft:#e3f2e8; --bad:#b0281f; --bad-soft:#f9e7e5; --warn:#8a5b00; --warn-soft:#fbf1da;
+  --f-disp:"IBM Plex Sans Condensed","Arial Narrow",Arial,sans-serif; --f-body:"Golos Text","Segoe UI",Arial,sans-serif; --f-mono:"IBM Plex Mono",Consolas,"Courier New",monospace;
+  --r:6px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1418; --surface:#172028; --surface-2:#1c262f; --ink:#e3e9ee; --muted:#9aa7b2; --line:#2a3540; --line-2:#475663;
+  --accent:#8bb7e4; --accent-ink:#0d1822; --accent-soft:#1d3247; --sky:#e7b94a; --sky-soft:#3a3120;
+  --ok:#62c48e; --ok-soft:#14301f; --bad:#ff8b80; --bad-soft:#3a1c1a; --warn:#e6b65a; --warn-soft:#33290f; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1418; --surface:#172028; --surface-2:#1c262f; --ink:#e3e9ee; --muted:#9aa7b2; --line:#2a3540; --line-2:#475663;
+  --accent:#8bb7e4; --accent-ink:#0d1822; --accent-soft:#1d3247; --sky:#e7b94a; --sky-soft:#3a3120;
+  --ok:#62c48e; --ok-soft:#14301f; --bad:#ff8b80; --bad-soft:#3a1c1a; --warn:#e6b65a; --warn-soft:#33290f; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body);margin:0}
+.wrap{max-width:1320px;margin:0 auto;padding-inline:20px;padding-block:0 40px}
+h1,h2,h3,h4{font-family:var(--f-disp);text-wrap:balance;margin:0}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+sub,sup{font-size:.72em;line-height:0}
+.muted{color:var(--muted)} .small{font-size:13px;color:var(--muted)}
+
+/* шапка */
+.top{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between;padding-block:18px 12px;border-bottom:1px solid var(--line)}
+.brand{display:flex;gap:14px;align-items:center;min-width:0}
+.mark{font-family:var(--f-disp);font-weight:700;font-size:15px;letter-spacing:.06em;border:1.5px solid var(--ink);padding:6px 8px 5px;line-height:1}
+.brand h1{font-size:24px;font-weight:600;letter-spacing:.01em}
+.brand p{margin:0;font-size:13px;color:var(--muted)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-2);background:var(--surface);border-radius:var(--r);padding:7px 12px;cursor:pointer;font-size:14px;line-height:1.2}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.ghost{background:transparent}
+.btn:disabled{opacity:.6;cursor:progress}
+.btn input[type=file]{display:none}
+select.btn{padding-right:28px}
+
+/* режимы */
+.modes{display:flex;gap:0;margin-block:16px 18px;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;width:max-content;max-width:100%;background:var(--surface)}
+.modes button{border:0;background:transparent;padding:9px 16px;cursor:pointer;font-family:var(--f-disp);font-weight:600;font-size:15px;letter-spacing:.02em;border-right:1px solid var(--line)}
+.modes button:last-child{border-right:0}
+.modes button[aria-checked="true"]{background:var(--ink);color:var(--bg)}
+.modes{display:grid;grid-template-columns:repeat(3,auto)}
+@media (max-width:520px){.modes{width:100%;grid-template-columns:repeat(3,minmax(0,1fr))}.modes button{padding:9px 6px;font-size:13.5px;line-height:1.2}}
+.modes .short{display:none}
+@media (max-width:520px){.modes .full{display:none}.modes .short{display:inline}}
+.note{background:var(--accent-soft);border-radius:var(--r);padding:10px 14px;font-size:14px;margin-bottom:14px}
+
+/* сетка */
+.main{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:20px;align-items:start}
+@media (max-width:1000px){.main{grid-template-columns:minmax(0,1fr)}}
+#form{display:flex;flex-direction:column;gap:14px;min-width:0}
+.side{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:12px;min-width:0}
+@media (max-width:1000px){.side{position:static;order:-1}}
+
+/* карточки */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px 18px 18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card-h{display:flex;gap:12px;align-items:flex-start}
+.step{flex:none;width:28px;height:28px;border:1.5px solid var(--ink);display:grid;place-items:center;font-family:var(--f-disp);font-weight:700;font-size:14px}
+.card-h h2{font-size:19px;font-weight:600}
+.card-h p{margin:2px 0 0;font-size:13px;color:var(--muted);max-width:70ch}
+.wallblock{display:flex;flex-direction:column;gap:12px;padding-top:4px}
+.wallblock+.wallblock{border-top:1px dashed var(--line-2);padding-top:14px}
+.wallblock h3{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.row{display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
+.row.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.row.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.row.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:640px){.row.two,.row.three,.row.four{grid-template-columns:minmax(0,1fr)}}
+@media (min-width:641px) and (max-width:860px){.row.three,.row.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fld{display:flex;flex-direction:column;gap:4px;min-width:0}
+.lbl{font-size:13px;color:var(--muted);line-height:1.3}
+.sym{font-style:italic;font-family:var(--f-mono);font-size:12.5px;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:4px;padding:0 4px;white-space:nowrap}
+.inpw{display:flex;align-items:center;border:1px solid var(--line-2);border-radius:var(--r);background:var(--surface);min-width:0}
+.inpw:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.inpw input,.inpw select{border:0;background:transparent;padding:7px 9px;width:100%;min-width:0;font-variant-numeric:tabular-nums}
+.inpw input:focus,.inpw select:focus{outline:none}
+.inpw select{appearance:auto}
+.unit{padding:0 9px 0 0;color:var(--muted);font-size:13px}
+.hint{font-size:12px;color:var(--muted)}
+.calc{font-family:var(--f-mono);font-size:15px;padding:7px 0 6px;border-bottom:1px dashed var(--line-2)}
+.chk{display:flex;gap:8px;align-items:center;font-size:14px;cursor:pointer}
+.seg{display:flex;flex-wrap:wrap;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;width:max-content;max-width:100%}
+.seg button{border:0;border-right:1px solid var(--line);background:var(--surface);padding:7px 11px;cursor:pointer;font-size:14px}
+.seg button:last-child{border-right:0}
+.seg button[aria-checked="true"]{background:var(--accent);color:var(--accent-ink)}
+.seg.compass button{font-family:var(--f-mono);min-width:40px}
+.normline{padding-top:4px} .big{font-family:var(--f-mono);font-size:20px;font-weight:500}
+.facts{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+.empty{color:var(--muted);font-size:14px;margin:0;padding:10px 12px;border:1px dashed var(--line-2);border-radius:var(--r)}
+.tblw{overflow-x:auto;max-width:100%}
+table.grid-t{border-collapse:collapse;width:100%;min-width:520px}
+.grid-t th{font-weight:500;font-size:12px;color:var(--muted);text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+.grid-t td{padding:3px 4px;border-bottom:1px solid var(--line)}
+.grid-t td.n{font-family:var(--f-mono);color:var(--muted);text-align:center;width:28px}
+.grid-t input{width:100%;min-width:56px;border:1px solid var(--line);border-radius:4px;padding:5px 6px;background:var(--surface);font-variant-numeric:tabular-nums}
+.grid-t td.ovr{display:flex;gap:3px}
+.grid-t td.ovr input{min-width:44px;font-size:13px}
+.icon{border:1px solid transparent;background:transparent;font-size:18px;line-height:1;width:30px;height:30px;border-radius:4px;cursor:pointer;color:var(--muted)}
+.icon:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
+.icon:disabled{opacity:.3}
+details.more{border-top:1px solid var(--line);padding-top:8px}
+details.more>summary{cursor:pointer;font-size:14px;color:var(--accent);list-style:none}
+details.more>summary::before{content:"+ ";font-family:var(--f-mono)}
+details.more[open]>summary::before{content:"− "}
+.more-b{padding-top:10px;font-size:14px;display:flex;flex-direction:column;gap:10px}
+.more-b p{margin:0}
+ul.sp{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:14px;max-width:80ch}
+.rhogrid{display:grid;grid-template-columns:auto 1fr 1fr;gap:6px 10px;align-items:center;max-width:360px}
+.rhogrid input{border:1px solid var(--line-2);border-radius:4px;padding:5px 7px;width:100%;background:var(--surface)}
+
+/* штамп результата */
+.stamp{border:1.5px solid var(--ink);background:var(--surface);font-variant-numeric:tabular-nums}
+.st-row{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--ink)}
+.st-c{padding:8px 12px 10px;display:flex;flex-direction:column;gap:2px}
+.st-c+.st-c{border-left:1px solid var(--ink)}
+.st-l{font-family:var(--f-disp);font-size:12.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.st-l .sy{text-transform:none;font-family:var(--f-mono);letter-spacing:0;font-size:13px;color:var(--ink)}
+.st-v{font-family:var(--f-mono);font-size:34px;font-weight:500;line-height:1.1}
+.st-v small{font-size:16px;margin-left:3px;color:var(--muted)}
+.st-v.sm{font-size:20px}
+.st-verdict{padding:10px 12px;font-family:var(--f-disp);font-weight:700;font-size:21px;letter-spacing:.08em;text-transform:uppercase;text-align:center}
+.stamp.ok .st-verdict{background:var(--ok-soft);color:var(--ok)}
+.stamp.bad .st-verdict{background:var(--bad-soft);color:var(--bad)}
+.stamp.na .st-verdict{background:var(--surface-2);color:var(--muted)}
+.stamp.ok{border-color:var(--ok)} .stamp.bad{border-color:var(--bad)}
+.stamp.bad-in{padding:12px 14px;border-color:var(--warn)}
+.st-h{font-family:var(--f-disp);font-weight:600;font-size:16px;margin-bottom:6px}
+.errs{margin:0;padding-left:18px;font-size:14px}
+.pts{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 12px;border-top:1px solid var(--line);font-family:var(--f-mono);font-size:13px}
+.pts b{font-family:var(--f-disp);color:var(--muted);font-weight:600}
+.warns{background:var(--warn-soft);border-radius:var(--r);padding:10px 12px;font-size:13px}
+.warns b{color:var(--warn)} .warns ul{margin:4px 0 0;padding-left:18px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px 12px}
+.tabs{display:flex;gap:4px;margin-bottom:8px}
+.tabs button{border:1px solid var(--line);background:transparent;border-radius:4px;padding:4px 10px;font-size:13px;cursor:pointer}
+.tabs button[aria-selected="true"]{border-color:var(--ink);font-weight:600}
+.svgw{overflow:hidden}
+svg.scheme{width:100%;height:auto;max-height:320px;display:block}
+.s-wall,.s-wallw{fill:var(--line-2);stroke:var(--ink);stroke-width:1}
+svg.scheme *{vector-effect:non-scaling-stroke}
+.s-glass{stroke:var(--accent);stroke-width:3;fill:none}
+.s-room{stroke:var(--ink);stroke-width:1.5;fill:none}
+.s-roomf{fill:var(--surface-2);stroke:var(--ink);stroke-width:1.5}
+.s-ray{stroke:var(--sky);stroke-width:1.5;stroke-dasharray:6 4;fill:none}
+.s-rayb{stroke:var(--sky);stroke-width:1;fill:none}
+.s-skyf{fill:var(--sky-soft);stroke:var(--sky);stroke-width:.8}
+.s-bld{fill:var(--line);stroke:var(--ink);stroke-width:1}
+.s-pt{fill:var(--bad);stroke:none}
+.s-axis{stroke:var(--muted);stroke-width:1;stroke-dasharray:10 3 2 3;fill:none}
+.s-lan{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.5}
+.s-opq{stroke:var(--ink);stroke-width:2.2;fill:none;stroke-linecap:round}
+.s-dim{stroke:var(--muted);stroke-width:.8;fill:none}
+.s-dimm{stroke:var(--muted);stroke-width:.8}
+.s-txt,.s-dimt{fill:var(--ink);font-family:var(--f-body);font-size:var(--fs,32px)}
+.s-txtb{fill:var(--ink);font-family:var(--f-disp);font-weight:600;font-size:calc(var(--fs,32px)*1.08)}
+.s-cap{fill:var(--muted);font-family:var(--f-disp);font-weight:600;font-size:var(--fs,32px);letter-spacing:.04em}
+.b2prof{max-width:260px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--surface-2)}
+.b2prof svg.scheme{max-height:110px}
+.fld.off{opacity:.45}
+.xs{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.xsi{display:inline-flex;align-items:center;border:1px solid var(--line-2);border-radius:6px;padding-left:4px;background:var(--surface)}
+.xsi input{width:68px;border:0;background:transparent;padding:6px 4px;font-variant-numeric:tabular-nums}
+.pdfbox{display:flex;flex-direction:column;gap:6px}
+.pdfbox .btn{justify-content:center;padding:11px 14px;font-size:15px}
+
+/* разбор */
+.bd{margin-top:28px}
+.bd>h2{font-size:22px;font-weight:600;margin-bottom:4px}
+.bd>p{margin:0 0 12px;color:var(--muted);font-size:14px;max-width:80ch}
+#breakdown{display:flex;flex-direction:column;gap:8px}
+details.sec{background:var(--surface);border:1px solid var(--line);border-radius:8px}
+details.sec>summary{cursor:pointer;padding:12px 16px;font-family:var(--f-disp);font-weight:600;font-size:16px;list-style:none;display:flex;justify-content:space-between;gap:12px}
+details.sec>summary::after{content:"Развернуть";font-family:var(--f-body);font-weight:400;font-size:13px;color:var(--accent)}
+details.sec[open]>summary::after{content:"Свернуть"}
+.sec-b{padding:0 16px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.sec-b h4{font-size:15px;margin-top:6px}
+.sec-b p{margin:0;max-width:90ch}
+.cap{font-size:13px;font-style:italic;color:var(--muted)}
+table.rep{border-collapse:collapse;width:100%;font-size:13.5px;min-width:560px}
+.rep th{background:var(--surface-2);font-weight:600;font-size:12.5px;text-align:left;padding:6px 8px;border:1px solid var(--line)}
+.rep td{padding:5px 8px;border:1px solid var(--line);vertical-align:top}
+.rep td.c{text-align:center} .rep td.num{font-family:var(--f-mono);font-size:13px;white-space:nowrap}
+.rep td.src{color:var(--muted);font-size:12.5px}
+.formula{font-family:var(--f-mono);font-size:14px;background:var(--surface-2);border-left:3px solid var(--accent);padding:10px 14px;display:flex;flex-direction:column;gap:4px;overflow-x:auto}
+.formula p{font-family:var(--f-body)}
+footer{margin-top:28px;font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:6px}
+footer p{margin:0;max-width:100ch}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 18px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:var(--r);font-size:14px;z-index:10;max-width:calc(100% - 32px)}
+@media (prefers-reduced-motion:no-preference){.btn,.seg button,.modes button{transition:background-color .15s,border-color .15s}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true">КЕО</span><div><h1>Калькулятор КЕО</h1><p>Проверочный расчёт по СП 367.1325800.2025 и СП 52.13330.2016</p></div></div>
+    <div class="actions">
+      <select class="btn" id="ex-menu" aria-label="Примеры и новый расчёт"><option value="">Примеры…</option><option value="side">Боковой свет: ДОО, пом. 1.004</option><option value="top">Шахтные фонари: пом. 1.G.11.2</option><option value="b2">Фонари-надстройки: спортзал</option><option value="comb">Комбинированное освещение</option><option value="new">Новый расчёт</option></select>
+      <label class="btn ghost" for="file-open">Открыть<input type="file" id="file-open" accept=".json,application/json"></label>
+      <button type="button" class="btn ghost" id="btn-save">Сохранить исходные</button>
+      <button type="button" class="btn primary" data-pdf>Скачать PDF</button>
+    </div>
+  </header>
+
+  <nav class="modes" role="radiogroup" aria-label="Система освещения">
+    <button type="button" role="radio" data-mode="side" aria-checked="true">Боковое</button>
+    <button type="button" role="radio" data-mode="top" aria-checked="false">Верхнее</button>
+    <button type="button" role="radio" data-mode="comb" aria-checked="false"><span class="full">Комбинированное</span><span class="short">Комбинир.</span></button>
+  </nav>
+  <p class="note" id="first-note" hidden>Открыт пример — групповая ДОО из проекта 1226-30-01-АР2. Замените данные своими: результат и разбор пересчитываются сразу.</p>
+
+  <div class="main">
+    <div id="form"></div>
+    <aside class="side" aria-label="Результат">
+      <div id="result"></div>
+      <div class="panel" id="schemes"></div>
+      <div class="pdfbox"><button type="button" class="btn primary" data-pdf>Скачать полный расчёт в PDF</button><span class="small">Листы А4 с рамкой и основной надписью: исходные данные, схема, коэффициенты с источниками, формулы с подстановкой, заключение.</span></div>
+    </aside>
+  </div>
+
+  <section class="bd" aria-labelledby="bd-h">
+    <h2 id="bd-h">Разбор расчёта</h2>
+    <p>Каждый раздел — то же, что попадёт в PDF: формула, подстановка чисел и пункт или таблица СП, откуда взято значение.</p>
+    <div id="breakdown"></div>
+  </section>
+
+  <footer>
+    <p>Метод: графики А.М. Данилюка I и II заменены точными формулами, по которым они построены; число лучей округляется до десятых, как при ручном подсчёте. q(γ) — по формуле (3.2) СП 367. Табличные коэффициенты (r0, Kзд0, bф, K, r2) интерполируются линейно; за пределами таблиц r0, Kзд0 и r2 принимаются по границе, K — экстраполируется по примечаниям к табл. Б.17–Б.20. Kс — по оцифрованным графикам рис. Б.2, Б.3.</p>
+    <p>Сверено с расчётами keo.expert (1226-30-01-АР2, прил. 1, 2, 7, 9) и развёрнутым расчётом верхнего света (1226-30-01-АР3, прил. 1): расхождения в пределах округления. Расчёт не учитывает мебель и оборудование (п. 5.9 СП 52.13330.2016).</p>
+  </footer>
+</div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
