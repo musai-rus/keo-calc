@@ -6,7 +6,6 @@
 
 - **Калькулятор:** https://musai-rus.github.io/keo-calc/
 - **КЕО по модели в Autodesk Viewer (кнопка-закладка и инструкция):** https://musai-rus.github.io/keo-calc/bim.html
-- Скрипт для Viewer: https://musai-rus.github.io/keo-calc/keo-bim.js
 
 Открываются без входа. Сайт публикуется GitHub Pages из папки `docs/` ветки `main`.
 
