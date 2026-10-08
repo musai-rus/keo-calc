@@ -1287,6 +1287,187 @@ const KEO = (function () {
 
   return { B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
+/* КЕО по модели — расчётные пространства (чистые функции, без Viewer; проверяются bim/test-bim.js).
+   R  — растр с линиями разделения помещений (для опознания помещений Revit);
+   Rp — растр только физических преград: стены, витражи, двери, окна, колонны (для света и состава пространства). */
+const BimSpaces = (function () {
+
+  /* ---------- единицы свойств Revit ---------- */
+  // dataTypeContext вида 'autodesk.unit.unit:squareMeters-1.0.1'
+  const AREA = { squareMeters: 1, squareMillimeters: 1e-6, squareCentimeters: 1e-4, squareFeet: 0.09290304, squareInches: 0.00064516 };
+  const LEN = { meters: 1, millimeters: 1e-3, centimeters: 1e-2, decimeters: 0.1, feet: 0.3048, inches: 0.0254, feetFractionalInches: 0.3048, metersCentimeters: 1 };
+  function unitOf(ctx) { const m = /unit:([A-Za-z]+)-/.exec(ctx || ''); return m ? m[1] : null; }
+  // → {v (в м² или м), unit, ok, warn}
+  function conv(raw, ctx, kind) {
+    if (raw === undefined || raw === null || raw === '' || isNaN(+raw)) return { v: null, unit: null, ok: false, warn: 'нет значения' };
+    const u = unitOf(ctx), tab = kind === 'area' ? AREA : LEN;
+    if (u && tab[u] !== undefined) return { v: +raw * tab[u], unit: u, ok: true };
+    return { v: null, unit: u || ctx || 'не указаны', ok: false, warn: `единицы ${u || ctx || '(не указаны)'} не распознаны — значение ${raw} не используется` };
+  }
+
+  /* ---------- помещения ↔ области растра R ---------- */
+  // площадь Revit сравнивается с площадью области в чистоте (areaC) и до осей стен (areaV) — зависит от настройки расчёта площадей в Revit
+  function matchRooms(R, rooms, tol = 0.04) {
+    const regs = R.regs.filter(r => r && !r.border && r.areaC >= 0.8);
+    const pairs = [];
+    rooms.forEach(rm => {
+      if (!(rm.area > 0)) return;
+      regs.forEach(rg => {
+        const dd = Math.min(Math.abs(rg.areaC - rm.area), Math.abs((rg.areaV || rg.areaC) - rm.area));
+        if (!(dd / rm.area < tol || dd < 0.4)) return;
+        if (rm.per > 0) { const k = rg.per / rm.per; if (k < 0.75 || k > 1.45) return; } // периметр отсекает узкие полости той же площади
+        pairs.push([dd / rm.area, rm, rg]);
+      });
+    });
+    pairs.sort((a, b) => a[0] - b[0]);
+    pairs.forEach(([d, rm, rg]) => { if (rm.reg || rg.room) return; rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; rm.areaModelV = rg.areaV; });
+  }
+
+  /* ---------- состав пространств ---------- */
+  // rooms — помещения уровня (rm.key — уникальный ключ: ElementId/dbId; номер не используется как ключ)
+  // isExcluded(rm) — ЛК, коридоры, холлы, вестибюли: не объединяются автоматически и не рассчитываются
+  // decisions — ручные решения пользователя: merge [[key…]], split [[key…]], assign [{at: [x, y], keys: [key…]}] (помещения в неопознанный контур)
+  const nameKey = n => String(n || '').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z]/g, '');
+  function compose(R, Rp, rooms, isExcluded, decisions) {
+    decisions = decisions || {};
+    const M = decisions.merge || [], SPL = decisions.split || [], AS = decisions.assign || [];
+    rooms.forEach(rm => { delete rm.byBalance; delete rm.byUser; delete rm.sub; }); // повторная сборка после ручного решения
+    R.regs.forEach(r => { if (r) { delete r.rooms; delete r.cands; } });
+    const byKey = new Map(rooms.map(r => [r.key, r]));
+    // R-подобласть → область Rp (свободная клетка R всегда свободна и в Rp: в R преград больше)
+    const subsOf = new Map();
+    R.regs.forEach(r => { if (!r || r.border) return; const P = Rp.lab[r.seed]; if (!P || Rp.ext.has(P)) return; if (!subsOf.has(P)) subsOf.set(P, []); subsOf.get(P).push(r); });
+    const free = r => !r.room && !r.rooms;
+    // 1) ручное назначение помещений в контур без помещения
+    AS.forEach(a => {
+      const rg = R.regs[cellLab(R, a.at)]; if (!rg || rg.border || !free(rg)) return;
+      const list = (a.keys || []).map(k => byKey.get(k)).filter(rm => rm && !rm.reg && rm.sub === undefined);
+      if (!list.length) return;
+      rg.rooms = list; list.forEach(rm => { rm.sub = rg.id; rm.byUser = true; });
+    });
+    // 2) автоматически: контур ≥ 3 м² без помещения ↔ 1–3 неопознанных помещения с той же суммой площадей; только если вариант единственный
+    const pool = () => rooms.filter(rm => !rm.reg && rm.sub === undefined && rm.area > 0 && !isExcluded(rm));
+    [...subsOf.values()].flat().filter(r => free(r) && r.areaC >= 3).sort((a, b) => b.areaC - a.areaC).forEach(rg => {
+      const tol = Math.max(0.6, 0.03 * rg.areaC), c = combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg.per);
+      if (c.length === 1) { rg.rooms = c[0].sel; c[0].sel.forEach(rm => { rm.sub = rg.id; rm.byBalance = rg.id; }); }
+      else if (c.length > 1) rg.cands = c.slice(0, 6);
+    });
+    const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k));
+    const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum })) });
+    [...subsOf.keys()].sort((a, b) => a - b).forEach(P => {
+      const subs = subsOf.get(P), subOf = new Map(), units = [];
+      const big = subs.filter(s => free(s) && s.areaC >= 8).map(unk); unknown.push(...big.map(u => ({ ...u, P })));
+      subs.forEach(s => { const rs = s.room ? [s.room] : s.rooms || []; rs.forEach(r => subOf.set(r, s)); if (rs.length) units.push(rs); });
+      const all = units.flat();
+      const nonEx = all.filter(r => !isExcluded(r)), ex = all.filter(r => isExcluded(r));
+      if (!nonEx.length && !M.some(g => all.some(r => g.includes(r.key)))) return;
+      // по умолчанию все неисключённые помещения физического объёма — одно пространство; если в объёме несколько помещений
+      // одного назначения (две спальни, два кабинета) — это разные помещения с общим проходом: раздельно, вопрос пользователю
+      const dup = new Set(nonEx.map(r => nameKey(r.name))).size < nonEx.length;
+      const splitUser = nonEx.some(r => keyIn(SPL, r.key));
+      let groups = (splitUser || dup) ? units.map(u => u.filter(r => !isExcluded(r))).filter(u => u.length) : nonEx.length ? [nonEx] : [];
+      M.forEach(g => {
+        const members = all.filter(r => g.includes(r.key)); if (members.length < 2) return;
+        groups = groups.map(x => x.filter(r => !members.includes(r))).filter(x => x.length);
+        groups.push(members);
+      });
+      // свободные части без помещения < 8 м² (полосы у витражей, зазоры) делятся между пространствами объёма по близости (spaceLabel);
+      // крупные части без помещения не присоединяются — их состав определяет пользователь
+      const grow = subs.filter(s => free(s) && s.areaC < 8).map(s => s.id);
+      const main = groups.slice().sort((a, b) => b.reduce((s, r) => s + r.area, 0) - a.reduce((s, r) => s + r.area, 0))[0];
+      const used = new Set();
+      groups.forEach(g => {
+        const regIds = [];
+        g.forEach(r => { const s = subOf.get(r); if (s && !used.has(s.id)) { used.add(s.id); regIds.push(s.id); } });
+        const others = all.filter(r => !g.includes(r));
+        spaces.push({
+          P, rooms: g, regIds, grow, key: g.map(r => r.key).sort().join('+'),
+          merged: g.length > 1, manual: M.some(x => g.every(r => x.includes(r.key))) || splitUser,
+          dup: dup && !M.some(x => g.every(r => x.includes(r.key))),
+          balance: g.filter(r => r.byBalance !== undefined), byUser: g.filter(r => r.byUser),
+          unknown: g === main ? big : [], // части объёма ≥ 8 м² без помещения Revit — состав объёма не определён до решения пользователя
+          neighbours: others, // в том же физическом объёме, но не в этой группе (например, коридор)
+          excludedNeighbours: ex.filter(r => !g.includes(r))
+        });
+      });
+    });
+    const placed = new Set(spaces.flatMap(s => s.rooms));
+    const unplaced = rooms.filter(rm => !placed.has(rm) && rm.area > 0 && !isExcluded(rm));
+    return { spaces, unplaced, unknown }; // unknown — все части уровня ≥ 8 м² без помещения Revit
+  }
+  const cellLab = (R, at) => { const i = Math.floor((at[0] - R.minx) / R.cell), j = Math.floor((at[1] - R.miny) / R.cell); return (i < 0 || j < 0 || i >= R.W || j >= R.H) ? 0 : R.lab[j * R.W + i]; };
+  const cellXY = (R, p) => { const i = p % R.W, j = (p - i) / R.W; return [Math.round((R.minx + (i + 0.5) * R.cell) * 1000) / 1000, Math.round((R.miny + (j + 0.5) * R.cell) * 1000) / 1000]; };
+  // все наборы из 1–3 помещений, сумма площадей которых совпадает с площадью контура (в чистоте или до осей) в пределах tol;
+  // периметр контура per (если задан) должен быть совместим: одно помещение — 0,75…1,45 его периметра, несколько — 0,45…1,15 суммы периметров
+  function combos(list, targets, tol, per) {
+    const out = [], n = Math.min(list.length, 60);
+    const perOk = sel => { if (!(per > 0) || sel.some(r => !(r.per > 0))) return true; const k = per / sel.reduce((a, r) => a + r.per, 0); return sel.length === 1 ? k >= 0.75 && k <= 1.45 : k >= 0.45 && k <= 1.15; };
+    const consider = sel => { const s = sel.reduce((a, r) => a + r.area, 0), d = Math.min(...targets.map(t => Math.abs(s - t))); if (d <= tol && perOk(sel)) out.push({ sel, d, sum: s }); };
+    for (let i = 0; i < n; i++) { consider([list[i]]); for (let j = i + 1; j < n; j++) { consider([list[i], list[j]]); for (let k = j + 1; k < n; k++) consider([list[i], list[j], list[k]]); } }
+    return out.sort((a, b) => a.d - b.d);
+  }
+  // клетка → номер пространства (−1 — не в пространстве): контуры помещений пространства, затем рост по близости в пределах
+  // физического объёма — в клетки линий разделения и в мелкие свободные части (s.grow); в чужие помещения и крупные части без помещения не растёт
+  function spaceLabel(R, Rp, spaces) {
+    const N = R.W * R.H, W = R.W, lab = new Int32Array(N).fill(-1), regTo = new Map(), allowed = new Set();
+    spaces.forEach((s, i) => { s.regIds.forEach(id => regTo.set(id, i)); (s.grow || []).forEach(id => allowed.add(id)); });
+    const q = new Int32Array(N); let h = 0, t = 0;
+    for (let p = 0; p < N; p++) { const id = R.lab[p]; if (id > 0 && regTo.has(id)) { lab[p] = regTo.get(id); q[t++] = p; } }
+    while (h < t) {
+      const p = q[h++], i = p % W;
+      for (const nb of [i > 0 ? p - 1 : -1, i < W - 1 ? p + 1 : -1, p - W, p + W]) {
+        if (nb < 0 || nb >= N || lab[nb] >= 0 || !Rp.lab[nb] || Rp.lab[nb] !== Rp.lab[p]) continue;
+        const id = R.lab[nb]; if (id !== 0 && !allowed.has(id)) continue;
+        lab[nb] = lab[p]; q[t++] = nb;
+      }
+    }
+    return lab;
+  }
+
+  /* ---------- видимость проёма из расчётной точки (физические перегородки — препятствие) ---------- */
+  // A — точка, Q — точка на внутренней грани проёма; препятствием считаются только клетки, занятые в Rp; последние skip м у проёма не проверяются (откос, импосты)
+  function lineFree(Rp, A, Q, skip) {
+    const dx = Q[0] - A[0], dy = Q[1] - A[1], L = Math.hypot(dx, dy); if (L < 1e-6) return true;
+    const n = Math.ceil(L / (Rp.cell * 0.5)), stop = Math.max(0, 1 - (skip || 0.2) / L);
+    for (let k = 1; k <= n; k++) {
+      const t = k / n; if (t > stop) break;
+      const i = Math.floor((A[0] + dx * t - Rp.minx) / Rp.cell), j = Math.floor((A[1] + dy * t - Rp.miny) / Rp.cell);
+      if (i < 0 || j < 0 || i >= Rp.W || j >= Rp.H || Rp.lab[j * Rp.W + i] === 0) return false;
+    }
+    return true;
+  }
+  // окно на грани: центр c (на внутренней грани), направляющая t, ширина bo → видимые участки [{a, b}] вдоль t относительно центра
+  function visibleParts(Rp, A, c, t, bo, step = 0.1, skip = 0.2) {
+    const n = Math.max(2, Math.round(bo / step)), parts = []; let cur = null;
+    for (let k = 0; k < n; k++) {
+      const u = -bo / 2 + (k + 0.5) * bo / n, Q = [c[0] + t[0] * u, c[1] + t[1] * u];
+      const ok = lineFree(Rp, A, Q, skip);
+      if (ok) { if (!cur) { cur = { a: u - bo / (2 * n), b: u + bo / (2 * n) }; parts.push(cur); } else cur.b = u + bo / (2 * n); } else cur = null;
+    }
+    return parts;
+  }
+
+  // свободное сечение через точку A вдоль t в физическом растре Rp: [до препятствия по +t, по −t].
+  // Колонны (препятствие, свободное на ±1 м по нормали n) пропускаются; стены, перегородки и остекление ограничивают сечение
+  function sectionWidth(Rp, A, t, n, maxL = 80) {
+    const at = (x, y) => { const i = Math.floor((x - Rp.minx) / Rp.cell), j = Math.floor((y - Rp.miny) / Rp.cell); return (i < 0 || j < 0 || i >= Rp.W || j >= Rp.H) ? -1 : Rp.lab[j * Rp.W + i]; };
+    const own = at(A[0], A[1]); if (own <= 0) return null;
+    const go = sg => {
+      const step = Rp.cell * 0.5;
+      for (let s = step; s < maxL; s += step) {
+        const x = A[0] + t[0] * sg * s, y = A[1] + t[1] * sg * s, id = at(x, y);
+        if (id === own) continue;
+        const solid = id === 0 || (id > 0 && !Rp.ext.has(id) && Rp.regs[id] && Rp.regs[id].areaC < 2); // контур препятствия или его внутренность
+        if (solid && at(x + n[0], y + n[1]) === own && at(x - n[0], y - n[1]) === own) continue; // колонна
+        return s - step;
+      }
+      return maxL;
+    };
+    return [go(1), go(-1)];
+  }
+
+  return { conv, unitOf, matchRooms, compose, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
+})();
 /* КЕО по модели Autodesk Viewer — геометрия: срезы, растр помещений, проёмы, карта высот.
    Работает внутри страницы с уже загруженной моделью (NOP_VIEWER). Единицы — метры, координаты — мировые координаты Viewer × масштаб единиц. */
 const BimGeom = (function () {
@@ -1306,23 +1487,31 @@ const BimGeom = (function () {
     return { byCat, info };
   }
 
-  // помещения из базы свойств (у них нет 3D-геометрии в экспорте viewer.autodesk.com)
+  // помещения из базы свойств (у них нет 3D-геометрии в экспорте viewer.autodesk.com); единицы — по dataTypeContext свойства
   async function rooms(C) {
-    return C.m.getPropertyDb().executeUserFunction(function (pdb) {
+    const raw = await C.m.getPropertyDb().executeUserFunction(function (pdb) {
       const out = [];
       pdb.enumObjects(id => {
-        const o = { id }; let isRoom = false;
+        const o = { id, u: {} }; let isRoom = false;
         pdb.enumObjectProperties(id, (a, v) => {
-          const n = pdb.getAttributeDef(a).name, val = pdb.getAttrValue(a, v);
+          const d = pdb.getAttributeDef(a), n = d.name, val = pdb.getAttrValue(a, v);
           if (n === 'Category' && val === 'Revit Rooms') isRoom = true;
           if (n === 'Level' && isNaN(+val)) o.level = val; if (n === 'Name') o.name = val; if (n === 'Number') o.num = val;
-          if (n === 'Area') o.area = +val; if (n === 'Perimeter') o.per = +val; if (n === 'Unbounded Height') o.h = +val;
-          if (n === 'Department') o.dep = val; if (n === 'Occupancy') o.occ = val; if (n === 'Base Offset') o.off = +val;
+          if (n === 'ElementId') o.eid = String(val);
+          if (n === 'Area' || n === 'Perimeter' || n === 'Unbounded Height' || n === 'Base Offset') o.u[n] = [val, d.dataTypeContext || null];
+          if (n === 'Department') o.dep = val; if (n === 'Occupancy') o.occ = val;
         });
-        if (isRoom && o.area > 0) out.push(o);
+        if (isRoom) out.push(o);
       });
       return out;
     });
+    return raw.map(o => {
+      const A = BimSpaces.conv(...(o.u['Area'] || []), 'area'), P = BimSpaces.conv(...(o.u['Perimeter'] || []), 'len'), H = BimSpaces.conv(...(o.u['Unbounded Height'] || []), 'len');
+      const warn = [A.ok ? null : 'площадь: ' + A.warn, P.ok ? null : 'периметр: ' + P.warn].filter(Boolean);
+      return { id: o.id, key: o.eid || ('db' + o.id), eid: o.eid, level: o.level, name: o.name || '', num: o.num || '', dep: o.dep, occ: o.occ,
+        area: A.v, areaRaw: o.u['Area'] && o.u['Area'][0], areaUnit: A.unit, areaSrc: A.ok ? 'Revit, свойство Area' : null,
+        per: P.v, h: H.v, warn };
+    }).filter(r => r.area > 0 || r.warn.length);
   }
 
   // перебор треугольников / линий элемента в мировых координатах (единицы модели)
@@ -1352,10 +1541,14 @@ const BimGeom = (function () {
   }
 
   // растр среза и разметка связных свободных областей
-  function raster(segs, cell) {
+  function bounds(segs) {
     let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
     segs.forEach(s => { minx = Math.min(minx, s[0], s[2]); maxx = Math.max(maxx, s[0], s[2]); miny = Math.min(miny, s[1], s[3]); maxy = Math.max(maxy, s[1], s[3]); });
-    minx -= 2; miny -= 2; maxx += 2; maxy += 2;
+    return [minx - 2, miny - 2, maxx + 2, maxy + 2];
+  }
+  // bx — общие границы, чтобы растры R и Rp совпадали поклеточно
+  function raster(segs, cell, bx) {
+    const [minx, miny, maxx, maxy] = bx || bounds(segs);
     const W = Math.ceil((maxx - minx) / cell), H = Math.ceil((maxy - miny) / cell);
     const occ = new Uint8Array(W * H);
     const put = (i, j) => { if (i >= 0 && j >= 0 && i < W && j < H) occ[j * W + i] = 1; };
@@ -1376,31 +1569,25 @@ const BimGeom = (function () {
         if (j > 0 && !occ[p - W] && !lab[p - W]) { lab[p - W] = id; q[t++] = p - W; }
         if (j < H - 1 && !occ[p + W] && !lab[p + W]) { lab[p + W] = id; q[t++] = p + W; }
       }
-      regs.push({ id, cells: cnt, area: cnt * cell * cell, border, cx: minx + (sx / cnt + 0.5) * cell, cy: miny + (sy / cnt + 0.5) * cell });
+      regs.push({ id, seed: s0, cells: cnt, area: cnt * cell * cell, border, cx: minx + (sx / cnt + 0.5) * cell, cy: miny + (sy / cnt + 0.5) * cell });
     }
     // граничные клетки → поправка площади на половину ширины линии растра
     const bnd = new Float64Array(regs.length);
     for (let p = 0; p < W * H; p++) { const id = lab[p]; if (!id) continue; const i = p % W; if ((i > 0 && lab[p - 1] !== id) || (i < W - 1 && lab[p + 1] !== id) || (p >= W && lab[p - W] !== id) || (p < W * (H - 1) && lab[p + W] !== id)) bnd[id]++; }
     regs.forEach(r => { if (r) { r.areaC = r.area + bnd[r.id] * cell * cell * 0.5; r.per = bnd[r.id] * cell; } });
+    // площадь «до осей стен»: свободные области растут в занятые клетки (стены) навстречу друг другу, не более 0,3 м
+    const own = new Int32Array(lab); let fr = [];
+    for (let p = 0; p < W * H; p++) if (lab[p]) { const i = p % W; if ((i > 0 && !lab[p - 1]) || (i < W - 1 && !lab[p + 1]) || (p >= W && !lab[p - W]) || (p < W * (H - 1) && !lab[p + W])) fr.push(p); }
+    for (let d = 1; d <= Math.round(0.3 / cell) && fr.length; d++) {
+      const nf = [];
+      fr.forEach(p => { const id = own[p], i = p % W; if (i > 0 && !lab[p - 1] && !own[p - 1]) { own[p - 1] = id; nf.push(p - 1); } if (i < W - 1 && !lab[p + 1] && !own[p + 1]) { own[p + 1] = id; nf.push(p + 1); } if (p >= W && !lab[p - W] && !own[p - W]) { own[p - W] = id; nf.push(p - W); } if (p < W * (H - 1) && !lab[p + W] && !own[p + W]) { own[p + W] = id; nf.push(p + W); } });
+      fr = nf;
+    }
+    const add = new Float64Array(regs.length); for (let p = 0; p < W * H; p++) if (!lab[p] && own[p]) add[own[p]]++;
+    regs.forEach(r => { if (r) r.areaV = r.area + add[r.id] * cell * cell; });
     return { W, H, cell, minx, miny, lab, regs, ext: new Set() };
   }
   const labelAt = (R, x, y) => { const i = Math.floor((x - R.minx) / R.cell), j = Math.floor((y - R.miny) / R.cell); if (i < 0 || j < 0 || i >= R.W || j >= R.H) return 1; return R.lab[j * R.W + i]; };
-
-  // сопоставление областей с помещениями уровня по площади (жадно, по возрастанию расхождения)
-  function matchRooms(R, rooms) {
-    const regs = R.regs.filter(r => r && !r.border && r.areaC >= 0.8);
-    const pairs = [];
-    rooms.forEach(rm => regs.forEach(rg => {
-      const d = Math.abs(rg.areaC - rm.area) / rm.area; if (!(d < 0.06 || Math.abs(rg.areaC - rm.area) < 0.4)) return;
-      // периметр отсекает узкие полости той же площади (зазоры за витражами, шахты)
-      if (rm.per > 0) { const k = rg.per / (rm.per / 1000); if (k < 0.75 || k > 1.45) return; }
-      pairs.push([d, rm, rg]);
-    }));
-    pairs.sort((a, b) => a[0] - b[0]);
-    const byRoom = new Map();
-    pairs.forEach(([d, rm, rg]) => { if (byRoom.has(rm.id) || rg.room) return; byRoom.set(rm.id, rg.id); rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; });
-    return byRoom;
-  }
 
   // наружные области: касается края растра или большая несопоставленная область без перекрытия над ней (двор)
   function markExterior(C, R, zM) {
@@ -1414,17 +1601,24 @@ const BimGeom = (function () {
     });
   }
 
-  // светопрозрачные элементы: только прозрачные фрагменты (стекло); геометрия в плане — по главным осям
+  // светопрозрачные элементы: только прозрачные фрагменты (стекло). Вертикальные — окна, витражи, остеклённые двери;
+  // горизонтальные и наклонные (|nz| > 0,7) — световые фонари: окна/панели в кровле, кровли из стекла, обобщённые модели «фонарь».
+  // Перекрытия и потолки с прозрачным материалом фонарями не считаются.
+  const LANTERN_NAME = /фонар|зенит|skylight|roof ?light|light ?well|световод|светов/i;
   function openings(C, cat, excludeRe) {
     const out = [], mat4 = new THREE.Matrix4(), S = C.S;
-    ['Revit Windows', 'Revit Curtain Panels', 'Revit Doors'].forEach(c => (cat.byCat[c] || []).forEach(id => {
-      if (excludeRe && excludeRe.test(cat.info[id].type || '')) return;
-      const P = [];
+    ['Revit Windows', 'Revit Curtain Panels', 'Revit Doors', 'Revit Roofs', 'Revit Generic Models'].forEach(c => (cat.byCat[c] || []).forEach(id => {
+      const inf = cat.info[id];
+      if (excludeRe && excludeRe.test(inf.type || '')) return;
+      if (c === 'Revit Generic Models' && !LANTERN_NAME.test([inf.type, inf.fam, inf.name].join(' '))) return;
+      const P = []; let A = 0, NZ = 0;
       C.it.enumNodeFragments(id, f => {
         const mt = C.fl.getMaterial(f); if (!(mt && (mt.transparent || mt.opacity < 0.95))) return;
         const g = C.fl.getGeometry(f); if (!g || !g.vb || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
-        const e = mat4.elements, st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, n = g.vb.length / st;
+        const e = mat4.elements, st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, n = g.vb.length / st, base = P.length;
         for (let i = 0; i < n; i++) { const x = g.vb[i * st + off], y = g.vb[i * st + off + 1], z = g.vb[i * st + off + 2]; P.push([(e[0] * x + e[4] * y + e[8] * z + e[12]) * S, (e[1] * x + e[5] * y + e[9] * z + e[13]) * S, (e[2] * x + e[6] * y + e[10] * z + e[14]) * S]); }
+        const ib = g.ib || (g.index && g.index.array);
+        if (ib) for (let i = 0; i + 2 < ib.length; i += 3) { const a = P[base + ib[i]], b = P[base + ib[i + 1]], cc = P[base + ib[i + 2]]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = cc[0] - a[0], vy = cc[1] - a[1], vz = cc[2] - a[2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, ar = Math.hypot(nx, ny, nz) / 2; A += ar; NZ += Math.abs(nz) / 2; }
       }, true);
       if (P.length < 3) return;
       let mx = 0, my = 0, z0 = 1e9, z1 = -1e9; P.forEach(p => { mx += p[0]; my += p[1]; z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]); }); mx /= P.length; my /= P.length;
@@ -1432,52 +1626,68 @@ const BimGeom = (function () {
       const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), t = [Math.cos(ang), Math.sin(ang)], n = [-t[1], t[0]];
       let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
       P.forEach(p => { const u = (p[0] - mx) * t[0] + (p[1] - my) * t[1], w = (p[0] - mx) * n[0] + (p[1] - my) * n[1]; a0 = Math.min(a0, u); a1 = Math.max(a1, u); b0 = Math.min(b0, w); b1 = Math.max(b1, w); });
-      const w = a1 - a0, d = b1 - b0, h = z1 - z0;
+      const w = a1 - a0, d = b1 - b0, h = z1 - z0, cxy = [mx + t[0] * (a0 + a1) / 2 + n[0] * (b0 + b1) / 2, my + t[1] * (a0 + a1) / 2 + n[1] * (b0 + b1) / 2];
+      const flat = A > 0 ? NZ / A : 0; // доля площади стекла, обращённой вверх
+      if (flat > 0.7 && c !== 'Revit Doors') {
+        if (w < 0.2 || d < 0.2) return;
+        out.push({ id, cat: c, type: inf.type, roof: true, c: cxy, t, n, av: w, bv: d, z0, z1, tilt: Math.acos(Math.min(1, flat)) * 180 / Math.PI });
+        return;
+      }
+      if (c === 'Revit Roofs' || c === 'Revit Generic Models') { if (flat < 0.3 && w >= 0.3 && h >= 0.3) out.push({ id, cat: c, type: inf.type, c: cxy, t, n, w, d, z0, z1 }); return; }
       if (w < 0.15 && d < 0.15) return; // щели и торцы стекла
-      out.push({ id, cat: c, type: cat.info[id].type, c: [mx + t[0] * (a0 + a1) / 2 + n[0] * (b0 + b1) / 2, my + t[1] * (a0 + a1) / 2 + n[1] * (b0 + b1) / 2], t, n, w, d, z0, z1, horiz: h < 0.3 && w > 0.3 && d > 0.3 });
+      out.push({ id, cat: c, type: inf.type, c: cxy, t, n, w, d, z0, z1 });
     }));
     return out;
   }
 
-  // привязка проёма к помещению: по нормали в обе стороны до первой значимой области
-  function assign(R, ops, floor, top) {
-    const okReg = id => R.ext.has(id) || (R.regs[id] && (R.regs[id].room || R.regs[id].areaC > 3));
-    const side = (o, sg) => { for (let k = 0.01; k < 2.5; k += 0.02) { const id = labelAt(R, o.c[0] + sg * o.n[0] * k, o.c[1] + sg * o.n[1] * k); if (id > 0 && okReg(id)) return { id, k }; } return null; };
-    const st = { level: 0, outer: 0, inner: 0, none: 0, noRoom: 0 };
+  // привязка вертикального проёма к пространству: по нормали в обе стороны до первой значимой области физического растра Rp
+  // (линии разделения помещений светопрозрачны и не мешают); сторона — снаружи (Rp.ext) и внутри (клетка пространства)
+  function assign(Rp, spaceLab, ops, floor, top) {
+    const okReg = id => Rp.ext.has(id) || (Rp.regs[id] && Rp.regs[id].areaC > 1.5);
+    const side = (o, sg) => { for (let k = 0.01; k < 2.5; k += 0.02) { const x = o.c[0] + sg * o.n[0] * k, y = o.c[1] + sg * o.n[1] * k, id = labelAt(Rp, x, y); if (id > 0 && okReg(id)) { const i = Math.floor((x - Rp.minx) / Rp.cell), j = Math.floor((y - Rp.miny) / Rp.cell); return { id, k, sp: (i >= 0 && j >= 0 && i < Rp.W && j < Rp.H) ? spaceLab[j * Rp.W + i] : -1 }; } } return null; };
+    const st = { level: 0, outer: 0, inner: 0, none: 0, noSpace: 0 };
     ops.forEach(o => {
-      if (o.horiz || o.z0 < floor - 0.3 || o.z0 >= top - 0.05) return;
+      if (o.roof || o.z0 < floor - 0.3 || o.z0 >= top - 0.05) return;
       st.level++;
       const A = side(o, 1), B = side(o, -1); if (!A || !B) { st.none++; return; }
-      const ea = R.ext.has(A.id), eb = R.ext.has(B.id);
+      const ea = Rp.ext.has(A.id), eb = Rp.ext.has(B.id);
       if (ea === eb) { if (!ea) st.inner++; return; }
-      const inn = ea ? B : A, out = ea ? A : B, sg = ea ? -1 : 1, rg = R.regs[inn.id];
-      if (!rg.room) { st.noRoom++; return; }
-      Object.assign(o, { room: rg.room, reg: inn.id, nin: [o.n[0] * sg, o.n[1] * sg], dIn: inn.k, dOut: out.k, dst: inn.k + out.k, floor });
+      const inn = ea ? B : A, out = ea ? A : B, sg = ea ? -1 : 1;
+      if (inn.sp < 0) { st.noSpace++; return; }
+      Object.assign(o, { space: inn.sp, nin: [o.n[0] * sg, o.n[1] * sg], dIn: inn.k, dOut: out.k, dst: inn.k + out.k, floor });
       st.outer++;
     });
     return st;
   }
 
-  // клетки областей (с прореживанием) и горизонтальные «полосы» для заливки
-  function regionCells(R, regIds, step) {
-    const want = new Set(regIds), pts = new Map(), runs = new Map();
-    regIds.forEach(id => { pts.set(id, []); runs.set(id, []); });
-    const { W, H, lab, cell, minx, miny } = R;
+  // клетки пространств (с прореживанием step) и горизонтальные «полосы» для заливки
+  function spaceCells(R, lab, n, step) {
+    const pts = [...Array(n)].map(() => []), runs = [...Array(n)].map(() => []);
+    const { W, H, cell, minx, miny } = R;
     for (let j = 0; j < H; j++) {
-      let cur = 0, start = 0;
+      let cur = -1, start = 0;
       for (let i = 0; i <= W; i++) {
-        const id = i < W ? lab[j * W + i] : 0;
-        if (id !== cur) { if (want.has(cur)) runs.get(cur).push([minx + start * cell, minx + i * cell, miny + j * cell, miny + (j + 1) * cell]); cur = id; start = i; }
-        if (i < W && want.has(id) && i % step === 0 && j % step === 0) pts.get(id).push([minx + (i + 0.5) * cell, miny + (j + 0.5) * cell]);
+        const id = i < W ? lab[j * W + i] : -1;
+        if (id !== cur) { if (cur >= 0) runs[cur].push([minx + start * cell, minx + i * cell, miny + j * cell, miny + (j + 1) * cell]); cur = id; start = i; }
+        if (id >= 0 && i % step === 0 && j % step === 0) pts[id].push([minx + (i + 0.5) * cell, miny + (j + 0.5) * cell]);
       }
     }
-    // сливаем полосы соседних строк с одинаковыми границами
     runs.forEach((rs, id) => {
       const m = []; rs.sort((a, b) => a[0] - b[0] || a[2] - b[2]);
       rs.forEach(r => { const l = m[m.length - 1]; if (l && Math.abs(l[0] - r[0]) < 1e-6 && Math.abs(l[1] - r[1]) < 1e-6 && Math.abs(l[3] - r[2]) < 1e-6) l[3] = r[3]; else m.push(r.slice()); });
-      runs.set(id, m);
+      runs[id] = m;
     });
     return { pts, runs };
+  }
+
+  // первое непрозрачное препятствие по вертикали вверх от (x, y, z): отметка в м или null
+  function hitUp(C, x, y, z, maxD) {
+    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true);
+    return h && h.distance * S <= (maxD || 1e9) ? z + h.distance * S : null;
+  }
+  function hitDir(C, p, dir, maxD) {
+    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(p[0] / S, p[1] / S, p[2] / S), new THREE.Vector3(dir[0], dir[1], dir[2]).normalize()), true);
+    return h && h.distance * S <= (maxD || 1e9) ? h.distance * S : null;
   }
 
   // карта высот (верх непрозрачной и прозрачной геометрии) для поиска противостоящих зданий
@@ -1519,7 +1729,7 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { ctx, catalog, rooms, eachGeom, slice, raster, labelAt, matchRooms, markExterior, openings, assign, regionCells, heightMap, overhang, skyline, deg };
+  return { ctx, catalog, rooms, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, assign, spaceCells, hitUp, hitDir, heightMap, overhang, skyline, deg };
 })();
 /* КЕО по модели: из геометрии помещения и его проёмов — исходные данные калькулятора (то же состояние, что вводится вручную),
    расчёт тем же ядром и моделью (KEO.compute). Методика расчёта не меняется: модель только «снимает размеры». */
@@ -1528,6 +1738,7 @@ const BimCalc = (function () {
   const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
   const med = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
   const r2 = x => Math.round(x * 100) / 100;
+  const fc = x => String(r2(x)).replace('.', ',');
 
   /* ---------- нормы: назначение помещения по табл. А.1 ---------- */
   const stem = w => w.toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]/g, '').slice(0, 5);
@@ -1612,53 +1823,149 @@ const BimCalc = (function () {
     return out.sort((a, b) => b.area - a.area);
   }
 
-  /* ---------- одно помещение ---------- */
-  // env: {KEO (модель калькулятора), DATA, settings, floor, pts (клетки помещения), skylineFn(F, cl)→{kDepth, samples}, T (поворот на север)}
-  function room(rm, ops, env) {
-    const S = env.settings, notes = [];
-    const cls = clusters(ops), F = facets(cls);
-    const row = env.normRow; const rule = row ? row.rt : 'center';
-    const pts = env.pts; if (pts.length < 4) return { rm, err: 'контур слишком мал' };
-    const frame = f => pts.map(p => { const d = sub(p, f.O); return [dot(d, f.nin), dot(d, f.t)]; });
-    // точка: одна стена — по правилу п. 5.3 СП 52 на характерном разрезе; несколько стен — центр помещения (как в калькуляторе)
-    let A, multi = F.length > 1;
-    const walls = [];
-    if (!multi) {
-      const f = F[0], uv = frame(f); const vmin = Math.min(...uv.map(x => x[1])), vmax = Math.max(...uv.map(x => x[1])), vmid = (vmin + vmax) / 2;
-      const line = uv.filter(x => Math.abs(x[1] - vmid) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
-      const lt = env.KEO.ltAuto(rule, dp);
-      A = [f.O[0] + f.t[0] * vmid + f.nin[0] * lt, f.O[1] + f.t[1] * vmid + f.nin[1] * lt];
-      walls.push({ f, dp, bp: vmax - vmin, vmid, lt, ds: 0 });
-    } else {
-      const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length, cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
-      A = pts.reduce((b, p) => { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; return !b || d < b.d ? { p, d } : b; }, null).p; // ближайшая клетка помещения к центру тяжести
-      F.forEach(f => {
-        const uv = frame(f), a = [dot(sub(A, f.O), f.nin), dot(sub(A, f.O), f.t)];
-        const vmin = Math.min(...uv.map(x => x[1])), vmax = Math.max(...uv.map(x => x[1])), vmid = (vmin + vmax) / 2;
-        const line = uv.filter(x => Math.abs(x[1] - a[1]) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
-        if (a[0] < 0.3) { notes.push(`стена ${oriOf(azimuth([-f.nin[0], -f.nin[1]], env.T))}: расчётная точка за плоскостью или вплотную к остеклению — стена не учтена`); return; }
-        walls.push({ f, dp: Math.max(dp, a[0] + 0.05), bp: vmax - vmin, vmid, lt: a[0], ds: a[1] - vmid });
-      });
-    }
-    if (!walls.length) return { rm, err: 'нет проёмов, видимых из расчётной точки' };
-    const st = env.KEO.defaultState();
-    st.meta = { code: S.code || '', object: S.object || '', room: `${rm.num} ${rm.name}`, author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
+  /* ---------- расчётное пространство (одно или несколько помещений Revit) ---------- */
+  // норма пространства — наибольшая из норм входящих помещений по нужной графе (боковое / верхнее и комбинированное)
+  function spaceNorm(rows, col) {
+    let best = null; rows.forEach(r => { if (r && r[col] !== null && r[col] !== undefined && (!best || r[col] > best[col])) best = r; });
+    return best || rows.find(Boolean) || null;
+  }
+  const title = sp => sp.rooms.map(r => `${r.num} ${r.name}`).join(' + ');
+  function baseState(env, sp, row) {
+    const S = env.settings, st = env.KEO.defaultState();
+    st.meta = { code: S.code || '', object: S.object || '', room: title(sp), author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
     st.region = S.region; st.group = S.group; st.groupManual = true; st.bType = row ? row.g : (S.bGroup || st.bType); st.roomId = row ? row.id : '';
-    st.rho = S.rho; st.env = 'normal'; st.rtManual = multi ? 'manual' : null;
-    const geo = [];
-    st.side.walls = walls.map(w => {
-      const f = w.f, nout = [-f.nin[0], -f.nin[1]], az = azimuth(nout, env.T);
-      const sh = env.shade(f, A, w); // затенение: козырёк и противостоящие здания
-      const wins = f.cls.map(c => ({ hpd: r2(Math.max(0, c.z0 - env.floor)), ho: r2(c.z1 - c.z0), bo: r2(c.bo), s: r2(dot(sub(c.c, f.O), f.t) - w.vmid), t2o: null, tau0o: null, Ko: null }));
-      geo.push({ f, A, az, wins, sh, cls: f.cls });
-      return {
-        orient: oriOf(az), dp: r2(w.dp), bp: r2(w.bp), H: r2((rm.h || 3000) / 1000), dst: r2(f.dst), lt: r2(w.lt), ds: r2(w.ds),
-        t1: S.t1, t1c: null, t2: S.t2, t4: S.t4, t5: 1, kType: sh.kDepth >= 0.3 ? 'canopy' : 'none', kDepth: r2(sh.kDepth),
-        windows: wins, buildings: sh.blds
-      };
+    st.rho = S.rho; st.env = 'normal';
+    return st;
+  }
+  // главные оси пространства в плане (для верхнего света): начало — угол охватывающего прямоугольника
+  function planFrame(pts) {
+    let mx = 0, my = 0; pts.forEach(p => { mx += p[0]; my += p[1]; }); mx /= pts.length; my /= pts.length;
+    let sxx = 0, syy = 0, sxy = 0; pts.forEach(p => { const dx = p[0] - mx, dy = p[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), u = [Math.cos(ang), Math.sin(ang)], v = [-u[1], u[0]];
+    let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9; pts.forEach(p => { const a = (p[0] - mx) * u[0] + (p[1] - my) * u[1], b = (p[0] - mx) * v[0] + (p[1] - my) * v[1]; a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); });
+    const O = [mx + u[0] * a0 + v[0] * b0, my + u[1] * a0 + v[1] * b0];
+    return { O, u, v, L: a1 - a0, B: b1 - b0, toLocal: p => [(p[0] - O[0]) * u[0] + (p[1] - O[1]) * u[1], (p[0] - O[0]) * v[0] + (p[1] - O[1]) * v[1]], toWorld: q => [O[0] + u[0] * q[0] + v[0] * q[1], O[1] + u[1] * q[0] + v[1] * q[1]] };
+  }
+  const inside = (pts, p, r) => pts.some(q => Math.abs(q[0] - p[0]) < r && Math.abs(q[1] - p[1]) < r);
+
+  // стены бокового света для точки A: окна — только видимые из A участки остекления (перегородки — препятствие)
+  function sideWalls(F, A, env, pts, notes, multi, rule) {
+    const walls = [];
+    F.forEach(f => {
+      const uv = pts.map(p => { const d = sub(p, f.O); return [dot(d, f.nin), dot(d, f.t)]; });
+      const vmin = Math.min(...uv.map(x => x[1])), vmax = Math.max(...uv.map(x => x[1])), vmid = (vmin + vmax) / 2;
+      const a = [dot(sub(A, f.O), f.nin), dot(sub(A, f.O), f.t)];
+      const line = uv.filter(x => Math.abs(x[1] - a[1]) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
+      const ori = oriOf(azimuth([-f.nin[0], -f.nin[1]], env.T));
+      if (a[0] < 0.3) { notes.push(`стена ${ori}: расчётная точка за плоскостью остекления или вплотную к нему — стена не учтена`); return; }
+      // ширина помещения bп и его ось — по свободному сечению через точку параллельно стене (перегородка внутри пространства — граница сечения)
+      const sw = env.Rp ? BimSpaces.sectionWidth(env.Rp, A, f.t, f.nin) : null, useS = sw && sw[0] + sw[1] > 0.5;
+      const ax = useS ? a[1] + (sw[0] - sw[1]) / 2 : vmid, bp = useS ? sw[0] + sw[1] : vmax - vmin;
+      const wins = [];
+      f.cls.forEach(c => {
+        const face = [c.c[0] + c.nin[0] * c.dIn, c.c[1] + c.nin[1] * c.dIn];
+        const parts = env.Rp ? BimSpaces.visibleParts(env.Rp, A, face, f.t, c.bo) : [{ a: -c.bo / 2, b: c.bo / 2 }];
+        const vis = parts.reduce((s, q) => s + q.b - q.a, 0);
+        if (vis < c.bo - 0.05) notes.push(vis < 0.05 ? `стена ${ori}: проём ${fc(c.bo)} м не виден из точки — закрыт перегородкой или стеной` : `стена ${ori}: проём ${fc(c.bo)} м виден из точки на ${fc(vis)} м — остальное закрыто перегородкой или стеной`);
+        parts.filter(q => q.b - q.a >= 0.1).forEach(q => wins.push({ c, bo: q.b - q.a, s: dot(sub(c.c, f.O), f.t) + (q.a + q.b) / 2 - ax }));
+      });
+      if (!wins.length) { notes.push(`стена ${ori}: остекление не видно из расчётной точки — не учтено`); return; }
+      walls.push({ f, wins, dp: multi ? Math.max(dp, a[0] + 0.05) : dp, bp, vmid: ax, lt: a[0], ds: multi ? a[1] - ax : 0 });
     });
-    const C = env.KEO.compute(st);
-    return { rm, row, st, C, A, walls, geo, notes, multi };
+    return walls;
+  }
+  function wallState(w, env, A, H) {
+    const S = env.settings, f = w.f, az = azimuth([-f.nin[0], -f.nin[1]], env.T);
+    const sh = env.shade(f, A, w);
+    return {
+      st: {
+        orient: oriOf(az), dp: r2(w.dp), bp: r2(w.bp), H: r2(H), dst: r2(f.dst), lt: r2(w.lt), ds: r2(w.ds),
+        t1: S.t1, t1c: null, t2: S.t2, t4: S.t4, t5: 1, kType: sh.kDepth >= 0.3 ? 'canopy' : 'none', kDepth: r2(sh.kDepth),
+        windows: w.wins.map(x => ({ hpd: r2(Math.max(0, x.c.z0 - env.floor)), ho: r2(x.c.z1 - x.c.z0), bo: r2(x.bo), s: r2(x.s), t2o: null, tau0o: null, Ko: null })),
+        buildings: sh.blds
+      }, geo: { f, A, az, sh, cls: f.cls }
+    };
+  }
+
+  // sp — пространство (rooms, ключ), ops — вертикальные проёмы, lans — фонари [{c, av, bv, tilt, hsf, H, shaded, note}]
+  // env: {KEO, Engine, settings, floor, pts, Rp, T, rows (норма каждого помещения, по порядку sp.rooms), roomPts(rm) — клетки собственного контура помещения, shade(f, A, w)}
+  function space(sp, ops, lans, env) {
+    const S = env.settings, notes = [], pts = env.pts;
+    if (pts.length < 4) return { err: 'контур слишком мал' };
+    const lanterns = (lans || []).filter(l => { if (l.shaded) notes.push(`фонарь ${fc(l.av)}×${fc(l.bv)} м: ${l.shaded} — не учтён`); return !l.shaded; });
+    (lans || []).forEach(l => l.note && notes.push(l.note));
+    const hasSide = ops && ops.length, hasTop = lanterns.length > 0;
+    if (!hasSide && !hasTop) return { err: 'нет световых проёмов' };
+    const mode = hasSide && hasTop ? 'comb' : hasTop ? 'top' : 'side';
+    const col = mode === 'side' ? 'eSideN' : 'eTopN';
+    const row = spaceNorm(env.rows, col), rule = row ? row.rt : 'center';
+    // расчётная точка бокового света — в помещении, определяющем норму пространства (например, в групповой, а не на перегородке со спальней)
+    const gi = row ? env.rows.indexOf(row) : -1, gov = gi >= 0 ? sp.rooms[gi] : null;
+    const gp = gov && sp.rooms.length > 1 && env.roomPts ? env.roomPts(gov) : null, base = gp && gp.length >= 4 ? gp : pts;
+    if (base !== pts) notes.push(`расчётная точка — в помещении ${gov.num} «${gov.name}», определяющем норму пространства`);
+    const H = (Math.max(...sp.rooms.map(r => r.h || 0)) || 3);
+    const F = hasSide ? facets(clusters(ops)) : [];
+
+    if (mode === 'side') {
+      // точка: одна стена — по правилу п. 5.3 СП 52 на характерном разрезе; несколько стен со значимым остеклением — центр (как в калькуляторе).
+      // Стена с остеклением меньше 25 % от основной на выбор точки не влияет (её вклад учитывается)
+      const multi = F.filter(f => f.area >= 0.25 * F[0].area).length > 1; let A;
+      if (!multi) {
+        const f = F[0], uvOf = P => P.map(p => { const d = sub(p, f.O); return [dot(d, f.nin), dot(d, f.t)]; }), uv = uvOf(pts), ub = uvOf(base);
+        const vmid = (Math.min(...ub.map(x => x[1])) + Math.max(...ub.map(x => x[1]))) / 2;
+        const line = uv.filter(x => Math.abs(x[1] - vmid) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
+        const lt = env.KEO.ltAuto(rule, dp);
+        A = [f.O[0] + f.t[0] * vmid + f.nin[0] * lt, f.O[1] + f.t[1] * vmid + f.nin[1] * lt];
+      } else {
+        const cx = base.reduce((s, p) => s + p[0], 0) / base.length, cy = base.reduce((s, p) => s + p[1], 0) / base.length;
+        A = base.reduce((b, p) => { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; return !b || d < b.d ? { p, d } : b; }, null).p;
+      }
+      const walls = sideWalls(F, A, env, pts, notes, F.length > 1, rule);
+      if (!walls.length) return { err: 'остекление не видно из расчётной точки', notes, A };
+      if (!multi && F.length > 1) notes.push('расчётная точка — по правилу для основной стены с остеклением; остекление других стен мало (< 25 % основной) и учтено только вкладом');
+      const st = baseState(env, sp, row); st.mode = 'side';
+      // если после проверки видимости осталась одна стена, а точка ставилась как центр — фиксируем её положение вручную
+      st.rtManual = (multi || walls.length > 1) ? 'manual' : null;
+      const ws = walls.map(w => wallState(w, env, A, H)); st.side.walls = ws.map(x => x.st);
+      return { mode, row, st, C: env.KEO.compute(st), A, pts: [A], geo: ws.map(x => x.geo), notes, multi };
+    }
+
+    // верхний свет (Б.3) — фонари в системе координат главных осей пространства
+    const fr = planFrame(pts);
+    const types = [];
+    lanterns.forEach(l => {
+      const q = fr.toLocal(l.c), av = r2(l.av), bv = r2(l.bv);
+      if (!(l.hsf > 0)) notes.push(`фонарь ${fc(av)}×${fc(bv)} м: высота шахты не определена по модели — принята 0,1 м (допущение, уточните)`);
+      const hsf = r2(Math.max(0.1, l.hsf || 0.1));
+      let T = types.find(t => t.av === av && t.bv === bv && t.hsf === hsf);
+      if (!T) { T = { name: `Фонарь ${av}×${bv}`, shape: 'rect', av, bv, an: av, bn: bv, dv: 1, dn: 1, hsf, refl: 'diffuse', rhoW: S.lrho ?? 0.7, t1: env.DATA.tau1[S.lt1 ?? S.t1].v, t2: env.DATA.tau2[S.lt2 ?? S.t2].v, t3: 1, t4: 1, net: false, tilt: l.tilt <= 15 ? 0 : l.tilt <= 45 ? 1 : l.tilt <= 75 ? 2 : 3, lanterns: [] }; types.push(T); }
+      T.lanterns.push({ x: r2(q[0]), y: r2(q[1]) });
+    });
+    notes.push(`Фонари — допущения: шахта вертикальная (нижнее отверстие = верхнему), стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
+    const Hs = lanterns.map(l => l.H).filter(h => h > 0);
+    if (Hs.length < lanterns.length) notes.push(`высота помещения под фонарём не определена по модели — принята высота помещения ${fc(H)} м (допущение)`);
+    const st = baseState(env, sp, row); st.mode = 'top';
+    st.top = { sys: 'shaft', L: r2(fr.L), B: r2(fr.B), H: r2(Hs.length ? Math.min(...Hs) : H), spans: 1, l1: null, y0: null, nPts: 0, types, b2: [] };
+    const Ct = env.KEO.compute(st);
+    const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
+    P.forEach((p, j) => { if (!inside(pts, p, 0.3)) notes.push(`РТ${j + 1} вне контура пространства (сложная форма в плане) — результат в ней ориентировочный`); });
+    if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes };
+
+    // комбинированное (Б.4): e = eв + eб в каждой точке; eб — боковое освещение в той же точке через видимые участки окон
+    if (!Ct.ok) return { mode, row, st, C: Ct, err: (Ct.err || []).join('; '), notes };
+    const sideAt = P.map(A => {
+      const walls = sideWalls(F, A, env, pts, [], true, 'center');
+      if (!walls.length) return { e: 0, walls: [] };
+      const ws = walls.map(w => wallState(w, env, A, H));
+      const s1 = baseState(env, sp, row); s1.mode = 'side'; s1.rtManual = 'manual'; s1.side.walls = ws.map(x => x.st);
+      const si = env.KEO.sideInput(s1); const r = env.Engine.side(si);
+      return { e: r.e, st: s1, walls: r.walls, geo: ws.map(x => x.geo) };
+    });
+    const eTop = Ct.res.e, e = eTop.map((v, j) => v + sideAt[j].e), stt = env.Engine.avgB10(e), eMin = Math.min(...e);
+    const eAvgR = Math.round(stt * 100 + 1e-9) / 100, norm = env.KEO.normOf(st), uni = eMin / stt;
+    const normOk = norm.v === null || norm.v === undefined ? null : eAvgR >= norm.v - 1e-9, uniOk = uni >= 1 / 3 - 1e-9;
+    const comb = { eTop, eSide: sideAt.map(x => x.e), e, eAvg: stt, eAvgR, eMin, uni, uniInv: stt / eMin, norm, normOk, uniOk, pass: normOk === null ? null : normOk && uniOk, sideAt };
+    return { mode, row, st, C: Ct, comb, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, geo: sideAt[Math.floor(P.length / 2)].geo || [], notes };
   }
 
   /* ---------- противостоящие здания из профиля затенения ---------- */
@@ -1682,21 +1989,30 @@ const BimCalc = (function () {
     }).filter(b => b.Hp > 0.5 && b.l > 0);
   }
 
-  return { mapNorm, guessGroup, clusters, facets, room, buildings, azimuth, oriOf, words };
+  return { mapNorm, guessGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();
 /* КЕО по модели — запуск в окне Autodesk Viewer: анализ, подсветка помещений на плане, метки, таблица и разбор. */
 const KeoBim = (function () {
-  const G = BimGeom, Cc = BimCalc, LIB = { DATA, Engine, Report, Schemes, KEO };
+  const G = BimGeom, Cc = BimCalc, SP = BimSpaces, LIB = { DATA, Engine, Report, Schemes, KEO };
   const f2 = (x, n = 2) => (x === null || x === undefined || isNaN(x)) ? '—' : Number(x).toFixed(n).replace('.', ',');
   const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const COL = { ok: '#2e9d5b', bad: '#d9443a', none: '#8a94a0', err: '#c99a06' };
 
   const S = {
     cell: 0.05, cut: 1.0, bGroup: '', rho: 0.55, t1: 3, t2: 0, t4: 0, rhoF: 0.4, region: 'г. Москва', group: 1,
+    lt1: 3, lt2: 0, lrho: 0.7,
     exclude: 'лестни|\\bЛК\\b|коридор|холл|вестибюл', glassExclude: 'stemalit|эмал', code: '', object: ''
   };
-  let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false };
-  let C, cat, ui, overlay = 'keo-bim', labelsEl;
+  let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false, dec: { merge: [], split: [], assign: [] }, normOv: {} };
+  let C, cat, ui, overlay = 'keo-bim', labelsEl, HM, VOPS = [], LANS = [];
+  const exRe = () => S.exclude ? new RegExp(S.exclude, 'i') : null;
+  const isExcluded = rm => { const re = exRe(); return !!(re && re.test(rm.name || '')); };
+
+  /* ---------- ручные решения по составу пространств: хранятся в браузере по URN модели ---------- */
+  function modelKey() { try { return C.m.getData().urn || C.m.getDocumentNode().getRootNode().urn(); } catch (e) { return location.pathname; } }
+  const decKey = () => 'keo-bim:decisions:' + modelKey();
+  function loadDec() { try { const j = JSON.parse(localStorage.getItem(decKey()) || 'null'); if (j && Array.isArray(j.merge)) return j; } catch (e) { } return null; }
+  function saveDec() { try { localStorage.setItem(decKey(), JSON.stringify({ merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, normOv: st.normOv, saved: new Date().toISOString() })); } catch (e) { } }
 
   /* ---------- анализ ---------- */
   async function analyze(progress) {
@@ -1704,52 +2020,124 @@ const KeoBim = (function () {
     C = G.ctx(v); progress('Каталог элементов…');
     cat = await G.catalog(C);
     const rooms = await G.rooms(C);
+    const d = loadDec(); if (d) { st.dec = { merge: d.merge || [], split: d.split || [], assign: d.assign || [] }; st.normOv = d.normOv || {}; }
     const aec = await Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null);
     const T = aec && aec.refPointTransformation;
     const lv = (aec && aec.levels || []).map(l => ({ name: l.name, floor: (l.elevation - C.GZ) * C.S })).sort((a, b) => a.floor - b.floor);
     lv.forEach((l, i) => { l.top = i < lv.length - 1 ? lv[i + 1].floor : l.floor + 6; l.rooms = rooms.filter(r => r.level === l.name); });
     const levels = lv.filter(l => l.rooms.length);
-    progress('Проёмы…');
+    st.rooms = rooms; st.noLevel = rooms.filter(r => !levels.some(l => l.name === r.level));
+    progress('Проёмы и фонари…');
     const ops = G.openings(C, cat, S.glassExclude ? new RegExp(S.glassExclude, 'i') : null);
+    VOPS = ops.filter(o => !o.roof); LANS = ops.filter(o => o.roof);
     progress('Карта высот для затенения…');
     const bb = C.m.getBoundingBox(), box = [bb.min.x * C.S - 5, bb.min.y * C.S - 5, bb.max.x * C.S + 5, bb.max.y * C.S + 5];
     const skip = /Planting|Furniture|Mechanical Equipment|Plumbing|Specialty|Lines|Grids|Level|Room Separation|Sun Path|Area|Rooms/;
-    const HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip.test(c)), 0.5, box);
-    const group = S.bGroup || Cc.guessGroup(rooms.map(r => r.name), LIB.DATA.rooms);
-    const exRe = S.exclude ? new RegExp(S.exclude, 'i') : null;
-    const res = [];
+    HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip.test(c)), 0.5, box);
+    st.group = S.bGroup || Cc.guessGroup(rooms.map(r => r.name), LIB.DATA.rooms); st.T = T;
+    // физические преграды (свет, состав пространства) и линии разделения помещений (только опознание помещений Revit)
+    const bcats = ['Revit Walls', 'Revit Curtain Panels', 'Revit Curtain Wall Mullions', 'Revit Doors', 'Revit Windows', 'Revit Structural Columns', 'Revit Columns'];
     for (const L of levels) {
-      progress(`Уровень ${L.name}: срез и контуры помещений…`); await tick();
-      const bcats = ['Revit Walls', 'Revit Curtain Panels', 'Revit Curtain Wall Mullions', 'Revit Doors', 'Revit Windows', 'Revit Structural Columns', 'Revit Columns'];
-      const segs = G.slice(C, cat, bcats, L.floor + S.cut).concat(G.slice(C, cat, ['Revit <Room Separation>'], L.floor + S.cut, [L.floor, 0.6]));
-      const R = G.raster(segs, S.cell); L.R = R;
-      G.matchRooms(R, L.rooms);
-      G.markExterior(C, R, L.floor + S.cut);
-      L.assign = G.assign(R, ops, L.floor, L.top);
-      const lops = ops.filter(o => o.room && o.floor === L.floor);
-      const byRoom = new Map(); lops.forEach(o => { if (!byRoom.has(o.room.id)) byRoom.set(o.room.id, []); byRoom.get(o.room.id).push(o); });
-      const target = L.rooms.filter(r => r.reg && !(exRe && exRe.test(r.name || '')));
-      const cells = G.regionCells(R, target.map(r => r.reg), 4);
-      L.cells = cells;
-      progress(`Уровень ${L.name}: расчёт ${target.length} помещений…`); await tick();
-      for (const rm of target) {
-        const o = byRoom.get(rm.id);
-        const base = { rm, level: L.name, floor: L.floor, runs: cells.runs.get(rm.reg) };
-        if (!o) { res.push({ ...base, kind: 'dark' }); continue; }
-        const normRow = Cc.mapNorm(rm.name, LIB.DATA.rooms, group);
-        const env = { KEO: LIB.KEO, settings: { ...S, bGroup: group }, floor: L.floor, pts: cells.pts.get(rm.reg), normRow, T,
-          shade: (f, A, w) => shade(f, A, HM, L.floor) };
-        let r; try { r = Cc.room(rm, o, env); } catch (e) { r = { rm, err: 'ошибка: ' + e.message }; }
-        res.push({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o });
-      }
-      // помещения уровня, для которых контур не найден
-      L.rooms.filter(r => !r.reg && !(exRe && exRe.test(r.name || ''))).forEach(rm => res.push({ rm, level: L.name, floor: L.floor, kind: 'nogeo' }));
+      progress(`Уровень ${L.name}: срез и контуры…`); await tick();
+      const z = L.floor + S.cut;
+      const segsP = G.slice(C, cat, bcats, z), segsL = G.slice(C, cat, ['Revit <Room Separation>'], z, [L.floor, 0.6]);
+      const bx = G.bounds(segsP.concat(segsL));
+      L.Rp = G.raster(segsP, S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx);
+      SP.matchRooms(L.R, L.rooms);
+      G.markExterior(C, L.Rp, z);
+      compose(L);
     }
-    st.levels = levels; st.res = res; st.group = group; st.T = T; st.ops = ops;
-    return res;
+    progress('Фонари: привязка к помещениям, шахты, затенение…'); await tick();
+    lanterns(levels);
+    st.levels = levels; st.res = [];
+    for (const L of levels) { progress(`Уровень ${L.name}: расчёт…`); await tick(); st.res.push(...calcLevel(L)); }
+    return st.res;
   }
   const tick = () => new Promise(r => setTimeout(r, 0));
-  function shade(f, A, HM, floor) {
+
+  // состав пространств уровня (по текущим решениям) → разметка клеток → привязка вертикальных проёмов
+  function compose(L) {
+    const { spaces, unplaced, unknown } = SP.compose(L.R, L.Rp, L.rooms, isExcluded, st.dec);
+    L.spaces = spaces; L.unplaced = unplaced; L.unknown = unknown;
+    L.lab = SP.spaceLabel(L.R, L.Rp, spaces);
+    VOPS.forEach(o => { if (o.lvl === L.name) { delete o.space; delete o.lvl; delete o.floor; } });
+    L.assign = G.assign(L.Rp, L.lab, VOPS, L.floor, L.top);
+    VOPS.forEach(o => { if (o.lvl === undefined && o.space !== undefined && o.floor === L.floor) o.lvl = L.name; });
+    L.cells = G.spaceCells(L.R, L.lab, spaces.length, 4);
+    L.cnt = new Float64Array(spaces.length); for (let p = 0; p < L.lab.length; p++) if (L.lab[p] >= 0) L.cnt[L.lab[p]]++;
+    LANS.forEach(l => { if (l.lvl === L.name) l.space = spaceAt(L, l.c); });
+  }
+  function spaceAt(L, c) {
+    const R = L.R;
+    for (let rad = 0; rad <= 0.6; rad += 0.1) for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const i = Math.floor((c[0] + dx * rad - R.minx) / R.cell), j = Math.floor((c[1] + dy * rad - R.miny) / R.cell);
+      if (i >= 0 && j >= 0 && i < R.W && j < R.H && L.lab[j * R.W + i] >= 0) return L.lab[j * R.W + i];
+    }
+    return -1;
+  }
+  // фонарь → уровень (верхний уровень, над полом которого нет непрозрачной конструкции до стекла), высота помещения и шахты, затенение
+  function lanterns(levels) {
+    const down = levels.slice().sort((a, b) => b.floor - a.floor);
+    LANS.forEach(l => {
+      for (const L of down) {
+        if (l.z0 < L.floor + 2) continue;
+        const sp = spaceAt(L, l.c); if (sp < 0) continue;
+        const h = G.hitUp(C, l.c[0], l.c[1], L.floor + S.cut, l.z0 - L.floor);
+        if (h !== null && h < l.z0 - 0.3) continue; // между полом и фонарём — перекрытие
+        l.lvl = L.name; l.space = sp; l.floor = L.floor; break;
+      }
+      if (!l.lvl) return;
+      const v = [-l.t[1], l.t[0]], cz = [];
+      [[l.t, l.av], [[-l.t[0], -l.t[1]], l.av], [v, l.bv], [[-v[0], -v[1]], l.bv]].forEach(([d, s]) => {
+        const x = l.c[0] + d[0] * (s / 2 + 0.4), y = l.c[1] + d[1] * (s / 2 + 0.4), h = G.hitUp(C, x, y, l.floor + S.cut, l.z0 + 0.5 - l.floor);
+        if (h !== null && h > l.floor + 2) cz.push(h);
+      });
+      if (cz.length) { cz.sort((a, b) => a - b); const ceil = cz[Math.floor(cz.length / 2)]; l.H = ceil - l.floor; l.hsf = Math.max(0, l.z0 - ceil); }
+      const top = [l.c[0], l.c[1], l.z1 + 0.05];
+      const up = G.hitDir(C, top, [0, 0, 1], 60);
+      if (up !== null) l.shaded = `над фонарём непрозрачная конструкция (${f2(up, 1)} м выше стекла)`;
+      const n45 = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([a, b]) => G.hitDir(C, top, [a, b, 1], 40) !== null).length;
+      if (!l.shaded && n45 >= 2) l.note = `фонарь ${f2(l.av)}×${f2(l.bv)} м: окружающие конструкции выше 45° с ${n45} сторон из 4 — в методе Б.3 затенение фонаря не учитывается, результат может быть завышен`;
+      const az = Cc.azimuth(l.t, st.T); l.ori = `${Math.round(az)}°/${Math.round((az + 90) % 360)}°`;
+    });
+  }
+  // нормы: назначение помещения по табл. А.1 (или выбор пользователя для пространства)
+  function rowsOf(sp) {
+    const ov = st.normOv[sp.key];
+    if (ov !== undefined) return [ov === '-' ? null : LIB.DATA.rooms.find(x => x.id === ov) || null];
+    return sp.rooms.map(rm => Cc.mapNorm(rm.name, LIB.DATA.rooms, st.group));
+  }
+  function calcLevel(L) {
+    const out = [], cell2 = L.R.cell * L.R.cell, regPts = roomPts(L);
+    L.spaces.forEach((sp, i) => {
+      const areaRevit = sp.rooms.reduce((s, r) => s + (r.area || 0), 0);
+      const areaC = L.cnt[i] * cell2, areaV = sp.regIds.reduce((s, id) => s + (L.R.regs[id].areaV || 0), 0);
+      const dA = areaRevit > 0 ? Math.min(Math.abs(areaRevit - areaC), Math.abs(areaRevit - areaV)) / areaRevit : null;
+      const base = { sp, key: sp.key, level: L.name, floor: L.floor, rooms: sp.rooms, title: Cc.title(sp), nums: sp.rooms.map(r => r.num).join('+'), runs: L.cells.runs[i],
+        area: { revit: areaRevit, model: areaC, modelV: areaV, dA, warn: dA !== null && dA > 0.05 } };
+      const o = VOPS.filter(x => x.lvl === L.name && x.space === i), ls = LANS.filter(x => x.lvl === L.name && x.space === i);
+      if (!o.length && !ls.length) { out.push({ ...base, kind: 'dark' }); return; }
+      const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T,
+        rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
+      let r; try { r = Cc.space(sp, o, ls, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
+      out.push({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o, lans: ls });
+    });
+    // части здания ≥ 8 м² без помещения Revit вне рассчитанных пространств — выбор помещений за пользователем
+    L.unknown.filter(u => u.space === undefined).forEach(u => out.push({ key: 'unk:' + u.at.join(','), level: L.name, floor: L.floor, rooms: [], title: `Контур без помещения Revit, ${f2(u.area, 1)} м²`, nums: '?', kind: 'unknown', unk: u, A: u.at }));
+    // помещения без расчётного контура: не опознаны по срезу и не закрыты балансом площадей
+    const placed = new Set(L.spaces.flatMap(s => s.rooms.map(r => r.key)));
+    L.rooms.filter(rm => !isExcluded(rm) && !placed.has(rm.key)).forEach(rm => out.push({ key: rm.key, level: L.name, floor: L.floor, rooms: [rm], title: `${rm.num} ${rm.name}`, nums: rm.num, kind: 'nogeo',
+      why: !(rm.area > 0) ? (rm.warn.join('; ') || 'нет площади') : rm.reg ? 'контур в наружной области или вне здания' : 'контур не выделен по срезу' }));
+    return out;
+  }
+  // клетки собственных контуров помещений (для расчётной точки в помещении, определяющем норму)
+  function roomPts(L) {
+    const R = L.R, want = new Set(), out = new Map();
+    L.spaces.forEach(sp => sp.rooms.forEach(rm => { const id = rm.reg !== undefined ? rm.reg : rm.sub; if (id !== undefined) { want.add(id); out.set(id, []); } }));
+    for (let j = 0; j < R.H; j += 4) for (let i = 0; i < R.W; i += 4) { const id = R.lab[j * R.W + i]; if (want.has(id)) out.get(id).push([R.minx + (i + 0.5) * R.cell, R.miny + (j + 0.5) * R.cell]); }
+    return out;
+  }
+  function shade(f, A, floor) {
     const cl = f.cls.reduce((m, c) => c.bo * (c.z1 - c.z0) > m.bo * (m.z1 - m.z0) ? c : m);
     const kDepth = G.overhang(C, { c: cl.c, nin: f.nin, dOut: cl.dOut }, cl.z1);
     const nout = [-f.nin[0], -f.nin[1]];
@@ -1761,19 +2149,44 @@ const KeoBim = (function () {
     const blds = Cc.buildings(samples, floor, vP0, S.rhoF, d0);
     return { kDepth, blds, samples, P0, zc };
   }
+  // пересборка уровня после ручного решения (без повторного среза)
+  function rebuild(levelName) {
+    const L = st.levels.find(l => l.name === levelName); if (!L) return;
+    const selKey = st.sel && st.sel.key;
+    compose(L);
+    st.res = st.res.filter(r => r.level !== L.name).concat(calcLevel(L));
+    st.sel = st.res.find(r => r.key === selKey) || null;
+    draw(); renderList();
+  }
+  // kind: 'merge' | 'split' | 'assign' (помещения в неопознанный контур at) | null — вернуть автоматический состав
+  function decide(kind, keys, levelName, at) {
+    const D = st.dec, hit = g => g.some(k => keys.includes(k));
+    D.merge = D.merge.filter(g => !hit(g)); D.split = D.split.filter(g => !hit(g));
+    D.assign = (D.assign || []).filter(a => !hit(a.keys) && !(at && a.at[0] === at[0] && a.at[1] === at[1]));
+    if (kind === 'assign') D.assign.push({ at, keys }); else if (kind) D[kind].push(keys);
+    saveDec(); rebuild(levelName);
+  }
 
-  /* ---------- статус помещения ---------- */
+  /* ---------- статус пространства ---------- */
   function status(r) {
-    if (r.kind === 'dark') return { k: 'none', t: 'нет наружных проёмов' };
+    if (r.kind === 'dark') return { k: 'none', t: 'нет световых проёмов' };
     if (r.kind === 'nogeo') return { k: 'none', t: 'контур не найден' };
+    if (r.kind === 'unknown') return { k: 'err', t: 'уточните состав' };
     if (r.kind === 'err') return { k: 'err', t: r.err };
+    if (r.sp && r.sp.unknown.length) return { k: 'err', t: 'уточните состав' };
+    if (r.mode === 'comb') { if (!r.comb) return { k: 'err', t: 'ошибка данных' }; if (r.comb.normOk === null) return { k: 'none', t: 'не нормируется' }; return r.comb.pass ? { k: 'ok', t: 'соответствует' } : { k: 'bad', t: 'не соответствует' }; }
     if (!r.C || !r.C.ok) return { k: 'err', t: (r.C && r.C.err || []).join('; ') || 'ошибка данных' };
     if (r.C.normOk === null) return { k: 'none', t: 'не нормируется' };
     return r.C.pass ? { k: 'ok', t: 'соответствует' } : { k: 'bad', t: 'не соответствует' };
   }
-  const eOf = r => r.C && r.C.ok ? r.C.res.eFinal : null;
+  const eOf = r => r.comb ? r.comb.eAvgR : r.C && r.C.ok ? r.C.res.eFinal : null;
+  const enOf = r => r.comb ? r.comb.norm.v : r.C && r.C.ok ? r.C.norm.v : null;
+  const MODE = { side: 'боковое', top: 'верхнее', comb: 'комбинированное' };
+  const UNIT = { squareMeters: 'м²', squareMillimeters: 'мм²', squareCentimeters: 'см²', squareFeet: 'фут²', squareInches: 'дюйм²' };
+  // требует внимания: автоматическое объединение, привязка по балансу площадей, открытый проход в исключённое помещение, расхождение площадей
+  const ambiguous = r => !!(r.sp && ((r.sp.merged && !r.sp.manual) || r.sp.balance.length || r.sp.neighbours.length || r.sp.dup || r.sp.unknown.length)) || !!(r.area && r.area.warn);
 
-  /* ---------- оверлей в 3D: заливка помещений, точки, метки ---------- */
+  /* ---------- оверлей в 3D: заливка пространств, расчётные точки, метки ---------- */
   function draw() {
     const v = C.v, Sx = C.S;
     if (v.overlays.hasScene(overlay)) v.overlays.removeScene(overlay);
@@ -1787,10 +2200,10 @@ const KeoBim = (function () {
       const sel = st.sel === r;
       const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: sel ? 0.75 : (r.kind === 'calc' ? 0.5 : 0.22), side: THREE.DoubleSide, depthWrite: false }));
       mesh.renderOrder = 10; v.overlays.addMesh(mesh, overlay);
-      if (r.A) {
-        const dot = new THREE.Mesh(new THREE.SphereGeometry(0.12 / Sx, 10, 8), new THREE.MeshBasicMaterial({ color: 0x1b2329 }));
-        dot.position.set(r.A[0] / Sx, r.A[1] / Sx, (r.floor + 0.1) / Sx); v.overlays.addMesh(dot, overlay);
-      }
+      (r.pts && r.pts.length ? r.pts : r.A ? [r.A] : []).forEach(p => {
+        const dot = new THREE.Mesh(new THREE.SphereGeometry((sel ? 0.14 : 0.1) / Sx, 10, 8), new THREE.MeshBasicMaterial({ color: 0x1b2329 }));
+        dot.position.set(p[0] / Sx, p[1] / Sx, (r.floor + 0.1) / Sx); v.overlays.addMesh(dot, overlay);
+      });
     });
     labels();
     v.impl.invalidate(true, true, true);
@@ -1798,9 +2211,9 @@ const KeoBim = (function () {
   function labels() {
     const v = C.v;
     if (!labelsEl) { labelsEl = document.createElement('div'); labelsEl.id = 'keo-labels'; v.container.appendChild(labelsEl); v.addEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, place); }
-    labelsEl.innerHTML = st.res.filter(r => r.kind === 'calc' && (st.level === null || r.level === st.level) && pass(r)).map((r, i) => {
+    labelsEl.innerHTML = st.res.filter(r => r.kind === 'calc' && (st.level === null || r.level === st.level) && pass(r)).map(r => {
       const s = status(r), e = eOf(r);
-      return `<button class="kl kl-${s.k}${st.sel === r ? ' on' : ''}" data-i="${st.res.indexOf(r)}" title="${esc(r.rm.num + ' ' + r.rm.name)}"><b>${esc(r.rm.num)}</b> ${e === null ? '—' : f2(e)}%</button>`;
+      return `<button class="kl kl-${s.k}${st.sel === r ? ' on' : ''}" data-i="${st.res.indexOf(r)}" title="${esc(r.title)}"><b>${esc(r.nums)}</b> ${e === null ? '—' : f2(e)}%</button>`;
     }).join('');
     labelsEl.querySelectorAll('.kl').forEach(b => b.onclick = ev => { ev.stopPropagation(); select(st.res[+b.dataset.i], false); });
     place();
@@ -1833,11 +2246,11 @@ const KeoBim = (function () {
   }
   function view3d() { const v = C.v; st.plan = false; v.setCutPlanes([]); v.fitToView(); }
 
-  /* ---------- выбор помещения ---------- */
+  /* ---------- выбор пространства: подсветка его окон и фонарей ---------- */
   function select(r, fly = true) {
-    st.sel = r; draw(); renderList(); renderDetail();
+    st.sel = r; draw(); renderList();
     const v = C.v;
-    const ids = r.ops ? r.ops.map(o => o.id) : [];
+    const ids = [...(r.ops || []), ...(r.lans || [])].map(o => o.id);
     v.clearThemingColors(C.m); ids.forEach(id => v.setThemingColor(id, new THREE.Vector4(0.12, 0.44, 0.7, 1), C.m));
     if (fly && r.runs && r.runs.length) {
       const bx = new THREE.Box3(); r.runs.forEach(q => { bx.expandByPoint(new THREE.Vector3(q[0] / C.S, q[2] / C.S, r.floor / C.S)); bx.expandByPoint(new THREE.Vector3(q[1] / C.S, q[3] / C.S, (r.floor + 1.3) / C.S)); });
@@ -1879,6 +2292,8 @@ const KeoBim = (function () {
 #keo-bim .s-ray{stroke:var(--sky);stroke-width:1.5;stroke-dasharray:6 4;fill:none}#keo-bim .s-rayb{stroke:var(--sky);stroke-width:1;fill:none}#keo-bim .s-skyf{fill:var(--sky-soft);stroke:var(--sky);stroke-width:.8}
 #keo-bim .s-bld{fill:var(--line);stroke:var(--ink);stroke-width:1}#keo-bim .s-pt{fill:var(--bad)}#keo-bim .s-axis{stroke:var(--muted);stroke-width:1;stroke-dasharray:10 3 2 3;fill:none}
 #keo-bim .s-dim,#keo-bim .s-dimm{stroke:var(--muted);stroke-width:.8;fill:none}#keo-bim .s-txt,#keo-bim .s-dimt{fill:var(--ink);font-size:var(--fs,32px)}#keo-bim .s-txtb{fill:var(--ink);font-weight:600;font-size:calc(var(--fs,32px)*1.08)}#keo-bim .s-cap{fill:var(--muted);font-weight:600;font-size:var(--fs,32px)}
+#keo-bim .bdg{display:inline-block;border:1px solid var(--line-2);border-radius:9px;padding:0 6px;font-size:10.5px;color:var(--muted);margin-left:4px;white-space:nowrap}#keo-bim .bdg.w{border-color:#c99a06;color:#8a6a00}
+#keo-bim .kb-warn{background:#fff6dc;border:1px solid #e8cf86;border-radius:6px;padding:6px 8px;margin:6px 0;font-size:12px}
 #keo-labels{position:absolute;inset:0;pointer-events:none;z-index:5;overflow:hidden}
 #keo-labels .kl{position:absolute;left:0;top:0;pointer-events:auto;border:0;border-radius:5px;padding:1px 5px;font:11px/1.3 system-ui,sans-serif;color:#fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.3);cursor:pointer}
 #keo-labels .kl b{font-weight:600;opacity:.85}#keo-labels .kl.on{outline:2px solid #1b2329}
@@ -1887,7 +2302,7 @@ const KeoBim = (function () {
   function pass(r) {
     if (st.level !== null && r.level !== st.level) return false;
     const k = status(r).k;
-    return st.filter === 'all' ? r.kind === 'calc' : st.filter === 'bad' ? k === 'bad' : st.filter === 'other' ? r.kind !== 'calc' || k === 'none' || k === 'err' : true;
+    return st.filter === 'all' ? r.kind === 'calc' : st.filter === 'bad' ? k === 'bad' : st.filter === 'check' ? ambiguous(r) || r.kind === 'nogeo' || r.kind === 'unknown' : st.filter === 'other' ? r.kind !== 'calc' || k === 'none' || k === 'err' : true;
   }
   function mount() {
     document.getElementById('keo-bim')?.remove(); document.getElementById('keo-bim-css')?.remove();
@@ -1901,31 +2316,52 @@ const KeoBim = (function () {
   function destroy() { ui?.remove(); labelsEl?.remove(); labelsEl = null; try { C.v.overlays.removeScene(overlay); C.v.setCutPlanes([]); C.v.clearThemingColors(C.m); C.v.removeEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, place); } catch (e) { } }
   const statusLine = t => { const el = document.getElementById('kb-status'); if (el) el.textContent = t; };
 
+  // сводка по помещениям Revit: каждое помещение — ровно в одном пространстве, в списке «без контура» или исключено
+  function census() {
+    const all = (st.rooms || []), cnt = new Map();
+    st.res.forEach(r => r.kind !== 'nogeo' && r.rooms.forEach(rm => cnt.set(rm.key, (cnt.get(rm.key) || 0) + 1)));
+    const ex = all.filter(isExcluded).length, inSp = [...cnt.values()].filter(n => n === 1).length, dup = [...cnt.values()].filter(n => n > 1).length;
+    const nogeo = st.res.filter(r => r.kind === 'nogeo').length, units = all.filter(r => r.warn && r.warn.length).length;
+    return { all: all.length, ex, inSp, dup, nogeo, units, noLevel: (st.noLevel || []).length, lans: LANS.length, lansIn: LANS.filter(l => l.lvl).length };
+  }
   function renderList() {
     const main = document.getElementById('kb-main'); if (!main) return;
     const calc = st.res.filter(r => r.kind === 'calc' && (st.level === null || r.level === st.level));
     const n = k => calc.filter(r => status(r).k === k).length;
     const other = st.res.filter(r => (st.level === null || r.level === st.level) && r.kind !== 'calc');
+    const nChk = st.res.filter(r => (st.level === null || r.level === st.level) && (ambiguous(r) || r.kind === 'nogeo' || r.kind === 'unknown')).length;
     const lvBtns = st.levels.map(l => `<button class="kb-btn${st.level === l.name ? ' on' : ''}" data-lv="${esc(l.name)}">План ${esc(l.name)}</button>`).join('');
-    const rows = st.res.filter(pass).sort((a, b) => (a.level + a.rm.num).localeCompare(b.level + b.rm.num, 'ru', { numeric: true }));
+    const rows = st.res.filter(pass).sort((a, b) => (a.level + a.nums).localeCompare(b.level + b.nums, 'ru', { numeric: true }));
+    const cs = census();
+    const badges = r => [r.mode && r.mode !== 'side' ? `<span class="bdg">${MODE[r.mode]}</span>` : '', r.sp && r.sp.merged ? `<span class="bdg${r.sp.manual ? '' : ' w'}">${r.sp.manual ? 'объединено вручную' : 'объединено авто'}</span>` : '',
+      r.sp && (r.sp.balance.length || r.sp.neighbours.length || r.sp.dup || r.sp.unknown.length) ? '<span class="bdg w">уточните состав</span>' : '', r.area && r.area.warn ? '<span class="bdg w">площадь ≠ контур</span>' : ''].join('');
     main.innerHTML = `
       <div class="kb-row">${lvBtns}<button class="kb-btn${!st.plan ? ' on' : ''}" data-a="3d">3D</button></div>
       <div class="kb-sum"><div><b>${calc.length}</b>рассчитано</div><div style="color:${COL.ok}"><b>${n('ok')}</b>норма</div><div style="color:${COL.bad}"><b>${n('bad')}</b>ниже нормы</div><div class="muted"><b>${n('none') + n('err') + other.length}</b>прочие</div></div>
-      <div class="kb-row"><button class="kb-btn${st.filter === 'all' ? ' on' : ''}" data-f="all">Все рассчитанные</button><button class="kb-btn${st.filter === 'bad' ? ' on' : ''}" data-f="bad">Ниже нормы</button><button class="kb-btn${st.filter === 'other' ? ' on' : ''}" data-f="other">Без расчёта и без нормы</button></div>
+      <div class="kb-row"><button class="kb-btn${st.filter === 'all' ? ' on' : ''}" data-f="all">Все рассчитанные</button><button class="kb-btn${st.filter === 'bad' ? ' on' : ''}" data-f="bad">Ниже нормы</button><button class="kb-btn${st.filter === 'check' ? ' on' : ''}" data-f="check">Проверить состав (${nChk})</button><button class="kb-btn${st.filter === 'other' ? ' on' : ''}" data-f="other">Без расчёта</button></div>
       <div id="kb-detail"></div>
-      <table class="kb-t"><thead><tr><th>№</th><th>Помещение</th><th class="num">e<sub>р</sub>, %</th><th class="num">e<sub>н</sub>, %</th><th>Итог</th></tr></thead><tbody>
-      ${rows.map(r => { const s = status(r), e = eOf(r), en = r.C && r.C.ok ? r.C.norm.v : null; return `<tr class="r${st.sel === r ? ' sel' : ''}" data-i="${st.res.indexOf(r)}"><td>${esc(r.rm.num)}</td><td>${esc(r.rm.name)}<div class="muted" style="font-size:11px">${esc(r.level)}</div></td><td class="num">${e === null ? '—' : f2(e)}</td><td class="num">${en === null || en === undefined ? '—' : f2(en, 1)}</td><td><span class="chip c-${s.k}">${esc(s.t)}</span></td></tr>`; }).join('')}
+      <table class="kb-t"><thead><tr><th>№</th><th>Пространство</th><th class="num">e, %</th><th class="num">e<sub>н</sub>, %</th><th>Итог</th></tr></thead><tbody>
+      ${rows.map(r => { const s = status(r), e = eOf(r), en = enOf(r); return `<tr class="r${st.sel === r ? ' sel' : ''}" data-i="${st.res.indexOf(r)}"><td>${esc(r.nums)}</td><td>${esc(r.rooms.length ? r.rooms.map(x => x.name).join(' + ') : r.title)}${badges(r)}<div class="muted" style="font-size:11px">${esc(r.level)}</div></td><td class="num">${e === null ? '—' : f2(e)}</td><td class="num">${en === null || en === undefined ? '—' : f2(en, 1)}</td><td><span class="chip c-${s.k}">${esc(s.t)}</span></td></tr>`; }).join('')}
       </tbody></table>
+      <p class="muted" style="font-size:11px">Помещений Revit: ${cs.all}; в расчётных пространствах — ${cs.inSp}${cs.dup ? `, <b style="color:${COL.bad}">в двух пространствах сразу — ${cs.dup}</b>` : ''}; без контура — ${cs.nogeo}; исключено (ЛК, коридоры, холлы, вестибюли) — ${cs.ex}${cs.units ? `; <b>не распознаны единицы площади — ${cs.units}</b>` : ''}${cs.noLevel ? `; без уровня — ${cs.noLevel}` : ''}. Фонарей найдено: ${cs.lans}, привязано к помещениям: ${cs.lansIn}.</p>
       <details class="kb-set"><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
-      <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button></div>
-      <p class="muted" style="font-size:11px">Контуры помещений восстановлены по срезу модели на высоте ${f2(S.cut, 1)} м над полом и сопоставлены с помещениями Revit по площади (эксперимент). Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б, формула Б.1), значения в таблице — как при ручном вводе.</p>`;
+      <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button><button class="kb-btn" data-a="dexp">Решения по составу (JSON)</button><button class="kb-btn" data-a="dimp">Загрузить решения</button>${st.dec.merge.length || st.dec.split.length || (st.dec.assign || []).length || Object.keys(st.normOv).length ? '<button class="kb-btn" data-a="dclr">Сбросить решения</button>' : ''}</div>
+      <p class="muted" style="font-size:11px">Контуры восстановлены по срезу модели на высоте ${f2(S.cut, 1)} м над полом: помещения Revit опознаются по контуру с линиями разделения, состав расчётного пространства и затенение — по физическим стенам, перегородкам и витражам (линии разделения не считаются стенами). Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б: Б.1 — боковое, Б.3 — верхнее, Б.4 — комбинированное). Экспериментальная версия: нормативная точность на модели не подтверждена.</p>`;
     main.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => planView(b.dataset.lv));
     main.querySelector('[data-a="3d"]').onclick = () => { st.level = null; view3d(); renderList(); labels(); };
     main.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderList(); labels(); });
     main.querySelectorAll('tr.r').forEach(tr => tr.onclick = () => select(st.res[+tr.dataset.i]));
     main.querySelector('[data-a=csv]').onclick = exportCSV; main.querySelector('[data-a=json]').onclick = exportJSON;
+    main.querySelector('[data-a=dexp]').onclick = () => download('КЕО_решения_по_составу.json', JSON.stringify({ model: modelKey(), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, normOv: st.normOv, names: Object.fromEntries((st.rooms || []).map(r => [r.key, `${r.level} · ${r.num} ${r.name}`])) }, null, 1), 'application/json');
+    main.querySelector('[data-a=dimp]').onclick = importDec;
+    const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { st.dec = { merge: [], split: [], assign: [] }; st.normOv = {}; saveDec(); st.levels.forEach(l => rebuild(l.name)); };
     bindSettings(main);
     renderDetail();
+  }
+  function importDec() {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.onchange = () => { const f = inp.files[0]; if (!f) return; f.text().then(t => { const j = JSON.parse(t); st.dec = { merge: j.merge || [], split: j.split || [], assign: j.assign || [] }; st.normOv = j.normOv || {}; saveDec(); st.levels.forEach(l => rebuild(l.name)); }).catch(e => statusLine('Не удалось прочитать решения: ' + e.message)); };
+    inp.click();
   }
   function settingsHTML() {
     const opt = (list, cur) => list.map((x, i) => `<option value="${i}"${+cur === i ? ' selected' : ''}>${esc(x.t)} — ${f2(x.v)}</option>`).join('');
@@ -1933,12 +2369,15 @@ const KeoBim = (function () {
     return `<label>Тип здания (табл. А.1) <select data-s="bGroup"><option value="">определить по названиям</option>${groups.map(g => `<option${S.bGroup === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select></label>
       <label>Группа района по ресурсам светового климата <input type="number" min="1" max="5" step="1" data-s="group" value="${S.group}"></label>
       <label>ρср — средневзвешенный коэффициент отражения <input type="number" step="0.01" data-s="rho" value="${S.rho}"></label>
-      <label>τ1 — светопропускание <select data-s="t1">${opt(LIB.DATA.tau1, S.t1)}</select></label>
-      <label>τ2 — переплёты <select data-s="t2">${opt(LIB.DATA.tau2, S.t2)}</select></label>
+      <label>τ1 окон — светопропускание <select data-s="t1">${opt(LIB.DATA.tau1, S.t1)}</select></label>
+      <label>τ2 окон — переплёты <select data-s="t2">${opt(LIB.DATA.tau2, S.t2)}</select></label>
+      <label>τ1 фонарей <select data-s="lt1">${opt(LIB.DATA.tau1, S.lt1)}</select></label>
+      <label>τ2 фонарей <select data-s="lt2">${opt(LIB.DATA.tau2, S.lt2)}</select></label>
+      <label>ρ стенок шахты фонаря <input type="number" step="0.05" data-s="lrho" value="${S.lrho}"></label>
       <label>ρф — отражение фасадов противостоящих зданий <input type="number" step="0.05" data-s="rhoF" value="${S.rhoF}"></label>
-      <label>Не рассчитывать (имя содержит) <input type="text" data-s="exclude" value="${esc(S.exclude)}"></label>
+      <label>Не рассчитывать и не объединять автоматически (имя содержит) <input type="text" data-s="exclude" value="${esc(S.exclude)}"></label>
       <label>Высота среза для контуров, м <input type="number" step="0.1" data-s="cut" value="${S.cut}"></label>
-      <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Ориентация — по истинному северу из модели. Затенение: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот модели (схема № 1, εзд, bф, Kзд). Двери и витражи учитываются по прозрачным (стеклянным) элементам.</p>
+      <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по истинному северу из модели. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
       <div class="kb-row"><button class="kb-btn pri" data-a="rerun">Пересчитать</button></div>`;
   }
   function bindSettings(root) {
@@ -1946,32 +2385,82 @@ const KeoBim = (function () {
     root.querySelector('[data-a=rerun]').onclick = () => run();
   }
 
+  function areaHTML(r) {
+    if (!r.rooms.length) return '';
+    const A = r.area, rows = r.rooms.map(rm => `<tr><td>${esc(rm.num)}</td><td>${esc(rm.name)}${rm.byBalance !== undefined ? ' <span class="bdg w">по балансу площадей</span>' : rm.byUser ? ' <span class="bdg">назначено вручную</span>' : ''}</td><td class="num">${rm.area > 0 ? f2(rm.area) : '—'}</td><td class="muted">${rm.areaRaw !== undefined ? esc(`${f2(+rm.areaRaw, 3)} ${UNIT[rm.areaUnit] || rm.areaUnit || ''}`) : '—'}</td><td class="muted">${esc(rm.eid || rm.key)}</td></tr>`).join('');
+    let h = `<h3>Помещения Revit и площадь</h3><table class="kb-t"><tr><th>№</th><th>Помещение</th><th class="num">S, м²</th><th>в модели</th><th>ElementId</th></tr>${rows}</table>`;
+    if (A) h += `<p class="muted" style="font-size:12px">Площадь Revit (свойство Area${r.rooms.length > 1 ? ', сумма без повторов' : ''}): <b>${f2(A.revit)}</b> м². По контуру среза: ${f2(A.model, 1)} м² в чистоте, ${f2(A.modelV, 1)} м² до осей стен${A.dA !== null ? `, расхождение ${f2(A.dA * 100, 1)} %` : ''}. Для расчёта используется контур среза (L, B, dп), площадь Revit — для сверки.</p>`;
+    if (A && A.warn) h += `<div class="kb-warn">Площадь Revit и площадь контура расходятся больше чем на 5 % — проверьте состав пространства (объединение, линии разделения) и границы помещения в модели.</div>`;
+    r.rooms.filter(rm => rm.warn && rm.warn.length).forEach(rm => h += `<div class="kb-warn">${esc(rm.num)}: ${esc(rm.warn.join('; '))}</div>`);
+    return h;
+  }
+  function compHTML(r) {
+    const sp = r.sp, U = sp ? sp.unknown : r.unk ? [r.unk] : [];
+    let h = '';
+    U.forEach((u, i) => h += `<div class="kb-warn">${sp ? `В объёме есть часть ${f2(u.area, 1)} м² без помещения Revit` : 'Часть здания без помещения Revit'} (не выделена линиями разделения). ${u.cands.length ? 'Подходят по площади (в чистоте ' + f2(u.area, 1) + ' м², до осей ' + f2(u.areaV, 1) + ' м²):' : 'По площади однозначно не подбирается — посчитайте вручную.'}${u.cands.map((c, j) => `<br>${esc(c.label)} (${f2(c.sum)} м²) <button class="kb-btn" data-asg="${i}:${j}">Это они</button>`).join('')}</div>`);
+    if (!sp) return h;
+    if (sp.merged) h += `<p style="font-size:12px">Одно расчётное пространство из ${sp.rooms.length} помещений Revit: между ними нет сплошной стены (только линия разделения или проход). Перегородки внутри учитываются как препятствие для света. ${sp.manual ? '<b>Решение пользователя.</b>' : 'Объединено автоматически.'} <button class="kb-btn" data-dec="split">Считать раздельно</button></p>`;
+    if (sp.balance.length) h += `<div class="kb-warn">${sp.balance.map(rm => esc(rm.num + ' ' + rm.name)).join(', ')} — собственный контур не выделен по срезу (нет линии разделения); отнесено к контуру с той же площадью — единственный вариант по площади. Проверьте.</div>`;
+    if (sp.dup) h += `<div class="kb-warn">В одном физическом объёме несколько помещений одного назначения — считаются раздельно. Если это одно помещение, объедините.</div>`;
+    const nb = sp.neighbours.filter(x => !sp.rooms.includes(x));
+    if (nb.length) h += `<p style="font-size:12px">В том же физическом объёме (открытый проход): ${nb.map(rm => `${esc(rm.num + ' ' + rm.name)}${isExcluded(rm) ? ' <span class="bdg">исключено</span>' : ''} <button class="kb-btn" data-merge="${esc(rm.key)}">Объединить</button>`).join(' ')}<br><span class="muted">Коридоры, холлы и другие исключённые помещения автоматически не объединяются.</span></p>`;
+    if (sp.manual && !sp.merged) h += `<p class="muted" style="font-size:12px">Считается отдельно по решению пользователя. <button class="kb-btn" data-dec="reset">Вернуть авто</button></p>`;
+    return h;
+  }
+  function lansHTML(r) {
+    const ls = r.lans || []; if (!ls.length) return '';
+    return '<h3>Фонари</h3><table class="kb-t"><tr><th>Тип</th><th>av×bv, м</th><th>наклон</th><th class="num">H / hш, м</th><th>Примечание</th></tr>' + ls.map(l => `<tr><td>${esc(l.type || l.cat)}</td><td>${f2(l.av)}×${f2(l.bv)}<div class="muted">оси ${esc(l.ori || '')}</div></td><td>${f2(l.tilt, 0)}°</td><td class="num">${l.H ? f2(l.H) : '<b>?</b>'} / ${l.hsf !== undefined ? f2(l.hsf) : '<b>?</b>'}</td><td>${esc(l.shaded ? 'не учтён: ' + l.shaded : l.note || '')}</td></tr>`).join('') + '</table>';
+  }
+  function pointsHTML(r) {
+    if (r.mode === 'comb') {
+      const c = r.comb;
+      return `<h3>Расчётные точки (Б.4: e = eв + eб)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th><th class="num">eб, %</th><th class="num">e, %</th></tr>${c.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(c.eTop[j], 3)}</td><td class="num">${f2(c.eSide[j], 3)}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table>
+        <p class="muted" style="font-size:12px">eср (Б.10) = ${f2(c.eAvgR)} %, eмин = ${f2(c.eMin, 3)} %, равномерность eмин/eср = ${f2(c.uni, 3)} (не менее 1/3, п. 5.6 СП 52) — ${c.uniOk ? 'выполняется' : '<b>не выполняется</b>'}. eб в каждой точке — по формуле Б.1 через видимые из точки участки окон.</p>`;
+    }
+    if (r.mode === 'top') { const R = r.C.res; return `<h3>Расчётные точки (Б.3)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th></tr>${R.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table><p class="muted" style="font-size:12px">eср (Б.10) = ${f2(R.eAvgR)} %, равномерность eмин/eср = ${f2(R.uni, 3)} (не менее 1/3) — ${r.C.uniOk ? 'выполняется' : '<b>не выполняется</b>'}.</p>`; }
+    return '';
+  }
   function renderDetail() {
     const box = document.getElementById('kb-detail'); if (!box) return; const r = st.sel;
-    if (!r) { box.innerHTML = '<p class="muted">Нажмите на помещение в таблице или на метку в модели — откроется разбор.</p>'; return; }
+    if (!r) { box.innerHTML = '<p class="muted">Нажмите на строку таблицы или на метку в модели — откроется разбор.</p>'; return; }
     const s = status(r), e = eOf(r);
-    let h = `<div class="kb-card"><div style="display:flex;justify-content:space-between;gap:8px"><div><b>${esc(r.rm.num)} · ${esc(r.rm.name)}</b><div class="muted">${esc(r.level)} · площадь ${f2(r.rm.area, 1)} м²${r.rm.dA !== undefined ? ` (по контуру ${f2(r.rm.areaModel, 1)} м²)` : ''}</div></div><span class="chip c-${s.k}" style="align-self:start">${esc(s.t)}</span></div>`;
-    if (r.kind === 'calc' && r.C && r.C.ok) {
-      const C1 = r.C, n = C1.norm;
-      h += `<div style="display:flex;gap:16px;align-items:baseline;margin:8px 0"><div><span class="kb-big">${f2(e)}</span> %<div class="muted">расчётный e<sub>р</sub></div></div><div><span class="kb-big" style="font-weight:500">${n.v === null ? '—' : f2(n.v)}</span> %<div class="muted">нормируемый e<sub>н</sub></div></div></div>`;
-      h += `<div class="muted" style="font-size:12px">${n.room ? `Норма: табл. А.1 СП 367, п. ${n.room.n} «${esc(n.room.name)}»` : 'Назначение не найдено в табл. А.1 — норма не задана'}. Точка: ${r.multi ? 'центр помещения (проёмы в нескольких стенах)' : esc(LIB.KEO.RT_TEXT[r.row ? r.row.rt : 'center'])}, ${r.row && r.row.h === 0 ? 'на полу' : 'на УРП 0,8 м'}.</div>`;
-      h += '<h3>Проёмы и затенение</h3><table class="kb-t"><tr><th>Стена</th><th>Окна (bо×hо, hпд), м</th><th>Затенение</th><th class="num">e, %</th></tr>' + r.C.res.walls.map((w, i) => {
-        const W = r.st.side.walls[i];
-        const sh = [W.kType !== 'none' ? `козырёк/балкон ${f2(W.kDepth, 1)} м (K = ${f2(w.wins[0].K)})` : '', ...W.buildings.map(b => `здание l = ${f2(b.l, 1)} м, Hр = ${f2(b.Hp, 1)} м`)].filter(Boolean).join('; ') || 'нет';
-        return `<tr><td>${esc(W.orient)}<div class="muted">lт ${f2(W.lt)} · dп ${f2(W.dp)} · Δст ${f2(W.dst)}</div></td><td>${W.windows.map(x => `${f2(x.bo)}×${f2(x.ho)}, ${f2(x.hpd)}`).join('<br>')}</td><td>${esc(sh)}</td><td class="num">${f2(w.e, 3)}</td></tr>`;
-      }).join('') + '</table>';
-      if (C1.warn.length || r.notes.length) h += `<p class="muted" style="font-size:11.5px">${[...r.notes, ...C1.warn].map(esc).join('<br>')}</p>`;
-      h += `<details><summary>Полный разбор: формулы, коэффициенты, схема</summary><div class="rep">${reportHTML(LIB.KEO.buildModel(r.st, C1))}</div></details>`;
+    let h = `<div class="kb-card"><div style="display:flex;justify-content:space-between;gap:8px"><div><b>${esc(r.title)}</b><div class="muted">${esc(r.level)}${r.mode ? ' · ' + MODE[r.mode] + ' освещение' : ''}</div></div><span class="chip c-${s.k}" style="align-self:start">${esc(s.t)}</span></div>`;
+    const ok = r.kind === 'calc' && (r.comb || (r.C && r.C.ok));
+    if (ok) {
+      const n = r.comb ? r.comb.norm : r.C.norm;
+      h += `<div style="display:flex;gap:16px;align-items:baseline;margin:8px 0"><div><span class="kb-big">${f2(e)}</span> %<div class="muted">${r.mode === 'side' ? 'расчётный e<sub>р</sub>' : 'e<sub>ср</sub> по точкам'}</div></div><div><span class="kb-big" style="font-weight:500">${n.v === null || n.v === undefined ? '—' : f2(n.v)}</span> %<div class="muted">нормируемый e<sub>н</sub></div></div></div>`;
+      h += `<div class="muted" style="font-size:12px">${n.room ? `Норма: табл. А.1 СП 367, п. ${n.room.n} «${esc(n.room.name)}», ${esc(n.colName)}` : 'Назначение не найдено в табл. А.1 — норма не задана'}.${r.mode === 'side' ? ` Точка: ${r.multi ? 'центр пространства (проёмы в нескольких стенах)' : esc(LIB.KEO.RT_TEXT[r.row ? r.row.rt : 'center'])}, ${r.row && r.row.h === 0 ? 'на полу' : 'на УРП 0,8 м'}.` : ` Точки — на характерном разрезе по главной оси пространства (${r.pts.length} шт.).`}</div>`;
+    }
+    h += compHTML(r) + areaHTML(r);
+    if (ok) {
+      if (r.mode === 'side' || r.mode === 'comb') {
+        const ws = r.mode === 'side' ? r.C.res.walls.map((w, i) => ({ w, W: r.st.side.walls[i] })) : (r.comb.sideAt[Math.floor(r.comb.sideAt.length / 2)].walls || []).map((w, i) => ({ w, W: r.comb.sideAt[Math.floor(r.comb.sideAt.length / 2)].st.side.walls[i] }));
+        if (ws.length) h += `<h3>Окна и затенение${r.mode === 'comb' ? ' (для средней точки)' : ''}</h3><table class="kb-t"><tr><th>Стена</th><th>Окна (bо×hо, hпд), м</th><th>Затенение</th><th class="num">e, %</th></tr>` + ws.map(({ w, W }) => {
+          const sh = [W.kType !== 'none' ? `козырёк/балкон ${f2(W.kDepth, 1)} м (K = ${f2(w.wins[0].K)})` : '', ...W.buildings.map(b => `здание l = ${f2(b.l, 1)} м, Hр = ${f2(b.Hp, 1)} м`)].filter(Boolean).join('; ') || 'нет';
+          return `<tr><td>${esc(W.orient)}<div class="muted">lт ${f2(W.lt)} · dп ${f2(W.dp)} · Δст ${f2(W.dst)}</div></td><td>${W.windows.map(x => `${f2(x.bo)}×${f2(x.ho)}, ${f2(x.hpd)}`).join('<br>')}</td><td>${esc(sh)}</td><td class="num">${f2(w.e, 3)}</td></tr>`;
+        }).join('') + '</table>';
+      }
+      h += lansHTML(r) + pointsHTML(r);
+      const warn = [...(r.notes || []), ...(r.C && r.C.warn || [])];
+      if (warn.length) h += `<p class="muted" style="font-size:11.5px">${[...new Set(warn)].map(esc).join('<br>')}</p>`;
+      if (r.C && r.C.ok) h += `<details><summary>Полный разбор: формулы, коэффициенты, схема${r.mode === 'comb' ? ' (верхний свет, Б.3)' : ''}</summary><div class="rep">${reportHTML(LIB.KEO.buildModel(r.st, r.C))}</div></details>`;
       h += `<div class="kb-row" style="margin-top:8px"><button class="kb-btn" data-a="one">Исходные для калькулятора (.json)</button></div>`;
       const rowsA1 = LIB.DATA.rooms.slice().sort((a, b) => (b.g === st.group) - (a.g === st.group));
-      h += `<label class="muted" style="display:block;font-size:12px">Назначение по табл. А.1: <select data-norm style="max-width:100%">${['<option value="-">— без нормы КЕО —</option>', ...rowsA1.map(x => `<option value="${x.id}"${r.row && r.row.id === x.id ? ' selected' : ''}>${esc(x.n + '. ' + x.name + ' (' + x.g.slice(0, 40) + ')')}</option>`)].join('')}</select></label>`;
-    } else h += `<p class="muted">${esc(s.t)}${r.kind === 'nogeo' ? ' — помещение есть в модели, но его контур не удалось однозначно выделить по срезу (например, оно не отделено стеной или линией разделения от соседнего). Посчитайте его в калькуляторе вручную.' : ''}</p>`;
+      h += `<label class="muted" style="display:block;font-size:12px">Назначение по табл. А.1: <select data-norm style="max-width:100%"><option value="">авто (по названиям помещений)</option>${['<option value="-"' + (st.normOv[r.key] === '-' ? ' selected' : '') + '>— без нормы КЕО —</option>', ...rowsA1.map(x => `<option value="${x.id}"${st.normOv[r.key] === x.id ? ' selected' : ''}>${esc(x.n + '. ' + x.name + ' (' + x.g.slice(0, 40) + ')')}</option>`)].join('')}</select></label>`;
+    } else if (r.kind === 'calc' && r.C && !r.C.ok) {
+      h += `<p class="muted">${esc((r.C.err || []).join('; '))}</p>`;
+    } else if (r.kind === 'err') {
+      h += `<p class="muted">${esc(r.err)}</p>` + lansHTML(r) + ((r.notes || []).length ? `<p class="muted" style="font-size:11.5px">${r.notes.map(esc).join('<br>')}</p>` : '');
+    } else if (r.kind === 'nogeo') h += `<p class="muted">${esc(r.why || '')} — помещение есть в модели, но его контур не удалось выделить по срезу и подобрать по балансу площадей. Посчитайте его в калькуляторе вручную или объедините с соседним помещением.</p>`;
+    else if (r.kind === 'dark') h += `<p class="muted">У пространства нет наружных окон, витражей и фонарей.</p>`;
+    else if (r.kind === 'unknown') h += `<p class="muted">После выбора помещений контур будет рассчитан как пространство.</p>`;
     box.innerHTML = h + '</div>';
-    const sn = box.querySelector('[data-norm]'); if (sn) sn.onchange = () => {
-      r.env.normRow = sn.value === '-' ? null : LIB.DATA.rooms.find(x => x.id === sn.value);
-      const n2 = Cc.room(r.rm, r.ops, r.env); Object.assign(r, n2, { kind: n2.err ? 'err' : 'calc' }); draw(); renderList();
-    };
-    const b1 = box.querySelector('[data-a=one]'); if (b1) b1.onclick = () => download(`КЕО_${r.rm.num}.json`, JSON.stringify(r.st, null, 2), 'application/json');
+    const sn = box.querySelector('[data-norm]'); if (sn) sn.onchange = () => { if (sn.value === '') delete st.normOv[r.key]; else st.normOv[r.key] = sn.value; saveDec(); rebuild(r.level); };
+    const b1 = box.querySelector('[data-a=one]'); if (b1) b1.onclick = () => download(`КЕО_${r.nums}.json`, JSON.stringify(r.st, null, 2), 'application/json');
+    const keys = r.rooms.map(x => x.key);
+    box.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => decide(b.dataset.dec === 'split' ? 'split' : null, keys, r.level));
+    box.querySelectorAll('[data-merge]').forEach(b => b.onclick = () => decide('merge', [...keys, b.dataset.merge], r.level));
+    box.querySelectorAll('[data-asg]').forEach(b => b.onclick = () => { const [i, j] = b.dataset.asg.split(':').map(Number), u = (r.sp ? r.sp.unknown : [r.unk])[i]; decide('assign', u.cands[j].keys, r.level, u.at); });
   }
   function reportHTML(M) {
     const R = LIB.Report, rh = R.richHTML;
@@ -1992,11 +2481,13 @@ const KeoBim = (function () {
   /* ---------- экспорт ---------- */
   function download(name, text, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
   function exportCSV() {
-    const rows = [['Уровень', 'Номер', 'Помещение', 'Площадь, м2', 'eр, %', 'eн, %', 'Итог', 'Стен с проёмами', 'Пункт табл. А.1']];
-    st.res.forEach(r => { const s = status(r); rows.push([r.level, r.rm.num, r.rm.name, f2(r.rm.area, 2), eOf(r) === null ? '' : f2(eOf(r)), r.C && r.C.ok && r.C.norm.v !== null ? f2(r.C.norm.v) : '', s.t, r.st ? r.st.side.walls.length : '', r.row ? r.row.n : '']); });
+    const rows = [['Уровень', 'Номера', 'Помещения Revit', 'ElementId', 'Площадь Revit, м2', 'Площадь контура, м2', 'Освещение', 'e, %', 'eн, %', 'Итог', 'Состав', 'Пункт табл. А.1']];
+    st.res.forEach(r => { const s = status(r), e = eOf(r), en = enOf(r); rows.push([r.level, r.nums, r.rooms.map(x => x.name).join(' + '), r.rooms.map(x => x.eid || x.key).join(' + '), r.area ? f2(r.area.revit) : r.rooms[0] && r.rooms[0].area > 0 ? f2(r.rooms[0].area) : '', r.area ? f2(r.area.model) : '', r.mode ? MODE[r.mode] : '', e === null ? '' : f2(e), en === null || en === undefined ? '' : f2(en), s.t, r.sp ? (r.sp.merged ? (r.sp.manual ? 'объединено вручную' : 'объединено авто') : r.sp.manual ? 'раздельно (решение)' : '') : '', r.row ? r.row.n : '']); });
     download('КЕО_по_модели.csv', '﻿' + rows.map(x => x.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n'), 'text/csv');
   }
-  function exportJSON() { download('КЕО_по_модели.json', JSON.stringify({ settings: S, rooms: st.res.filter(r => r.st).map(r => ({ level: r.level, num: r.rm.num, name: r.rm.name, e: eOf(r), state: r.st })) }, null, 1), 'application/json'); }
+  function exportJSON() {
+    download('КЕО_по_модели.json', JSON.stringify({ settings: S, decisions: st.dec, normOv: st.normOv, spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
+  }
 
   /* ---------- запуск ---------- */
   async function run(opts) {
@@ -2006,13 +2497,14 @@ const KeoBim = (function () {
     try {
       st.sel = null; await analyze(statusLine);
       const calc = st.res.filter(r => r.kind === 'calc');
-      statusLine(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с: рассчитано помещений — ${calc.length}.`);
+      statusLine(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с: рассчитано пространств — ${calc.length}.`);
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
       draw(); renderList(); if (st.level) planView(st.level);
     } catch (e) { statusLine('Ошибка: ' + e.message); console.error(e); }
     return st;
   }
-  return { run, st: () => st, S, select, planView, destroy };
+  return { run, st: () => st, S, select, planView, destroy, decide };
 })();
 window.KeoBim = KeoBim;
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces };
 })();
