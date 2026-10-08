@@ -17,23 +17,31 @@ const BimGeom = (function () {
     return { byCat, info };
   }
 
-  // помещения из базы свойств (у них нет 3D-геометрии в экспорте viewer.autodesk.com)
+  // помещения из базы свойств (у них нет 3D-геометрии в экспорте viewer.autodesk.com); единицы — по dataTypeContext свойства
   async function rooms(C) {
-    return C.m.getPropertyDb().executeUserFunction(function (pdb) {
+    const raw = await C.m.getPropertyDb().executeUserFunction(function (pdb) {
       const out = [];
       pdb.enumObjects(id => {
-        const o = { id }; let isRoom = false;
+        const o = { id, u: {} }; let isRoom = false;
         pdb.enumObjectProperties(id, (a, v) => {
-          const n = pdb.getAttributeDef(a).name, val = pdb.getAttrValue(a, v);
+          const d = pdb.getAttributeDef(a), n = d.name, val = pdb.getAttrValue(a, v);
           if (n === 'Category' && val === 'Revit Rooms') isRoom = true;
           if (n === 'Level' && isNaN(+val)) o.level = val; if (n === 'Name') o.name = val; if (n === 'Number') o.num = val;
-          if (n === 'Area') o.area = +val; if (n === 'Perimeter') o.per = +val; if (n === 'Unbounded Height') o.h = +val;
-          if (n === 'Department') o.dep = val; if (n === 'Occupancy') o.occ = val; if (n === 'Base Offset') o.off = +val;
+          if (n === 'ElementId') o.eid = String(val);
+          if (n === 'Area' || n === 'Perimeter' || n === 'Unbounded Height' || n === 'Base Offset') o.u[n] = [val, d.dataTypeContext || null];
+          if (n === 'Department') o.dep = val; if (n === 'Occupancy') o.occ = val;
         });
-        if (isRoom && o.area > 0) out.push(o);
+        if (isRoom) out.push(o);
       });
       return out;
     });
+    return raw.map(o => {
+      const A = BimSpaces.conv(...(o.u['Area'] || []), 'area'), P = BimSpaces.conv(...(o.u['Perimeter'] || []), 'len'), H = BimSpaces.conv(...(o.u['Unbounded Height'] || []), 'len');
+      const warn = [A.ok ? null : 'площадь: ' + A.warn, P.ok ? null : 'периметр: ' + P.warn].filter(Boolean);
+      return { id: o.id, key: o.eid || ('db' + o.id), eid: o.eid, level: o.level, name: o.name || '', num: o.num || '', dep: o.dep, occ: o.occ,
+        area: A.v, areaRaw: o.u['Area'] && o.u['Area'][0], areaUnit: A.unit, areaSrc: A.ok ? 'Revit, свойство Area' : null,
+        per: P.v, h: H.v, warn };
+    }).filter(r => r.area > 0 || r.warn.length);
   }
 
   // перебор треугольников / линий элемента в мировых координатах (единицы модели)
@@ -63,10 +71,14 @@ const BimGeom = (function () {
   }
 
   // растр среза и разметка связных свободных областей
-  function raster(segs, cell) {
+  function bounds(segs) {
     let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
     segs.forEach(s => { minx = Math.min(minx, s[0], s[2]); maxx = Math.max(maxx, s[0], s[2]); miny = Math.min(miny, s[1], s[3]); maxy = Math.max(maxy, s[1], s[3]); });
-    minx -= 2; miny -= 2; maxx += 2; maxy += 2;
+    return [minx - 2, miny - 2, maxx + 2, maxy + 2];
+  }
+  // bx — общие границы, чтобы растры R и Rp совпадали поклеточно
+  function raster(segs, cell, bx) {
+    const [minx, miny, maxx, maxy] = bx || bounds(segs);
     const W = Math.ceil((maxx - minx) / cell), H = Math.ceil((maxy - miny) / cell);
     const occ = new Uint8Array(W * H);
     const put = (i, j) => { if (i >= 0 && j >= 0 && i < W && j < H) occ[j * W + i] = 1; };
@@ -87,31 +99,25 @@ const BimGeom = (function () {
         if (j > 0 && !occ[p - W] && !lab[p - W]) { lab[p - W] = id; q[t++] = p - W; }
         if (j < H - 1 && !occ[p + W] && !lab[p + W]) { lab[p + W] = id; q[t++] = p + W; }
       }
-      regs.push({ id, cells: cnt, area: cnt * cell * cell, border, cx: minx + (sx / cnt + 0.5) * cell, cy: miny + (sy / cnt + 0.5) * cell });
+      regs.push({ id, seed: s0, cells: cnt, area: cnt * cell * cell, border, cx: minx + (sx / cnt + 0.5) * cell, cy: miny + (sy / cnt + 0.5) * cell });
     }
     // граничные клетки → поправка площади на половину ширины линии растра
     const bnd = new Float64Array(regs.length);
     for (let p = 0; p < W * H; p++) { const id = lab[p]; if (!id) continue; const i = p % W; if ((i > 0 && lab[p - 1] !== id) || (i < W - 1 && lab[p + 1] !== id) || (p >= W && lab[p - W] !== id) || (p < W * (H - 1) && lab[p + W] !== id)) bnd[id]++; }
     regs.forEach(r => { if (r) { r.areaC = r.area + bnd[r.id] * cell * cell * 0.5; r.per = bnd[r.id] * cell; } });
+    // площадь «до осей стен»: свободные области растут в занятые клетки (стены) навстречу друг другу, не более 0,3 м
+    const own = new Int32Array(lab); let fr = [];
+    for (let p = 0; p < W * H; p++) if (lab[p]) { const i = p % W; if ((i > 0 && !lab[p - 1]) || (i < W - 1 && !lab[p + 1]) || (p >= W && !lab[p - W]) || (p < W * (H - 1) && !lab[p + W])) fr.push(p); }
+    for (let d = 1; d <= Math.round(0.3 / cell) && fr.length; d++) {
+      const nf = [];
+      fr.forEach(p => { const id = own[p], i = p % W; if (i > 0 && !lab[p - 1] && !own[p - 1]) { own[p - 1] = id; nf.push(p - 1); } if (i < W - 1 && !lab[p + 1] && !own[p + 1]) { own[p + 1] = id; nf.push(p + 1); } if (p >= W && !lab[p - W] && !own[p - W]) { own[p - W] = id; nf.push(p - W); } if (p < W * (H - 1) && !lab[p + W] && !own[p + W]) { own[p + W] = id; nf.push(p + W); } });
+      fr = nf;
+    }
+    const add = new Float64Array(regs.length); for (let p = 0; p < W * H; p++) if (!lab[p] && own[p]) add[own[p]]++;
+    regs.forEach(r => { if (r) r.areaV = r.area + add[r.id] * cell * cell; });
     return { W, H, cell, minx, miny, lab, regs, ext: new Set() };
   }
   const labelAt = (R, x, y) => { const i = Math.floor((x - R.minx) / R.cell), j = Math.floor((y - R.miny) / R.cell); if (i < 0 || j < 0 || i >= R.W || j >= R.H) return 1; return R.lab[j * R.W + i]; };
-
-  // сопоставление областей с помещениями уровня по площади (жадно, по возрастанию расхождения)
-  function matchRooms(R, rooms) {
-    const regs = R.regs.filter(r => r && !r.border && r.areaC >= 0.8);
-    const pairs = [];
-    rooms.forEach(rm => regs.forEach(rg => {
-      const d = Math.abs(rg.areaC - rm.area) / rm.area; if (!(d < 0.06 || Math.abs(rg.areaC - rm.area) < 0.4)) return;
-      // периметр отсекает узкие полости той же площади (зазоры за витражами, шахты)
-      if (rm.per > 0) { const k = rg.per / (rm.per / 1000); if (k < 0.75 || k > 1.45) return; }
-      pairs.push([d, rm, rg]);
-    }));
-    pairs.sort((a, b) => a[0] - b[0]);
-    const byRoom = new Map();
-    pairs.forEach(([d, rm, rg]) => { if (byRoom.has(rm.id) || rg.room) return; byRoom.set(rm.id, rg.id); rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; });
-    return byRoom;
-  }
 
   // наружные области: касается края растра или большая несопоставленная область без перекрытия над ней (двор)
   function markExterior(C, R, zM) {
@@ -125,17 +131,24 @@ const BimGeom = (function () {
     });
   }
 
-  // светопрозрачные элементы: только прозрачные фрагменты (стекло); геометрия в плане — по главным осям
+  // светопрозрачные элементы: только прозрачные фрагменты (стекло). Вертикальные — окна, витражи, остеклённые двери;
+  // горизонтальные и наклонные (|nz| > 0,7) — световые фонари: окна/панели в кровле, кровли из стекла, обобщённые модели «фонарь».
+  // Перекрытия и потолки с прозрачным материалом фонарями не считаются.
+  const LANTERN_NAME = /фонар|зенит|skylight|roof ?light|light ?well|световод|светов/i;
   function openings(C, cat, excludeRe) {
     const out = [], mat4 = new THREE.Matrix4(), S = C.S;
-    ['Revit Windows', 'Revit Curtain Panels', 'Revit Doors'].forEach(c => (cat.byCat[c] || []).forEach(id => {
-      if (excludeRe && excludeRe.test(cat.info[id].type || '')) return;
-      const P = [];
+    ['Revit Windows', 'Revit Curtain Panels', 'Revit Doors', 'Revit Roofs', 'Revit Generic Models'].forEach(c => (cat.byCat[c] || []).forEach(id => {
+      const inf = cat.info[id];
+      if (excludeRe && excludeRe.test(inf.type || '')) return;
+      if (c === 'Revit Generic Models' && !LANTERN_NAME.test([inf.type, inf.fam, inf.name].join(' '))) return;
+      const P = []; let A = 0, NZ = 0;
       C.it.enumNodeFragments(id, f => {
         const mt = C.fl.getMaterial(f); if (!(mt && (mt.transparent || mt.opacity < 0.95))) return;
         const g = C.fl.getGeometry(f); if (!g || !g.vb || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
-        const e = mat4.elements, st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, n = g.vb.length / st;
+        const e = mat4.elements, st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, n = g.vb.length / st, base = P.length;
         for (let i = 0; i < n; i++) { const x = g.vb[i * st + off], y = g.vb[i * st + off + 1], z = g.vb[i * st + off + 2]; P.push([(e[0] * x + e[4] * y + e[8] * z + e[12]) * S, (e[1] * x + e[5] * y + e[9] * z + e[13]) * S, (e[2] * x + e[6] * y + e[10] * z + e[14]) * S]); }
+        const ib = g.ib || (g.index && g.index.array);
+        if (ib) for (let i = 0; i + 2 < ib.length; i += 3) { const a = P[base + ib[i]], b = P[base + ib[i + 1]], cc = P[base + ib[i + 2]]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = cc[0] - a[0], vy = cc[1] - a[1], vz = cc[2] - a[2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, ar = Math.hypot(nx, ny, nz) / 2; A += ar; NZ += Math.abs(nz) / 2; }
       }, true);
       if (P.length < 3) return;
       let mx = 0, my = 0, z0 = 1e9, z1 = -1e9; P.forEach(p => { mx += p[0]; my += p[1]; z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]); }); mx /= P.length; my /= P.length;
@@ -143,52 +156,68 @@ const BimGeom = (function () {
       const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), t = [Math.cos(ang), Math.sin(ang)], n = [-t[1], t[0]];
       let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
       P.forEach(p => { const u = (p[0] - mx) * t[0] + (p[1] - my) * t[1], w = (p[0] - mx) * n[0] + (p[1] - my) * n[1]; a0 = Math.min(a0, u); a1 = Math.max(a1, u); b0 = Math.min(b0, w); b1 = Math.max(b1, w); });
-      const w = a1 - a0, d = b1 - b0, h = z1 - z0;
+      const w = a1 - a0, d = b1 - b0, h = z1 - z0, cxy = [mx + t[0] * (a0 + a1) / 2 + n[0] * (b0 + b1) / 2, my + t[1] * (a0 + a1) / 2 + n[1] * (b0 + b1) / 2];
+      const flat = A > 0 ? NZ / A : 0; // доля площади стекла, обращённой вверх
+      if (flat > 0.7 && c !== 'Revit Doors') {
+        if (w < 0.2 || d < 0.2) return;
+        out.push({ id, cat: c, type: inf.type, roof: true, c: cxy, t, n, av: w, bv: d, z0, z1, tilt: Math.acos(Math.min(1, flat)) * 180 / Math.PI });
+        return;
+      }
+      if (c === 'Revit Roofs' || c === 'Revit Generic Models') { if (flat < 0.3 && w >= 0.3 && h >= 0.3) out.push({ id, cat: c, type: inf.type, c: cxy, t, n, w, d, z0, z1 }); return; }
       if (w < 0.15 && d < 0.15) return; // щели и торцы стекла
-      out.push({ id, cat: c, type: cat.info[id].type, c: [mx + t[0] * (a0 + a1) / 2 + n[0] * (b0 + b1) / 2, my + t[1] * (a0 + a1) / 2 + n[1] * (b0 + b1) / 2], t, n, w, d, z0, z1, horiz: h < 0.3 && w > 0.3 && d > 0.3 });
+      out.push({ id, cat: c, type: inf.type, c: cxy, t, n, w, d, z0, z1 });
     }));
     return out;
   }
 
-  // привязка проёма к помещению: по нормали в обе стороны до первой значимой области
-  function assign(R, ops, floor, top) {
-    const okReg = id => R.ext.has(id) || (R.regs[id] && (R.regs[id].room || R.regs[id].areaC > 3));
-    const side = (o, sg) => { for (let k = 0.01; k < 2.5; k += 0.02) { const id = labelAt(R, o.c[0] + sg * o.n[0] * k, o.c[1] + sg * o.n[1] * k); if (id > 0 && okReg(id)) return { id, k }; } return null; };
-    const st = { level: 0, outer: 0, inner: 0, none: 0, noRoom: 0 };
+  // привязка вертикального проёма к пространству: по нормали в обе стороны до первой значимой области физического растра Rp
+  // (линии разделения помещений светопрозрачны и не мешают); сторона — снаружи (Rp.ext) и внутри (клетка пространства)
+  function assign(Rp, spaceLab, ops, floor, top) {
+    const okReg = id => Rp.ext.has(id) || (Rp.regs[id] && Rp.regs[id].areaC > 1.5);
+    const side = (o, sg) => { for (let k = 0.01; k < 2.5; k += 0.02) { const x = o.c[0] + sg * o.n[0] * k, y = o.c[1] + sg * o.n[1] * k, id = labelAt(Rp, x, y); if (id > 0 && okReg(id)) { const i = Math.floor((x - Rp.minx) / Rp.cell), j = Math.floor((y - Rp.miny) / Rp.cell); return { id, k, sp: (i >= 0 && j >= 0 && i < Rp.W && j < Rp.H) ? spaceLab[j * Rp.W + i] : -1 }; } } return null; };
+    const st = { level: 0, outer: 0, inner: 0, none: 0, noSpace: 0 };
     ops.forEach(o => {
-      if (o.horiz || o.z0 < floor - 0.3 || o.z0 >= top - 0.05) return;
+      if (o.roof || o.z0 < floor - 0.3 || o.z0 >= top - 0.05) return;
       st.level++;
       const A = side(o, 1), B = side(o, -1); if (!A || !B) { st.none++; return; }
-      const ea = R.ext.has(A.id), eb = R.ext.has(B.id);
+      const ea = Rp.ext.has(A.id), eb = Rp.ext.has(B.id);
       if (ea === eb) { if (!ea) st.inner++; return; }
-      const inn = ea ? B : A, out = ea ? A : B, sg = ea ? -1 : 1, rg = R.regs[inn.id];
-      if (!rg.room) { st.noRoom++; return; }
-      Object.assign(o, { room: rg.room, reg: inn.id, nin: [o.n[0] * sg, o.n[1] * sg], dIn: inn.k, dOut: out.k, dst: inn.k + out.k, floor });
+      const inn = ea ? B : A, out = ea ? A : B, sg = ea ? -1 : 1;
+      if (inn.sp < 0) { st.noSpace++; return; }
+      Object.assign(o, { space: inn.sp, nin: [o.n[0] * sg, o.n[1] * sg], dIn: inn.k, dOut: out.k, dst: inn.k + out.k, floor });
       st.outer++;
     });
     return st;
   }
 
-  // клетки областей (с прореживанием) и горизонтальные «полосы» для заливки
-  function regionCells(R, regIds, step) {
-    const want = new Set(regIds), pts = new Map(), runs = new Map();
-    regIds.forEach(id => { pts.set(id, []); runs.set(id, []); });
-    const { W, H, lab, cell, minx, miny } = R;
+  // клетки пространств (с прореживанием step) и горизонтальные «полосы» для заливки
+  function spaceCells(R, lab, n, step) {
+    const pts = [...Array(n)].map(() => []), runs = [...Array(n)].map(() => []);
+    const { W, H, cell, minx, miny } = R;
     for (let j = 0; j < H; j++) {
-      let cur = 0, start = 0;
+      let cur = -1, start = 0;
       for (let i = 0; i <= W; i++) {
-        const id = i < W ? lab[j * W + i] : 0;
-        if (id !== cur) { if (want.has(cur)) runs.get(cur).push([minx + start * cell, minx + i * cell, miny + j * cell, miny + (j + 1) * cell]); cur = id; start = i; }
-        if (i < W && want.has(id) && i % step === 0 && j % step === 0) pts.get(id).push([minx + (i + 0.5) * cell, miny + (j + 0.5) * cell]);
+        const id = i < W ? lab[j * W + i] : -1;
+        if (id !== cur) { if (cur >= 0) runs[cur].push([minx + start * cell, minx + i * cell, miny + j * cell, miny + (j + 1) * cell]); cur = id; start = i; }
+        if (id >= 0 && i % step === 0 && j % step === 0) pts[id].push([minx + (i + 0.5) * cell, miny + (j + 0.5) * cell]);
       }
     }
-    // сливаем полосы соседних строк с одинаковыми границами
     runs.forEach((rs, id) => {
       const m = []; rs.sort((a, b) => a[0] - b[0] || a[2] - b[2]);
       rs.forEach(r => { const l = m[m.length - 1]; if (l && Math.abs(l[0] - r[0]) < 1e-6 && Math.abs(l[1] - r[1]) < 1e-6 && Math.abs(l[3] - r[2]) < 1e-6) l[3] = r[3]; else m.push(r.slice()); });
-      runs.set(id, m);
+      runs[id] = m;
     });
     return { pts, runs };
+  }
+
+  // первое непрозрачное препятствие по вертикали вверх от (x, y, z): отметка в м или null
+  function hitUp(C, x, y, z, maxD) {
+    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true);
+    return h && h.distance * S <= (maxD || 1e9) ? z + h.distance * S : null;
+  }
+  function hitDir(C, p, dir, maxD) {
+    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(p[0] / S, p[1] / S, p[2] / S), new THREE.Vector3(dir[0], dir[1], dir[2]).normalize()), true);
+    return h && h.distance * S <= (maxD || 1e9) ? h.distance * S : null;
   }
 
   // карта высот (верх непрозрачной и прозрачной геометрии) для поиска противостоящих зданий
@@ -230,5 +259,5 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { ctx, catalog, rooms, eachGeom, slice, raster, labelAt, matchRooms, markExterior, openings, assign, regionCells, heightMap, overhang, skyline, deg };
+  return { ctx, catalog, rooms, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, assign, spaceCells, hitUp, hitDir, heightMap, overhang, skyline, deg };
 })();
