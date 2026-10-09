@@ -45,8 +45,11 @@ const BimCalc = (function () {
 
   /* ---------- ориентация по сторонам света ---------- */
   const ORI = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
-  function azimuth(nout, T) {
-    const X = T ? T[0] * nout[0] + T[3] * nout[1] : nout[0], Y = T ? T[1] * nout[0] + T[4] * nout[1] : nout[1];
+  // азимут направления nout (наружная нормаль проёма) — по часовой от севера, °.
+  // north: число — поправка поворота модели, ° по часовой (азимут = азимут в осях модели + поправка); массив — матрица refPointTransformation (прежний вариант)
+  function azimuth(nout, north) {
+    if (typeof north === 'number') return ((Math.atan2(nout[0], nout[1]) * 180 / Math.PI + north) % 360 + 360) % 360;
+    const T = north, X = T ? T[0] * nout[0] + T[3] * nout[1] : nout[0], Y = T ? T[1] * nout[0] + T[4] * nout[1] : nout[1];
     return (Math.atan2(X, Y) * 180 / Math.PI + 360) % 360;
   }
   const oriOf = az => ORI[Math.round(az / 45) % 8];
@@ -123,7 +126,7 @@ const BimCalc = (function () {
       const vmin = Math.min(...uv.map(x => x[1])), vmax = Math.max(...uv.map(x => x[1])), vmid = (vmin + vmax) / 2;
       const a = [dot(sub(A, f.O), f.nin), dot(sub(A, f.O), f.t)];
       const line = uv.filter(x => Math.abs(x[1] - a[1]) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
-      const ori = oriOf(azimuth([-f.nin[0], -f.nin[1]], env.T));
+      const ori = oriOf(azimuth([-f.nin[0], -f.nin[1]], env.north ?? env.T));
       if (a[0] < 0.3) { notes.push(`стена ${ori}: расчётная точка за плоскостью остекления или вплотную к нему — стена не учтена`); return; }
       // ширина помещения bп и его ось — по свободному сечению через точку параллельно стене (перегородка внутри пространства — граница сечения)
       const sw = env.Rp ? BimSpaces.sectionWidth(env.Rp, A, f.t, f.nin) : null, useS = sw && sw[0] + sw[1] > 0.5;
@@ -142,7 +145,7 @@ const BimCalc = (function () {
     return walls;
   }
   function wallState(w, env, A, H) {
-    const S = env.settings, f = w.f, az = azimuth([-f.nin[0], -f.nin[1]], env.T);
+    const S = env.settings, f = w.f, az = azimuth([-f.nin[0], -f.nin[1]], env.north ?? env.T);
     const sh = env.shade(f, A, w);
     return {
       st: {
@@ -171,25 +174,39 @@ const BimCalc = (function () {
     const gp = gov && sp.rooms.length > 1 && env.roomPts ? env.roomPts(gov) : null, base = gp && gp.length >= 4 ? gp : pts;
     if (base !== pts) notes.push(`расчётная точка — в помещении ${gov.num} «${gov.name}», определяющем норму пространства`);
     const H = (Math.max(...sp.rooms.map(r => r.h || 0)) || 3);
-    const F = hasSide ? facets(clusters(ops)) : [];
+    let F = hasSide ? facets(clusters(ops)) : [];
+    // основная стена — с наибольшей площадью остекления, видимого из центра помещения, определяющего норму
+    // (проёмы объёма, закрытые от него перегородкой, основной стеной не становятся)
+    if (F.length > 1 && env.Rp) {
+      const cx = base.reduce((s, p) => s + p[0], 0) / base.length, cy = base.reduce((s, p) => s + p[1], 0) / base.length;
+      const Ac = base.reduce((b, p) => { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; return !b || d < b.d ? { p, d } : b; }, null).p;
+      F.forEach(f => { f.visA = f.cls.reduce((s, c) => { const face = [c.c[0] + c.nin[0] * c.dIn, c.c[1] + c.nin[1] * c.dIn]; const parts = BimSpaces.visibleParts(env.Rp, Ac, face, f.t, c.bo); return s + parts.reduce((a, q) => a + q.b - q.a, 0) * (c.z1 - c.z0); }, 0); });
+      F = F.slice().sort((a, b) => (b.visA - a.visA) || (b.area - a.area));
+    }
 
     if (mode === 'side') {
-      // точка: одна стена — по правилу п. 5.3 СП 52 на характерном разрезе; несколько стен со значимым остеклением — центр (как в калькуляторе).
-      // Стена с остеклением меньше 25 % от основной на выбор точки не влияет (её вклад учитывается)
-      const multi = F.filter(f => f.area >= 0.25 * F[0].area).length > 1; let A;
-      if (!multi) {
-        const f = F[0], uvOf = P => P.map(p => { const d = sub(p, f.O); return [dot(d, f.nin), dot(d, f.t)]; }), uv = uvOf(pts), ub = uvOf(base);
-        const vmid = (Math.min(...ub.map(x => x[1])) + Math.max(...ub.map(x => x[1]))) / 2;
-        const line = uv.filter(x => Math.abs(x[1] - vmid) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
-        const lt = env.KEO.ltAuto(rule, dp);
-        A = [f.O[0] + f.t[0] * vmid + f.nin[0] * lt, f.O[1] + f.t[1] * vmid + f.nin[1] * lt];
-      } else {
+      // Расчётная точка бокового света (принятое правило, 09.10.2026):
+      // 1) двустороннее освещение — световые проёмы в противоположных стенах (угол между наружными нормалями ≥ 135°)
+      //    помещения, определяющего норму: точка в центре помещения (СП 52.13330.2016, п. 5.3, абз. 1);
+      //    проём противоположной стены учитывается, если его остекление ≥ 25 % основного и видно из центра этого помещения
+      //    (остекление за перегородкой, в соседнем помещении того же объёма, двусторонним освещение не делает: 83 + 91);
+      // 2) проёмы в смежных стенах (угловое помещение) и малые проёмы — освещение одностороннее: точка по правилу п. 5.3
+      //    (перечисления а)–ж), для групповых ДОО — 1 м от стены, наиболее удалённой от световых проёмов) от основной стены
+      //    (наибольшая площадь остекления); вклады проёмов других ориентаций суммируются (СП 367.1325800.2025, п. 8.4.1, примечание).
+      const f = F[0], uvOf = P => P.map(p => { const d = sub(p, f.O); return [dot(d, f.nin), dot(d, f.t)]; }), uv = uvOf(pts), ub = uvOf(base);
+      const vmid = (Math.min(...ub.map(x => x[1])) + Math.max(...ub.map(x => x[1]))) / 2;
+      const line = uv.filter(x => Math.abs(x[1] - vmid) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
+      const lt = env.KEO.ltAuto(rule, dp);
+      let A = [f.O[0] + f.t[0] * vmid + f.nin[0] * lt, f.O[1] + f.t[1] * vmid + f.nin[1] * lt], multi = false;
+      const opp = F.slice(1).filter(g => dot(g.nin, f.nin) <= -Math.SQRT1_2), oppSig = opp.filter(g => g.area >= 0.25 * f.area);
+      if (oppSig.length) {
         const cx = base.reduce((s, p) => s + p[0], 0) / base.length, cy = base.reduce((s, p) => s + p[1], 0) / base.length;
-        A = base.reduce((b, p) => { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; return !b || d < b.d ? { p, d } : b; }, null).p;
-      }
+        const Ac = base.reduce((b, p) => { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; return !b || d < b.d ? { p, d } : b; }, null).p;
+        if (sideWalls(oppSig, Ac, env, pts, [], true, rule).length) { multi = true; A = Ac; notes.push('двустороннее боковое освещение (проёмы в противоположных стенах) — расчётная точка в центре помещения (СП 52.13330.2016, п. 5.3)'); }
+        else notes.push('остекление противоположной стены из центра помещения не видно (за перегородкой) — освещение одностороннее, точка по п. 5.3 СП 52 от основной стены');
+      } else if (F.length > 1) notes.push(`расчётная точка — по п. 5.3 СП 52 от основной стены; ${opp.length ? 'остекление противоположной стены < 25 % основного' : 'проёмы других стен — в смежных стенах (не двустороннее освещение)'}, их вклад суммируется (СП 367, п. 8.4.1, прим.)`);
       const walls = sideWalls(F, A, env, pts, notes, F.length > 1, rule);
       if (!walls.length) return { err: 'остекление не видно из расчётной точки', notes, A };
-      if (!multi && F.length > 1) notes.push('расчётная точка — по правилу для основной стены с остеклением; остекление других стен мало (< 25 % основной) и учтено только вкладом');
       const st = baseState(env, sp, row); st.mode = 'side';
       // если после проверки видимости осталась одна стена, а точка ставилась как центр — фиксируем её положение вручную
       st.rtManual = (multi || walls.length > 1) ? 'manual' : null;
@@ -199,24 +216,35 @@ const BimCalc = (function () {
 
     // верхний свет (Б.3) — фонари в системе координат главных осей пространства
     const fr = planFrame(pts);
-    const types = [];
+    const types = [], typeIds = [];
     lanterns.forEach(l => {
       const q = fr.toLocal(l.c), av = r2(l.av), bv = r2(l.bv);
-      if (!(l.hsf > 0)) notes.push(`фонарь ${fc(av)}×${fc(bv)} м: высота шахты не определена по модели — принята 0,1 м (допущение, уточните)`);
+      // круглый фонарь (Б.3, формула (8.3)): dv — верхнее отверстие шахты (D1), dn — нижнее (D2); без параметров — по стеклу
+      const round = !!(l.round || l.dTop), dv = r2(l.dTop || l.d || av), dn = r2(l.dBot || l.dTop || l.d || av);
+      if (!(l.hsf > 0)) notes.push(`фонарь ${round ? '⌀' + fc(dv) : fc(av) + '×' + fc(bv)} м: высота шахты не определена по модели — принята 0,1 м (допущение, уточните)`);
       const hsf = r2(Math.max(0.1, l.hsf || 0.1));
-      let T = types.find(t => t.av === av && t.bv === bv && t.hsf === hsf);
-      if (!T) { T = { name: `Фонарь ${av}×${bv}`, shape: 'rect', av, bv, an: av, bn: bv, dv: 1, dn: 1, hsf, refl: 'diffuse', rhoW: S.lrho ?? 0.7, t1: env.DATA.tau1[S.lt1 ?? S.t1].v, t2: env.DATA.tau2[S.lt2 ?? S.t2].v, t3: 1, t4: 1, net: false, tilt: l.tilt <= 15 ? 0 : l.tilt <= 45 ? 1 : l.tilt <= 75 ? 2 : 3, lanterns: [] }; types.push(T); }
-      T.lanterns.push({ x: r2(q[0]), y: r2(q[1]) });
+      let T = types.find(t => round ? (t.shape === 'round' && t.dv === dv && t.dn === dn && t.hsf === hsf) : (t.shape === 'rect' && t.av === av && t.bv === bv && t.hsf === hsf));
+      if (!T) { T = { name: round ? `Фонарь ⌀${dv}${dn !== dv ? '/' + dn : ''}` : `Фонарь ${av}×${bv}`, shape: round ? 'round' : 'rect', av, bv, an: av, bn: bv, dv: round ? dv : 1, dn: round ? dn : 1, hsf, refl: 'diffuse', rhoW: S.lrho ?? 0.7, t1: env.DATA.tau1[S.lt1 ?? S.t1].v, t2: env.DATA.tau2[S.lt2 ?? S.t2].v, t3: 1, t4: 1, net: false, tilt: l.tilt <= 15 ? 0 : l.tilt <= 45 ? 1 : l.tilt <= 75 ? 2 : 3, lanterns: [] }; types.push(T); typeIds.push([]); }
+      T.lanterns.push({ x: r2(q[0]), y: r2(q[1]) }); typeIds[types.indexOf(T)].push(l.id);
     });
-    notes.push(`Фонари — допущения: шахта вертикальная (нижнее отверстие = верхнему), стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
+    notes.push(`Фонари — допущения: ${lanterns.every(l => l.dTop) ? 'размеры отверстий шахты — из параметров семейства' : 'шахта без параметров в модели — вертикальная (нижнее отверстие = верхнему)'}, стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
     const Hs = lanterns.map(l => l.H).filter(h => h > 0);
     if (Hs.length < lanterns.length) notes.push(`высота помещения под фонарём не определена по модели — принята высота помещения ${fc(H)} м (допущение)`);
     const st = baseState(env, sp, row); st.mode = 'top';
     st.top = { sys: 'shaft', L: r2(fr.L), B: r2(fr.B), H: r2(Hs.length ? Math.min(...Hs) : H), spans: 1, l1: null, y0: null, nPts: 0, types, b2: [] };
     const Ct = env.KEO.compute(st);
+    // вклад каждого фонаря в eв по точкам: прямая составляющая coef·q·cos^m·τ0·MF·CN (Б.3) + доля отражённой sотр пропорционально его εв
+    const lanContrib = [];
+    if (Ct.ok) Ct.res.types.forEach((T, ti) => {
+      const k = T.tau0 * T.MF * Ct.res.CN, tot = T.pts.reduce((s, p) => s + p.rows.reduce((a, r) => a + r.qc, 0), 0) || 1;
+      typeIds[ti].forEach((id, li) => {
+        const own = T.pts.reduce((s, p) => s + p.rows[li].qc, 0);
+        lanContrib.push({ id, e: T.pts.map(p => T.coef * p.rows[li].qc * k + T.sOtr * own / tot) });
+      });
+    });
     const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
     P.forEach((p, j) => { if (!inside(pts, p, 0.3)) notes.push(`РТ${j + 1} вне контура пространства (сложная форма в плане) — результат в ней ориентировочный`); });
-    if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes };
+    if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes, lanContrib };
 
     // комбинированное (Б.4): e = eв + eб в каждой точке; eб — боковое освещение в той же точке через видимые участки окон
     if (!Ct.ok) return { mode, row, st, C: Ct, err: (Ct.err || []).join('; '), notes };
@@ -232,7 +260,7 @@ const BimCalc = (function () {
     const eAvgR = Math.round(stt * 100 + 1e-9) / 100, norm = env.KEO.normOf(st), uni = eMin / stt;
     const normOk = norm.v === null || norm.v === undefined ? null : eAvgR >= norm.v - 1e-9, uniOk = uni >= 1 / 3 - 1e-9;
     const comb = { eTop, eSide: sideAt.map(x => x.e), e, eAvg: stt, eAvgR, eMin, uni, uniInv: stt / eMin, norm, normOk, uniOk, pass: normOk === null ? null : normOk && uniOk, sideAt };
-    return { mode, row, st, C: Ct, comb, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, geo: sideAt[Math.floor(P.length / 2)].geo || [], notes };
+    return { mode, row, st, C: Ct, comb, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, geo: sideAt[Math.floor(P.length / 2)].geo || [], notes, lanContrib };
   }
 
   /* ---------- противостоящие здания из профиля затенения ---------- */

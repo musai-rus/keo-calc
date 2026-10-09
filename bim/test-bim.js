@@ -49,6 +49,25 @@ console.log('\n=== 1. Единицы площади: м², мм², фут² ==='
   ok('нет значения', SP.conv('', U.m2, 'area').v === null);
 }
 
+console.log('\n=== 1а. Ориентация по сторонам света ===');
+{
+  ok('нормаль на +Y при поправке 0° — север (0°)', near(Cc.azimuth([0, 1], 0), 0, 1e-9) && Cc.oriOf(Cc.azimuth([0, 1], 0)) === 'С');
+  ok('нормаль на +X — восток (90°), на −Y — юг (180°)', near(Cc.azimuth([1, 0], 0), 90, 1e-9) && near(Cc.azimuth([0, -1], 0), 180, 1e-9));
+  ok('поправка поворота модели +30°: +Y → 30° (СВ)', near(Cc.azimuth([0, 1], 30), 30, 1e-9) && Cc.oriOf(30) === 'СВ');
+  ok('каждая стена — своё направление: угловое помещение с окнами на +X и −Y → В и Ю', Cc.oriOf(Cc.azimuth([1, 0], 0)) === 'В' && Cc.oriOf(Cc.azimuth([0, -1], 0)) === 'Ю');
+}
+
+console.log('\n=== 1б. Сопоставление с допуском 10 % (контур урезан нишей) ===');
+{
+  const P = plan(0);
+  const rA = [room(101, '30', 'Групповая', 48, 28), room(102, '84', 'Спальня', 56 * 1.07, 30), room(103, '12', 'Коридор', 26, 30)];
+  SP.matchRooms(P.R, rA);
+  ok('площадь контура на 7 % меньше Area, пара единственная — помещение опознано с пометкой', !!rA[1].reg && rA[1].loose === true, `dA ${f3(rA[1].dA)}`);
+  const rB = [room(101, '30', 'Групповая', 48, 28), room(102, '84', 'Спальня', 56 * 1.07, 30), room(104, '97', 'Спальня', 56 * 1.06, 30), room(103, '12', 'Коридор', 26, 30)];
+  SP.matchRooms(P.R, rB);
+  ok('два кандидата с допуском 10 % — не опознаётся (выбор за пользователем)', !rB[1].reg && !rB[2].reg);
+}
+
 console.log('\n=== 2. Сплошная перегородка и проход ===');
 let P1, res1;
 {
@@ -108,6 +127,27 @@ console.log('\n=== 4. Коридор автоматически не объед�
   ok('после ручного объединения спальня — отдельно, без повторов', r.spaces.filter(s => s.rooms.some(x => x.num === '84')).length === 1 && keysOf(r).length === new Set(keysOf(r)).size, r.spaces.map(s => s.key).join(' | '));
   const rs = SP.compose(P1.R, P1.Rp, rm, EX, { merge: [], split: [['101', '102']] });
   ok('ручное решение «считать раздельно»', rs.spaces.length === 2 && rs.spaces.every(s => s.rooms.length === 1 && s.manual), rs.spaces.map(s => s.key).join(' | '));
+}
+
+console.log('\n=== 4а. Кладовая с открытым проходом и дверь ===');
+{
+  // кладовая K2 в углу групповой (x 0..2, y 6..8), отделена перегородкой с проходом без двери 0,8 м, проход закрыт линией разделения
+  const phys = [...box(0, 0, 13, 10), [6, 8, 6, 1.2], [0, 8, 2, 8], [3.2, 8, 13, 8], [0, 6, 1.2, 6], [2, 6, 2, 8]];
+  const lines = [[6, 0, 6, 1.2], [2, 8, 3.2, 8], [1.2, 6, 2, 6]];
+  const bx = G.bounds(phys.concat(lines)), Rp = G.raster(phys, 0.05, bx), R = G.raster(phys.concat(lines), 0.05, bx); Rp.regs.forEach(r => r && r.border && Rp.ext.add(r.id));
+  const rm = [room(501, '83', 'Групповая', 44, 30), room(502, '91', 'Спальня', 56, 30), room(503, '47', 'Кладовка игрушек', 4, 8), room(504, '12', 'Коридор', 26, 30)];
+  SP.matchRooms(R, rm);
+  const aux = r => /кладов/i.test(r.name);
+  const res = SP.compose(R, Rp, rm, EX, null, { aux }), g = res.spaces.find(x => x.rooms.some(r => r.num === '83'));
+  ok('кладовая без нормы КЕО с открытым проходом в пространство группы автоматически не включается', g && !g.rooms.some(r => r.num === '47') && g.rooms.some(r => r.num === '91'), g && g.key);
+  ok('…и показана как «открытый проход без двери» с шириной прохода', g.auxNb.some(r => r.num === '47') && g.links.some(l => near(l.w, 0.8, 0.25) && !l.inside), g.links.map(l => `${l.a}↔${l.b} ${f3(l.w)} м`).join('; '));
+  ok('проход группа ↔ спальня у витража ≈ 1,2 м', g.links.some(l => l.inside && near(l.w, 1.2, 0.25)));
+  const r2 = SP.compose(R, Rp, rm, EX, { merge: [['501', '502', '503']] }, { aux });
+  ok('по решению пользователя кладовая объединяется', r2.spaces.some(x => x.rooms.length === 3 && x.manual));
+  // дверь в проёме (контур габарита двери в Rp) — помещения разделены
+  const RpD = G.raster(phys.concat([[1.2, 5.95, 2, 5.95], [2, 5.95, 2, 6.75], [2, 6.75, 1.2, 6.75], [1.2, 6.75, 1.2, 5.95]]), 0.05, bx); RpD.regs.forEach(r => r && r.border && RpD.ext.add(r.id));
+  const rd = SP.compose(R, RpD, rm, EX, null, {}), gk = rd.spaces.find(x => x.rooms.some(r => r.num === '47'));
+  ok('закрытая дверь разделяет объёмы: кладовая — отдельное пространство даже без признака «без нормы»', gk && gk.rooms.length === 1 && !rd.spaces.find(x => x.rooms.some(r => r.num === '83')).neighbours.some(r => r.num === '47'), gk && gk.key);
 }
 
 console.log('\n=== 5. Те же результаты в мм и футах ===');
@@ -208,6 +248,10 @@ console.log('\n=== 8. Верхнее и комбинированное осве�
   ok('eб в точке ≥ 0, eср по Б.10', c.eSide.every(e => e >= 0) && near(c.eAvg, Engine.avgB10(c.e), 1e-12), `eср = ${f3(c.eAvg)}, eв ср = ${f3(rTop.C.res.eAvg)}`);
   ok('комбинированное ≥ только верхнего', c.eAvg >= rTop.C.res.eAvg - 1e-12);
   ok('итог — норма и равномерность', typeof c.uniOk === 'boolean' && c.norm.v === rTop.C.norm.v);
+  // вклад фонарей: сумма по фонарям в каждой точке = eв точки
+  const lc = rTop.lanContrib;
+  ok('вклад каждого фонаря по точкам: сумма = eв в точке', lc.length === 2 && rTop.C.res.e.every((e, j) => near(lc.reduce((s, x) => s + x.e[j], 0), e, 1e-9)), lc.map(x => x.e.map(f3).join('/')).join(' | '));
+  ok('симметрия: фонарь у точки 1 даёт в ней больший вклад, чем дальний', lc[0].e[0] > lc[1].e[0]);
 }
 
 console.log(`\n${fails ? 'ЕСТЬ ОШИБКИ' : 'Все проверки пройдены'}: ${total - fails}/${total}`);

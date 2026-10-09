@@ -32,22 +32,55 @@ const BimSpaces = (function () {
     });
     pairs.sort((a, b) => a[0] - b[0]);
     pairs.forEach(([d, rm, rg]) => { if (rm.reg || rg.room) return; rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; rm.areaModelV = rg.areaV; });
+    // второй проход: допуск по площади до tol2 (10 %) — только для взаимно единственной пары «помещение ↔ контур»
+    // (контур урезан нишей/шкафом за дверными полотнами и т.п.; пример — спальня 84 модели 1226: Area 55,14 м², контур 51,1–52,0 м²)
+    const tol2 = 0.10, cand = new Map(), back = new Map();
+    rooms.forEach(rm => {
+      if (rm.reg || !(rm.area > 0)) return;
+      regs.forEach(rg => {
+        if (rg.room || rg.areaC < 4) return;
+        const dd = Math.min(Math.abs(rg.areaC - rm.area), Math.abs((rg.areaV || rg.areaC) - rm.area));
+        if (dd / rm.area >= tol2) return;
+        if (rm.per > 0) { const k = rg.per / rm.per; if (k < 0.75 || k > 1.45) return; }
+        (cand.get(rm) || cand.set(rm, []).get(rm)).push([dd / rm.area, rg]); (back.get(rg) || back.set(rg, []).get(rg)).push(rm);
+      });
+    });
+    cand.forEach((list, rm) => { if (list.length !== 1) return; const [d, rg] = list[0]; if (back.get(rg).length !== 1) return; rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.loose = true; rm.areaModel = rg.areaC; rm.areaModelV = rg.areaV; });
   }
 
   /* ---------- состав пространств ---------- */
   // rooms — помещения уровня (rm.key — уникальный ключ: ElementId/dbId; номер не используется как ключ)
   // isExcluded(rm) — ЛК, коридоры, холлы, вестибюли: не объединяются автоматически и не рассчитываются
   // decisions — ручные решения пользователя: merge [[key…]], split [[key…]], assign [{at: [x, y], keys: [key…]}] (помещения в неопознанный контур)
+  // opts.aux(rm) — помещение без нормы КЕО (кладовая, санузел): с нормируемыми автоматически не объединяется, только по решению пользователя
   const nameKey = n => String(n || '').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z]/g, '');
-  function compose(R, Rp, rooms, isExcluded, decisions) {
+  // связи между контурами R через проходы без стены и без двери (клетки, занятые только линией разделения): ширина прохода, м
+  function links(R, Rp) {
+    const W = R.W, N = W * R.H, cnt = new Map();
+    for (let p = 0; p < N; p++) {
+      if (R.lab[p] !== 0 || !Rp.lab[p]) continue;
+      const ids = new Set(), i = p % W;
+      for (let d = 1; d <= 3; d++) for (const q of [i - d >= 0 ? p - d : -1, i + d < W ? p + d : -1, p - d * W, p + d * W]) { if (q >= 0 && q < N && R.lab[q] > 0) ids.add(R.lab[q]); }
+      const a = [...ids].sort((x, y) => x - y);
+      const j = (p - i) / W;
+      for (let x = 0; x < a.length; x++) for (let y = x + 1; y < a.length; y++) { const k = a[x] + ':' + a[y], b = cnt.get(k); if (!b) cnt.set(k, [i, i, j, j]); else { b[0] = Math.min(b[0], i); b[1] = Math.max(b[1], i); b[2] = Math.min(b[2], j); b[3] = Math.max(b[3], j); } }
+    }
+    // ширина прохода — протяжённость клеток линии разделения между двумя контурами
+    const out = new Map(); cnt.forEach((b, k) => out.set(k, (Math.max(b[1] - b[0], b[3] - b[2]) + 1) * R.cell));
+    return out;
+  }
+  function compose(R, Rp, rooms, isExcluded, decisions, opts) {
+    const aux = (opts && opts.aux) || (() => false);
     decisions = decisions || {};
     const M = decisions.merge || [], SPL = decisions.split || [], AS = decisions.assign || [];
     rooms.forEach(rm => { delete rm.byBalance; delete rm.byUser; delete rm.sub; }); // повторная сборка после ручного решения
     R.regs.forEach(r => { if (r) { delete r.rooms; delete r.cands; } });
     const byKey = new Map(rooms.map(r => [r.key, r]));
-    // R-подобласть → область Rp (свободная клетка R всегда свободна и в Rp: в R преград больше)
-    const subsOf = new Map();
-    R.regs.forEach(r => { if (!r || r.border) return; const P = Rp.lab[r.seed]; if (!P || Rp.ext.has(P)) return; if (!subsOf.has(P)) subsOf.set(P, []); subsOf.get(P).push(r); });
+    // R-подобласть → область Rp
+    // (в Rp могут быть преграды, которых нет в R, — контуры закрытых дверей: берётся первая клетка контура, свободная в Rp)
+    const subsOf = new Map(), toP = new Int32Array(R.regs.length);
+    for (let p = 0; p < R.lab.length; p++) { const id = R.lab[p]; if (id > 0 && !toP[id] && Rp.lab[p] > 0 && Rp.regs[Rp.lab[p]] && Rp.regs[Rp.lab[p]].areaC >= 2) toP[id] = Rp.lab[p]; }
+    R.regs.forEach(r => { if (!r || r.border) return; const P = toP[r.id]; if (!P || Rp.ext.has(P)) return; if (!subsOf.has(P)) subsOf.set(P, []); subsOf.get(P).push(r); });
     const free = r => !r.room && !r.rooms;
     // 1) ручное назначение помещений в контур без помещения
     AS.forEach(a => {
@@ -63,7 +96,7 @@ const BimSpaces = (function () {
       if (c.length === 1) { rg.rooms = c[0].sel; c[0].sel.forEach(rm => { rm.sub = rg.id; rm.byBalance = rg.id; }); }
       else if (c.length > 1) rg.cands = c.slice(0, 6);
     });
-    const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k));
+    const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k)), LK = links(R, Rp);
     const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum })) });
     [...subsOf.keys()].sort((a, b) => a - b).forEach(P => {
       const subs = subsOf.get(P), subOf = new Map(), units = [];
@@ -72,11 +105,14 @@ const BimSpaces = (function () {
       const all = units.flat();
       const nonEx = all.filter(r => !isExcluded(r)), ex = all.filter(r => isExcluded(r));
       if (!nonEx.length && !M.some(g => all.some(r => g.includes(r.key)))) return;
-      // по умолчанию все неисключённые помещения физического объёма — одно пространство; если в объёме несколько помещений
-      // одного назначения (две спальни, два кабинета) — это разные помещения с общим проходом: раздельно, вопрос пользователю
-      const dup = new Set(nonEx.map(r => nameKey(r.name))).size < nonEx.length;
+      // по умолчанию нормируемые помещения физического объёма (групповая + спальня с проходом у витража) — одно пространство.
+      // Не объединяются автоматически: исключённые (коридоры и т.п.), помещения без нормы КЕО (кладовая, санузел) и несколько
+      // помещений одного назначения (две спальни) — для них показывается проход и решение за пользователем
+      const normed = nonEx.filter(r => !aux(r));
+      const dup = new Set(normed.map(r => nameKey(r.name))).size < normed.length;
       const splitUser = nonEx.some(r => keyIn(SPL, r.key));
-      let groups = (splitUser || dup) ? units.map(u => u.filter(r => !isExcluded(r))).filter(u => u.length) : nonEx.length ? [nonEx] : [];
+      const unitsNE = units.map(u => u.filter(r => !isExcluded(r))).filter(u => u.length);
+      let groups = (splitUser || dup) ? unitsNE : [...(normed.length ? [unitsNE.filter(u => u.some(r => !aux(r))).flat()] : []), ...unitsNE.filter(u => u.every(r => aux(r)))];
       M.forEach(g => {
         const members = all.filter(r => g.includes(r.key)); if (members.length < 2) return;
         groups = groups.map(x => x.filter(r => !members.includes(r))).filter(x => x.length);
@@ -86,14 +122,18 @@ const BimSpaces = (function () {
       // крупные части без помещения не присоединяются — их состав определяет пользователь
       const grow = subs.filter(s => free(s) && s.areaC < 8).map(s => s.id);
       const main = groups.slice().sort((a, b) => b.reduce((s, r) => s + r.area, 0) - a.reduce((s, r) => s + r.area, 0))[0];
-      const used = new Set();
+      const used = new Set(), subId = r => (subOf.get(r) || {}).id;
       groups.forEach(g => {
         const regIds = [];
         g.forEach(r => { const s = subOf.get(r); if (s && !used.has(s.id)) { used.add(s.id); regIds.push(s.id); } });
         const others = all.filter(r => !g.includes(r));
+        // проходы без двери между помещениями группы и соседями по объёму (ширина по линии разделения)
+        const lk = [];
+        g.forEach(a => all.forEach(b => { if (a === b || (g.includes(b) && a.key > b.key)) return; const ia = subId(a), ib = subId(b); if (!ia || !ib || ia === ib) return; const w = LK.get(Math.min(ia, ib) + ':' + Math.max(ia, ib)); if (w) lk.push({ a: a.key, b: b.key, w, inside: g.includes(b) }); }));
         spaces.push({
           P, rooms: g, regIds, grow, key: g.map(r => r.key).sort().join('+'),
-          merged: g.length > 1, manual: M.some(x => g.every(r => x.includes(r.key))) || splitUser,
+          merged: g.length > 1, manual: M.some(x => g.every(r => x.includes(r.key))) || splitUser, links: lk,
+          auxNb: others.filter(r => aux(r) && !isExcluded(r)), // открытый проход в помещение без нормы — не объединено автоматически
           dup: dup && !M.some(x => g.every(r => x.includes(r.key))),
           balance: g.filter(r => r.byBalance !== undefined), byUser: g.filter(r => r.byUser),
           unknown: g === main ? big : [], // части объёма ≥ 8 м² без помещения Revit — состав объёма не определён до решения пользователя
@@ -177,5 +217,5 @@ const BimSpaces = (function () {
     return [go(1), go(-1)];
   }
 
-  return { conv, unitOf, matchRooms, compose, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
+  return { conv, unitOf, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
 })();

@@ -8,12 +8,15 @@ const BimGeom = (function () {
     return { v, m, it, fl, S: m.getUnitScale(), GZ: (m.getData().globalOffset || { z: 0 }).z };
   }
 
-  // все листовые элементы с категорией, уровнем, типом
+  // элементы с категорией, уровнем, типом: листовые узлы и узлы со своей геометрией.
+  // Имя — из дерева модели (getBulkProperties2 имени не возвращает: без этого имя семейства, напр. «Skywindow», не проверялось).
+  // Экземпляр семейства с вложенным семейством (фонарь A_GMO_Skywindow_Angle: категория «Окна», внутри — обобщённая модель-обрамление)
+  // не листовой, но сам несёт стекло — раньше он пропускался.
   async function catalog(C) {
-    const ids = []; C.it.enumNodeChildren(C.it.getRootId(), id => { if (C.it.getChildCount(id) === 0) ids.push(id); }, true);
+    const ids = []; C.it.enumNodeChildren(C.it.getRootId(), id => { if (C.it.getChildCount(id) === 0) { ids.push(id); return; } let own = 0; C.it.enumNodeFragments(id, () => { own++; }, false); if (own) ids.push(id); }, true);
     const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: ['Category', 'Type Name', 'Family Name'] }, ok, bad));
     const byCat = {}, info = {};
-    props.forEach(r => { const g = n => (r.properties.find(p => p.attributeName === n) || {}).displayValue; const c = g('Category') || '—'; (byCat[c] = byCat[c] || []).push(r.dbId); info[r.dbId] = { c, type: g('Type Name') || '', fam: g('Family Name') || '', name: r.name }; });
+    props.forEach(r => { const g = n => (r.properties.find(p => p.attributeName === n) || {}).displayValue; const c = g('Category') || '—'; (byCat[c] = byCat[c] || []).push(r.dbId); info[r.dbId] = { c, type: g('Type Name') || '', fam: g('Family Name') || '', name: r.name || C.it.getNodeName(r.dbId) || '' }; });
     return { byCat, info };
   }
 
@@ -131,43 +134,84 @@ const BimGeom = (function () {
     });
   }
 
-  // светопрозрачные элементы: только прозрачные фрагменты (стекло). Вертикальные — окна, витражи, остеклённые двери;
-  // горизонтальные и наклонные (|nz| > 0,7) — световые фонари: окна/панели в кровле, кровли из стекла, обобщённые модели «фонарь».
-  // Перекрытия и потолки с прозрачным материалом фонарями не считаются.
-  const LANTERN_NAME = /фонар|зенит|skylight|roof ?light|light ?well|световод|светов/i;
+  // светопрозрачные элементы. Вертикальные — окна, витражи, остеклённые двери (по прозрачным фрагментам — стеклу).
+  // Кандидаты в фонари — элементы кровли и окна/панели/обобщённые модели, у которых остекление обращено вверх (доля площади
+  // стекла с |nz| > 0,5, т.е. наклон ≤ 60°) или имя семейства/типа указывает на фонарь. Для каждого кандидата сохраняется диагностика:
+  // семейство, тип, площадь стекла, наклон, причина, почему элемент не принят. Перекрытия и потолки фонарями не считаются.
+  const LANTERN_NAME = /фонар|зенит|sky ?light|sky ?window|roof ?light|roof ?window|мансардн|light ?well|световод|светов|купол|dome/i;
+  const LANTERN_ZENITH = /зенит|sky ?light|sky ?window|roof ?light|фонар/i;
   function openings(C, cat, excludeRe) {
-    const out = [], mat4 = new THREE.Matrix4(), S = C.S;
-    ['Revit Windows', 'Revit Curtain Panels', 'Revit Doors', 'Revit Roofs', 'Revit Generic Models'].forEach(c => (cat.byCat[c] || []).forEach(id => {
-      const inf = cat.info[id];
-      if (excludeRe && excludeRe.test(inf.type || '')) return;
-      if (c === 'Revit Generic Models' && !LANTERN_NAME.test([inf.type, inf.fam, inf.name].join(' '))) return;
-      const P = []; let A = 0, NZ = 0;
+    const out = [], diag = [], mat4 = new THREE.Matrix4(), S = C.S, root = C.it.getRootId();
+    // вложенный элемент проёма (обрамление, створка внутри окна/двери/панели) уже учтён в родителе — enumNodeFragments рекурсивен
+    const HOST = new Set(['Revit Windows', 'Revit Curtain Panels', 'Revit Doors', 'Revit Skylights']);
+    const nested = id => { for (let p = C.it.getNodeParentId(id); p && p !== root; p = C.it.getNodeParentId(p)) { const i = cat.info[p]; if (i && HOST.has(i.c)) return true; } return false; };
+    ['Revit Windows', 'Revit Curtain Panels', 'Revit Doors', 'Revit Roofs', 'Revit Generic Models', 'Revit Skylights'].forEach(c => (cat.byCat[c] || []).forEach(id => {
+      if (nested(id)) return;
+      const inf = cat.info[id], label = [inf.fam, inf.type].filter(Boolean).join(' : ') || inf.name || '';
+      const named = LANTERN_NAME.test([inf.type, inf.fam, inf.name].join(' '));
+      if (excludeRe && excludeRe.test(inf.type || '')) { if (named) diag.push({ id, cat: c, label, reason: 'тип исключён настройкой «стекло не учитывать»' }); return; }
+      if (c === 'Revit Generic Models' && !named) return;
+      // P — точки стекла; A/NZ — площадь стекла и её проекция на горизонталь; Pa/Aa/NZa — то же по всей геометрии элемента
+      const P = [], Pa = []; let A = 0, NZ = 0, Aa = 0, NZa = 0, up = 0;
       C.it.enumNodeFragments(id, f => {
-        const mt = C.fl.getMaterial(f); if (!(mt && (mt.transparent || mt.opacity < 0.95))) return;
+        const mt = C.fl.getMaterial(f), glass = !!(mt && (mt.transparent || mt.opacity < 0.95));
         const g = C.fl.getGeometry(f); if (!g || !g.vb || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
-        const e = mat4.elements, st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, n = g.vb.length / st, base = P.length;
-        for (let i = 0; i < n; i++) { const x = g.vb[i * st + off], y = g.vb[i * st + off + 1], z = g.vb[i * st + off + 2]; P.push([(e[0] * x + e[4] * y + e[8] * z + e[12]) * S, (e[1] * x + e[5] * y + e[9] * z + e[13]) * S, (e[2] * x + e[6] * y + e[10] * z + e[14]) * S]); }
+        const e = mat4.elements, st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, n = g.vb.length / st, Q = [];
+        for (let i = 0; i < n; i++) { const x = g.vb[i * st + off], y = g.vb[i * st + off + 1], z = g.vb[i * st + off + 2]; Q.push([(e[0] * x + e[4] * y + e[8] * z + e[12]) * S, (e[1] * x + e[5] * y + e[9] * z + e[13]) * S, (e[2] * x + e[6] * y + e[10] * z + e[14]) * S]); }
         const ib = g.ib || (g.index && g.index.array);
-        if (ib) for (let i = 0; i + 2 < ib.length; i += 3) { const a = P[base + ib[i]], b = P[base + ib[i + 1]], cc = P[base + ib[i + 2]]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = cc[0] - a[0], vy = cc[1] - a[1], vz = cc[2] - a[2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, ar = Math.hypot(nx, ny, nz) / 2; A += ar; NZ += Math.abs(nz) / 2; }
+        if (ib) for (let i = 0; i + 2 < ib.length; i += 3) { const a = Q[ib[i]], b = Q[ib[i + 1]], cc = Q[ib[i + 2]]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = cc[0] - a[0], vy = cc[1] - a[1], vz = cc[2] - a[2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, ar = Math.hypot(nx, ny, nz) / 2; Aa += ar; NZa += Math.abs(nz) / 2; if (glass) { A += ar; NZ += Math.abs(nz) / 2; if (nz > 0) up += nz / 2; } }
+        Q.forEach(q => Pa.push(q)); if (glass) Q.forEach(q => P.push(q));
       }, true);
-      if (P.length < 3) return;
-      let mx = 0, my = 0, z0 = 1e9, z1 = -1e9; P.forEach(p => { mx += p[0]; my += p[1]; z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]); }); mx /= P.length; my /= P.length;
-      let sxx = 0, syy = 0, sxy = 0; P.forEach(p => { const dx = p[0] - mx, dy = p[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
-      const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), t = [Math.cos(ang), Math.sin(ang)], n = [-t[1], t[0]];
-      let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
-      P.forEach(p => { const u = (p[0] - mx) * t[0] + (p[1] - my) * t[1], w = (p[0] - mx) * n[0] + (p[1] - my) * n[1]; a0 = Math.min(a0, u); a1 = Math.max(a1, u); b0 = Math.min(b0, w); b1 = Math.max(b1, w); });
-      const w = a1 - a0, d = b1 - b0, h = z1 - z0, cxy = [mx + t[0] * (a0 + a1) / 2 + n[0] * (b0 + b1) / 2, my + t[1] * (a0 + a1) / 2 + n[1] * (b0 + b1) / 2];
-      const flat = A > 0 ? NZ / A : 0; // доля площади стекла, обращённой вверх
-      if (flat > 0.7 && c !== 'Revit Doors') {
-        if (w < 0.2 || d < 0.2) return;
-        out.push({ id, cat: c, type: inf.type, roof: true, c: cxy, t, n, av: w, bv: d, z0, z1, tilt: Math.acos(Math.min(1, flat)) * 180 / Math.PI });
-        return;
+      const box = pts => {
+        let mx = 0, my = 0, z0 = 1e9, z1 = -1e9; pts.forEach(p => { mx += p[0]; my += p[1]; z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]); }); mx /= pts.length; my /= pts.length;
+        let sxx = 0, syy = 0, sxy = 0; pts.forEach(p => { const dx = p[0] - mx, dy = p[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
+        const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), t = [Math.cos(ang), Math.sin(ang)], n = [-t[1], t[0]];
+        let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
+        pts.forEach(p => { const u = (p[0] - mx) * t[0] + (p[1] - my) * t[1], w = (p[0] - mx) * n[0] + (p[1] - my) * n[1]; a0 = Math.min(a0, u); a1 = Math.max(a1, u); b0 = Math.min(b0, w); b1 = Math.max(b1, w); });
+        return { t, n, w: a1 - a0, d: b1 - b0, h: z1 - z0, z0, z1, c: [mx + t[0] * (a0 + a1) / 2 + n[0] * (b0 + b1) / 2, my + t[1] * (a0 + a1) / 2 + n[1] * (b0 + b1) / 2] };
+      };
+      const glassOk = P.length >= 3 && A > 0.02;
+      const flat = glassOk ? NZ / A : 0, flatAll = Aa > 0 ? NZa / Aa : 0;
+      // кандидат в фонари: стекло обращено вверх или (по имени) элемент — фонарь
+      const roofish = c !== 'Revit Doors' && ((glassOk && flat > 0.5) || (named && c !== 'Revit Curtain Panels' && (!glassOk || flat > 0.3)));
+      if (roofish) {
+        const bb = box(glassOk ? P : Pa);
+        const rec = { id, cat: c, type: inf.type, fam: inf.fam, label, roof: true, c: bb.c, t: bb.t, n: bb.n, av: bb.w, bv: bb.d, z0: bb.z0, z1: bb.z1,
+          tilt: glassOk ? Math.acos(Math.min(1, flat)) * 180 / Math.PI : null, glassArea: A, named, glass: glassOk, zb: Pa.reduce((m, p) => Math.min(m, p[2]), 1e9) };
+        if (bb.w < 0.2 || bb.d < 0.2) { diag.push({ ...rec, reason: `слишком мал в плане (${bb.w.toFixed(2)}×${bb.d.toFixed(2)} м)` }); return; }
+        // тип фонаря: подтверждён автоматически только горизонтальное остекление (≤ 15°) в элементе с именем фонаря;
+        // остальное (наклонное, без выделенного стекла, без имени) — требует подтверждения пользователя
+        rec.kind = !glassOk ? 'unknown' : rec.tilt <= 15 ? 'flat' : 'pitched';
+        rec.auto = glassOk && rec.tilt <= 15 && LANTERN_ZENITH.test([inf.type, inf.fam, inf.name].join(' '));
+        if (!glassOk) rec.note = 'стекло в семействе не выделено материалом — размеры по габариту элемента';
+        // круглое остекление: точки стекла на одном расстоянии от центра (разброс < 5 %) — фонарь круглый, d — по стеклу
+        if (glassOk) { const rr = P.map(p => Math.hypot(p[0] - bb.c[0], p[1] - bb.c[1])), r1 = Math.max(...rr), r0 = Math.min(...rr.filter(r => r > 0.3 * r1)); if (r1 > 0.1 && (r1 - r0) / r1 < 0.05) { rec.round = true; rec.d = 2 * r1; } }
+        out.push(rec); diag.push(rec); return;
       }
-      if (c === 'Revit Roofs' || c === 'Revit Generic Models') { if (flat < 0.3 && w >= 0.3 && h >= 0.3) out.push({ id, cat: c, type: inf.type, c: cxy, t, n, w, d, z0, z1 }); return; }
-      if (w < 0.15 && d < 0.15) return; // щели и торцы стекла
-      out.push({ id, cat: c, type: inf.type, c: cxy, t, n, w, d, z0, z1 });
+      if (!glassOk) { if (named) diag.push({ id, cat: c, label, named, reason: 'нет прозрачных фрагментов (стекло не выделено материалом) и геометрия не обращена вверх' }); return; }
+      const bb = box(P);
+      if (c === 'Revit Roofs' || c === 'Revit Generic Models') { if (flat < 0.3 && bb.w >= 0.3 && bb.h >= 0.3) out.push({ id, cat: c, type: inf.type, c: bb.c, t: bb.t, n: bb.n, w: bb.w, d: bb.d, z0: bb.z0, z1: bb.z1 }); else if (named) diag.push({ id, cat: c, label, reason: `наклон стекла ${Math.round(Math.acos(Math.min(1, flat)) * 180 / Math.PI)}° — ни фонарь (≤ 60°), ни вертикальный проём` }); return; }
+      if (bb.w < 0.15 && bb.d < 0.15) return; // щели и торцы стекла
+      out.push({ id, cat: c, type: inf.type, c: bb.c, t: bb.t, n: bb.n, w: bb.w, d: bb.d, z0: bb.z0, z1: bb.z1 });
+      if (named) diag.push({ id, cat: c, label, reason: `стекло вертикальное (наклон ${Math.round(Math.acos(Math.min(1, flat)) * 180 / Math.PI)}°) — учтено как окно` });
     }));
+    out.diag = diag;
     return out;
+  }
+
+  // двери без остекления считаются закрытыми: контур габарита двери в плане добавляется в физический растр Rp,
+  // чтобы открытая (повёрнутая) створка не соединяла помещения в один объём
+  function doorBoxes(C, cat, zM) {
+    const S = C.S, segs = [], box = new THREE.Box3(), fb = new THREE.Box3();
+    (cat.byCat['Revit Doors'] || []).forEach(id => {
+      box.makeEmpty(); let glass = false;
+      C.it.enumNodeFragments(id, f => { const mt = C.fl.getMaterial(f); if (mt && (mt.transparent || mt.opacity < 0.95)) glass = true; C.fl.getWorldBounds(f, fb); box.union(fb); }, true);
+      if (glass || box.isEmpty() || box.min.z * S > zM || box.max.z * S < zM) return;
+      const x0 = box.min.x * S, y0 = box.min.y * S, x1 = box.max.x * S, y1 = box.max.y * S;
+      if (x1 - x0 > 4 || y1 - y0 > 4) return; // ворота, витражные блоки — не трогаем
+      segs.push([x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]);
+    });
+    return segs;
   }
 
   // привязка вертикального проёма к пространству: по нормали в обе стороны до первой значимой области физического растра Rp
@@ -184,7 +228,7 @@ const BimGeom = (function () {
       if (ea === eb) { if (!ea) st.inner++; return; }
       const inn = ea ? B : A, out = ea ? A : B, sg = ea ? -1 : 1;
       if (inn.sp < 0) { st.noSpace++; return; }
-      Object.assign(o, { space: inn.sp, nin: [o.n[0] * sg, o.n[1] * sg], dIn: inn.k, dOut: out.k, dst: inn.k + out.k, floor });
+      Object.assign(o, { space: inn.sp, reg: inn.id, nin: [o.n[0] * sg, o.n[1] * sg], dIn: inn.k, dOut: out.k, dst: inn.k + out.k, floor });
       st.outer++;
     });
     return st;
@@ -214,6 +258,21 @@ const BimGeom = (function () {
   function hitUp(C, x, y, z, maxD) {
     const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true);
     return h && h.distance * S <= (maxD || 1e9) ? z + h.distance * S : null;
+  }
+  // размеры фонаря из параметров семейства (A_GMO_Skywindow_Angle: Diameter_Inside — D1, верхнее отверстие шахты под стеклом;
+  // Diameter_Bottom — D2, нижнее отверстие в потолке; значения в мм)
+  async function lanternParams(C, ids) {
+    if (!ids.length) return {};
+    const names = ['Diameter_Inside', 'Diameter_Bottom'];
+    const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: names }, ok, bad)).catch(() => []);
+    const out = {}, m = v => { const x = parseFloat(v); return isNaN(x) || x <= 0 ? null : x > 20 ? x / 1000 : x; };
+    props.forEach(r => { const g = n => (r.properties.find(p => p.attributeName === n || p.displayName === n) || {}).displayValue; const dIn = m(g('Diameter_Inside')), dBot = m(g('Diameter_Bottom')); if (dIn || dBot) out[r.dbId] = { dIn, dBot }; });
+    return out;
+  }
+  // то же с элементом, в который упёрся луч
+  function hitUpEl(C, x, y, z, maxD) {
+    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true);
+    return h && h.distance * S <= (maxD || 1e9) ? { z: z + h.distance * S, id: h.dbId } : null;
   }
   function hitDir(C, p, dir, maxD) {
     const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(p[0] / S, p[1] / S, p[2] / S), new THREE.Vector3(dir[0], dir[1], dir[2]).normalize()), true);
@@ -259,5 +318,5 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { ctx, catalog, rooms, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, assign, spaceCells, hitUp, hitDir, heightMap, overhang, skyline, deg };
+  return { ctx, catalog, rooms, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
 })();
