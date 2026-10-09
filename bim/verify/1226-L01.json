@@ -1,0 +1,192 @@
+{
+ "source": "модель 1226 (1226_30_01_01_AS_Kindergarten.rvt), уровень L01; состояния калькулятора из «КЕО по модели» 09.10.2026",
+ "states": {
+  "1226 · 83 Групповая + 91 Спальня (L01)": {
+   "v": 1,
+   "mode": "side",
+   "region": "г. Москва",
+   "group": 1,
+   "groupManual": true,
+   "bType": "Дошкольные образовательные организации (ДОО) (для детей младше 7 лет)",
+   "roomId": "A57",
+   "lightSys": "ЕО",
+   "normManual": null,
+   "hpManual": null,
+   "rtManual": "manual",
+   "env": "normal",
+   "glassMult": 1,
+   "rho": 0.55,
+   "side": {
+    "walls": [
+     {
+      "orient": "ЮВ",
+      "dp": 8.34,
+      "bp": 7.7,
+      "H": 5.4,
+      "dst": 0.12,
+      "lt": 7.34,
+      "ds": 0.15,
+      "t1": 3,
+      "t1c": null,
+      "t2": 0,
+      "t4": 0,
+      "t5": 1,
+      "kType": "canopy",
+      "kDepth": 0.4,
+      "windows": [
+       {
+        "hpd": 0.6,
+        "ho": 4.2,
+        "bo": 6.23,
+        "s": -0.37,
+        "t2o": null,
+        "tau0o": null,
+        "Ko": null
+       },
+       {
+        "hpd": 0.6,
+        "ho": 4.2,
+        "bo": 0.7,
+        "s": 3.29,
+        "t2o": null,
+        "tau0o": null,
+        "Ko": null
+       }
+      ],
+      "buildings": []
+     },
+     {
+      "orient": "ЮЗ",
+      "dp": 15.63,
+      "bp": 8.28,
+      "H": 5.4,
+      "dst": 0.18,
+      "lt": 5.05,
+      "ds": 3.34,
+      "t1": 3,
+      "t1c": null,
+      "t2": 0,
+      "t4": 0,
+      "t5": 1,
+      "kType": "canopy",
+      "kDepth": 4,
+      "windows": [
+       {
+        "hpd": 0.6,
+        "ho": 4.2,
+        "bo": 0.2,
+        "s": -1.31,
+        "t2o": null,
+        "tau0o": null,
+        "Ko": null
+       },
+       {
+        "hpd": 0.6,
+        "ho": 4.2,
+        "bo": 0.1,
+        "s": -0.95,
+        "t2o": null,
+        "tau0o": null,
+        "Ko": null
+       }
+      ],
+      "buildings": []
+     }
+    ]
+   }
+  },
+  "1226 · 36 Групповая, угловая (L01)": {
+   "v": 1,
+   "mode": "side",
+   "region": "г. Москва",
+   "group": 1,
+   "groupManual": true,
+   "bType": "Дошкольные образовательные организации (ДОО) (для детей младше 7 лет)",
+   "roomId": "A57",
+   "lightSys": "ЕО",
+   "normManual": null,
+   "hpManual": null,
+   "rtManual": "manual",
+   "env": "normal",
+   "glassMult": 1,
+   "rho": 0.55,
+   "side": {
+    "walls": [
+     {
+      "orient": "ЮЗ",
+      "dp": 8.23,
+      "bp": 7.7,
+      "H": 5.4,
+      "dst": 0.12,
+      "lt": 7.23,
+      "ds": 3.35,
+      "t1": 3,
+      "t1c": null,
+      "t2": 0,
+      "t4": 0,
+      "t5": 1,
+      "kType": "canopy",
+      "kDepth": 0.6,
+      "windows": [
+       {
+        "hpd": 0.6,
+        "ho": 4.2,
+        "bo": 0.4,
+        "s": -3.23,
+        "t2o": null,
+        "tau0o": null,
+        "Ko": null
+       },
+       {
+        "hpd": 0.6,
+        "ho": 4.2,
+        "bo": 6.98,
+        "s": 0.66,
+        "t2o": null,
+        "tau0o": null,
+        "Ko": null
+       }
+      ],
+      "buildings": [
+       {
+        "l": 1.11,
+        "Hp": 6.3,
+        "a": 0.5,
+        "off": -0.62,
+        "rhoF": 0.4
+       }
+      ]
+     },
+     {
+      "orient": "ЮВ",
+      "dp": 9,
+      "bp": 8.28,
+      "H": 5.4,
+      "dst": 0.14,
+      "lt": 8.49,
+      "ds": -3.31,
+      "t1": 3,
+      "t1c": null,
+      "t2": 0,
+      "t4": 0,
+      "t5": 1,
+      "kType": "canopy",
+      "kDepth": 4,
+      "windows": [
+       {
+        "hpd": 0.6,
+        "ho": 4.2,
+        "bo": 0.2,
+        "s": 2.59,
+        "t2o": null,
+        "tau0o": null,
+        "Ko": null
+       }
+      ],
+      "buildings": []
+     }
+    ]
+   }
+  }
+ }
+}
