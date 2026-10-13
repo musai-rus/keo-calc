@@ -105,8 +105,23 @@ table.grid-t{border-collapse:collapse;width:100%;min-width:520px}
 .grid-t td{padding:3px 4px;border-bottom:1px solid var(--line)}
 .grid-t td.n{font-family:var(--f-mono);color:var(--muted);text-align:center;width:28px}
 .grid-t input{width:100%;min-width:56px;border:1px solid var(--line);border-radius:4px;padding:5px 6px;background:var(--surface);font-variant-numeric:tabular-nums}
-.grid-t td.ovr{display:flex;gap:3px}
-.grid-t td.ovr input{min-width:44px;font-size:13px}
+.grid-t td.eff{font-family:var(--f-mono);font-size:12.5px;white-space:nowrap;color:var(--ink)}
+.grid-t tr.exc td{border-bottom:1px solid var(--line);padding-top:0}
+.grid-t tr:has(+tr.exc) td{border-bottom:0}
+details.excd>summary{cursor:pointer;font-size:13px;color:var(--accent);padding:2px 0 4px}
+.exc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:3px 0;font-size:13px}
+.exc-row .seg button{padding:4px 8px;font-size:13px}
+.exc-l{min-width:96px;color:var(--muted)}
+.grid-t .exc-row input.exc-v{width:76px;min-width:60px}
+.grid-t .exc-row input.exc-b{flex:1 1 160px;min-width:120px}
+.exc-row input:disabled{opacity:.55;background:var(--surface-2)}
+.exc-row.off .exc-l{text-decoration:line-through}
+.btn.sm{padding:4px 8px;font-size:12.5px}
+.exc-res{margin:4px 0 0}
+.bad-t{color:var(--bad);font-weight:500} .warn-t{color:var(--warn)}
+.rho-b{border-top:1px dashed var(--line-2);padding-top:12px}
+table.rho-t{min-width:560px}
+.grid-t td.c{text-align:center;font-family:var(--f-mono);font-size:13px;white-space:nowrap}
 .icon{border:1px solid transparent;background:transparent;font-size:18px;line-height:1;width:30px;height:30px;border-radius:4px;cursor:pointer;color:var(--muted)}
 .icon:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
 .icon:disabled{opacity:.3}
