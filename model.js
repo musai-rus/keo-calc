@@ -512,6 +512,7 @@ const KEO = (function () {
           rows: w.blds.map((b, i) => [i + 1, f(b.l), f(b.Hp), f(b.a), f(b.rhoF), f(b.la), f(b.aH), f(b.bfv), f(b.z1), f(b.z2), f(b.kzd0v), f(b.kzd, 3)]),
           note: `bф — табл. Б.1; z1 = a·(lт + Δст) / ((l + lт + Δст)·bс.п), z2 = Hр·(lт + Δст) / ((l + lт + Δст)·(hо + hпд)) — рис. Б.4; Kзд0 — табл. Б.8 при (lт + Δст)/dп = ${f(w.ldOut)}; Kзд = 1 + (Kзд0 − 1)·Σεзд / (Σεб + Σεзд) (Б.7), Σεб = ${f(w.sumEb, 4)}, Σεзд = ${f(w.sumEzd, 4)}.` });
       }
+      if (wi === danSel(st, r).wall) { const db = danBlocks(st, C); if (db) M.push(db); }
       M.push({ type: 'h3', text: 'Расчётное значение КЕО — формула (Б.1)' });
       M.push({ type: 'formula', lines: ['e_{р}^{б} = C_{N}·[Σ ε_{б}·q(γ) + Σ ε_{зд}·b_{ф}·K_{зд}]·r_{0}·τ_{о}·K·MF'], src: 'СП 367.1325800.2025, прил. Б, формула (Б.1). Для проёмов с разными τо и K расчёт выполнен по каждому проёму, результаты суммированы.' });
       const lines = w.wins.map((x, i) => `проём ${i + 1}: ${f(w.CN)}·(${f(x.sumSky, 4)} + ${f(x.sumBld, 4)})·${f(w.r0, 4)}·${f(x.tau0, 4)}·${f(x.K)}·${f(w.MF)} = ${f(x.e, 4)} %`);
@@ -520,6 +521,44 @@ const KEO = (function () {
     });
     if (r.walls.length > 1) M.push({ type: 'formula', lines: [`e_{р} = ${r.walls.map(w => f(w.e, 4)).join(' + ')} = ${f(r.e, 4)} ≈ ${f(r.eR)} %`], src: 'Световые проёмы различной ориентации: КЕО от каждой стены рассчитан отдельно и просуммирован (п. 8.4.1, примечание, СП 367).' });
     else M.push({ type: 'formula', lines: [`e_{р} = ${f(r.e, 4)} ≈ ${f(r.eR)} %`] });
+  }
+
+  /* ---------- проверка по графикам Данилюка: выбранные стена / проём / участок ---------- */
+  function danSel(st, r) {
+    const d = st.dan || {}, wi = Math.min(Math.max(0, +d.wall || 0), r.walls.length - 1), w = r.walls[wi];
+    const ki = Math.min(Math.max(0, +d.win || 0), w.wins.length - 1), n = w.wins[ki].sectors.length;
+    return { wall: wi, win: ki, sec: n ? Math.min(Math.max(0, +d.sec || 0), n - 1) : 0 };
+  }
+  function danCheck(st, C) {
+    if (!C || !C.ok || st.mode !== 'side') return null;
+    const r = C.res, sel = danSel(st, r), w = r.walls[sel.wall], raw = w.inp, x = w.wins[sel.win];
+    const d = Schemes.DAN.sectors(raw, raw.windows[sel.win], raw.buildings), e = d.edges, dg = a => a * 180 / Math.PI;
+    const same = d.list.length === x.sectors.length;
+    const nm = (s, k) => s.type === 'sky' ? `небо ${k + 1}` : `здание ${s.bld + 1}`;
+    const geo = d.list.map((s, k) => { const c = x.sectors[k] || {};
+      return { k, cells: [nm(s, k), `${f(dg(s.ta), 2)}…${f(dg(s.tb), 2)}`, `${f(s.r1a, 1)} / ${f(s.r1b, 1)}`, f(s.n1g, 1), f(c.n1raw, 3), f(c.n1, 1), f(s.R, 3), `${f(s.ya, 3)}…${f(s.yb, 3)}`, `${f(s.r2a, 1)} / ${f(s.r2b, 1)}`, f(s.n2g, 1), f(c.n2raw, 3), f(c.n2, 1)] }; });
+    const val = x.sectors.map((c, k) => { const bl = c.type === 'bld' ? w.blds[c.bld] : null, eq = bl ? c.eps * bl.bfv * bl.kzd : c.eps * c.q;
+      return { k, cells: [nm(c, k), f(c.eps, 4), f(c.gamma, 2), bl ? '—' : f(c.q, 4), bl ? `${f(c.eps, 4)}·${f(bl.bfv)}·${f(bl.kzd, 3)} = ${f(eq, 4)}` : f(eq, 4), f(w.CN * eq * w.r0 * x.tau0 * x.K * w.MF, 4)] }; });
+    const dev = { n1: 0, n2: 0, raw: 0 };
+    d.list.forEach((s, k) => { const c = x.sectors[k]; if (!c) return; dev.n1 = Math.max(dev.n1, Math.abs(s.n1g - c.n1)); dev.n2 = Math.max(dev.n2, Math.abs(s.n2g - c.n2)); dev.raw = Math.max(dev.raw, Math.abs(s.n1a - c.n1raw), Math.abs(s.n2a - c.n2raw)); });
+    const eTxt = `Ограничивающие рёбра проёма ${sel.win + 1}: снизу — ${e.lo.n}${e.lo.n.startsWith('горизонт') ? '' : ' (подоконник)'}, θн = ${f(dg(e.lo.a), 2)}°; сверху — ${e.hi.n} (перемычка), θв = ${f(dg(e.hi.a), 2)}°; в плане слева — ${e.L.n}, справа — ${e.R.n} (откосы). Расстояние от А до наружной грани D = lт + Δст = ${f(e.D, 3)} м.`;
+    return { sel, w, x, raw, d, same, geo, val, dev, eTxt, scheme: Schemes.danScheme(raw, sel.win, d, sel.sec), title: `${r.walls.length > 1 ? `стена ${sel.wall + 1}, ` : ''}проём ${sel.win + 1}${d.list[sel.sec] ? ', участок ' + nm(d.list[sel.sec], sel.sec) : ''}` };
+  }
+  const DAN_GEO_COLS = [{ h: 'Участок', w: 11 }, { h: 'θн…θв, °', w: 14, a: 'center' }, { h: 'Отсчёт гр. I у θн / θв', w: 12, a: 'center' }, { h: 'n1 по графику', w: 8, a: 'center' }, { h: 'n1 аналит. до округл.', w: 10, a: 'center' }, { h: 'n1 в расчёте', w: 8, a: 'center' }, { h: 'R, м', w: 8, a: 'center' }, { h: 'y1…y2 на грани, м', w: 14, a: 'center' }, { h: 'Отсчёт гр. II у y1 / y2', w: 12, a: 'center' }, { h: 'n2 по графику', w: 8, a: 'center' }, { h: 'n2 аналит. до округл.', w: 10, a: 'center' }, { h: 'n2 в расчёте', w: 8, a: 'center' }];
+  const DAN_VAL_COLS = [{ h: 'Участок', w: 12 }, { h: 'ε = 0,01·n1·n2, %', w: 14, a: 'center' }, { h: 'γ, °', w: 9, a: 'center' }, { h: 'q(γ) (3.2)', w: 10, a: 'center' }, { h: 'ε·q  или  εзд·bф·Kзд', w: 26, a: 'center' }, { h: 'Вклад в e, %', w: 12, a: 'center' }];
+  function danNote(dc) {
+    return `Метод расчёта — аналитический: n1 = 50·(cos θн − cos θв), n2 = (100/π)·[ψ + ½·sin 2ψ], tg ψ = y/R — формулы, по которым построены графики I и II (рис. 8.8, 8.10 СП 367), с округлением до 0,1 луча. Проверка независима от ядра: видимая область построена заново по рёбрам проёма, число лучей считано с графиков, построенных по их определению (луч k графика I — 50·(1 − cos θk) = k, графика II — (100/π)·(ψk + ½·sin 2ψk) = k), с отсчётом каждой границы по ближайшей пунктирной линии десятых долей (n = разность отсчётов). Это проверяет построение видимой области (рёбра, плоскость C, радиус R) и считывание; соответствие самих печатных графиков формулам здесь не проверяется — для этого нужна оцифровка рис. 8.8/8.10. Максимальное расхождение отсчёта с расчётом: n1 — ${f(dc.dev.n1, 1)}, n2 — ${f(dc.dev.n2, 1)} луча (погрешность считывания ±0,1 у каждой границы); аналитика проверки и ядра до округления — ${dc.dev.raw < 1e-6 ? 'совпадает' : 'различается на ' + f(dc.dev.raw, 4)}${dc.same ? '' : '; ЧИСЛО УЧАСТКОВ РАЗЛИЧАЕТСЯ — проверьте исходные данные'}. Вклад = CN·(ε·q)·r0·τо·K·MF; τо = ${f(dc.x.tau0, 4)} (${dc.x.w.tau0src}); K = ${f(dc.x.K)} (${dc.x.w.Ksrc}). Затеняющие элементы фасада лучи не обрезают — их влияние учтено K (п. 8.4.2); противостоящие здания выделены отдельными участками. Графики применимы к прямоугольным проёмам.`;
+  }
+  function danBlocks(st, C) {
+    const dc = danCheck(st, C); if (!dc) return null;
+    const sb = dc.scheme.box, ratio = (sb[3] - sb[1]) / (sb[2] - sb[0]);
+    return { type: 'dan', dc, blocks: [
+      { type: 'h3', text: `Проверка по графикам Данилюка I и II: ${dc.title}` },
+      { type: 'p', small: true, text: dc.eTxt },
+      { type: 'scheme', h: Math.min(175, Math.max(70, 171 * ratio)), schemes: [dc.scheme], caption: 'Разрез и план в одном масштабе. Разрез: полюс графика I в расчётной точке А, лучи — сплошные линии (подписаны 0, 10…50; показана часть графика до высоты проёма), красные — граничные лучи выбранного участка через ограничивающие рёбра, пунктирная дуга — полуокружность через середину участка C (радиус R). План: полюс P графика II на оси через А на расстоянии R от наружной грани (горизонталь R совпадает с гранью), подписи — номера лучей; тонкие линии из А — истинные лучи через откосы. Выделен выбранный участок; серым — фасады противостоящих зданий.' },
+      { type: 'table', title: 'Считывание с графиков и сравнение с расчётом (числа лучей)', size: 6.4, cols: DAN_GEO_COLS, rows: dc.geo.map(g => g.cells) },
+      { type: 'table', title: `Вклад участков проёма ${dc.sel.win + 1} (значения расчёта)`, size: 6.8, cols: DAN_VAL_COLS, rows: dc.val.map(v => v.cells), note: danNote(dc) }
+    ] };
   }
 
   function topTypesModel(M, st, r, num) {
@@ -684,6 +723,6 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { migrate, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 if (typeof module !== 'undefined') module.exports = KEO;

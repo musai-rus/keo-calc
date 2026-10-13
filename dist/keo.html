@@ -181,6 +181,21 @@ svg.scheme *{vector-effect:non-scaling-stroke}
 .s-txt,.s-dimt{fill:var(--ink);font-family:var(--f-body);font-size:var(--fs,32px)}
 .s-txtb{fill:var(--ink);font-family:var(--f-disp);font-weight:600;font-size:calc(var(--fs,32px)*1.08)}
 .s-cap{fill:var(--muted);font-family:var(--f-disp);font-weight:600;font-size:var(--fs,32px);letter-spacing:.04em}
+.s-skysel{fill:var(--sky);fill-opacity:.45;stroke:var(--sky);stroke-width:1.2}
+.s-bldf{fill:var(--line);fill-opacity:.6;stroke:var(--muted);stroke-width:.6}
+.s-bldsel{fill:var(--line-2);fill-opacity:.8;stroke:var(--ink);stroke-width:1.2}
+.s-gr1{stroke:var(--accent);stroke-opacity:.25;stroke-width:.5}
+.s-gr5{stroke:var(--accent);stroke-opacity:.5;stroke-width:.8}
+.s-gr10{stroke:var(--accent);stroke-width:1.1}
+.s-grt{fill:var(--accent);font-family:var(--f-mono);font-size:calc(var(--fs,32px)*.62)}
+.s-lim{stroke:var(--bad);stroke-width:1.8}
+.s-arc{stroke:var(--accent);stroke-width:1.4;stroke-dasharray:7 4;fill:none}
+.s-cpt{fill:var(--accent)} .s-edge{fill:var(--surface);stroke:var(--bad);stroke-width:1.5}
+.s-opn{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2} .s-opn2{fill:var(--surface-2);stroke:var(--muted);stroke-width:.6}
+.s-hz{stroke:var(--accent);stroke-width:1.5}
+.dan svg.scheme{max-height:none}
+.dan .sel{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:flex-end}
+.dan tr[data-dsec]{cursor:pointer} .dan tr[data-dsec][aria-selected="true"] td{background:var(--sky-soft);font-weight:600}
 .b2prof{max-width:260px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--surface-2)}
 .b2prof svg.scheme{max-height:110px}
 .fld.off{opacity:.45}
@@ -1056,6 +1071,110 @@ const Schemes = (function () {
     return { box: [-0.7, -1.5, L + 1.5, B + 1.4], it };
   }
 
+  /* ---------- проверка по графикам Данилюка I и II (СП 367: п. 8.4.1, рис. 8.8–8.11; Б.2.10–Б.2.11, (Б.11), (Б.12)) ----------
+     Независимо от ядра: углы видимой области строятся заново по исходным размерам (рёбра проёма на внутренней и наружной
+     гранях стены, противостоящие здания), затем число лучей СЧИТЫВАЕТСЯ с графиков, построенных по их определению:
+     луч k графика I — угол возвышения θk, 50·(1 − cos θk) = k; луч k графика II — угол ψk от оси, (100/π)·(ψk + ½·sin 2ψk) = k.
+     Отсчёт у каждой границы — номер луча с десятыми по ближайшей пунктирной линии (n = отсчёт у верхней/правой − у нижней/левой).
+     Затеняющие элементы фасада (балкон, лоджия, козырёк, экран) лучи не обрезают — их влияние учтено K (п. 8.4.2).
+     Только для прямоугольных проёмов. */
+  const DAN = (() => {
+    const PI = Math.PI, N1 = th => 50 * (1 - Math.cos(th)), TH = k => Math.acos(1 - k / 50);
+    const N2 = p => (100 / PI) * (p + 0.5 * Math.sin(2 * p));
+    const PSI = (() => { const c = []; for (let k = 0; k <= 50; k++) { let a = 0, b = PI / 2; for (let i = 0; i < 60; i++) { const m = (a + b) / 2; if (N2(m) < k) a = m; else b = m; } c.push((a + b) / 2); } return k => c[k]; })();
+    const tenth = x => Math.round(x * 10) / 10;
+    // отсчёт по графику: ближайшая пунктирная линия десятых долей луча (пунктир графика — доли луча: k + j/10)
+    function read1(th) { return tenth(N1(th)); }
+    function read2(y, R) { return Math.sign(y) * tenth(N2(Math.atan(Math.abs(y) / R))); }
+    // видимые участки одного проёма: небо и фасады противостоящих зданий
+    function sectors(raw, win, blds) {
+      const lt = raw.lt, D = raw.lt + raw.dst, faces = [[lt, 'внутренняя грань'], [D, 'наружная грань']];
+      const zs = win.hpd - raw.hp, zt = win.hpd + win.ho - raw.hp, yl = win.s - win.bo / 2 - (raw.ds || 0), yr = win.s + win.bo / 2 - (raw.ds || 0);
+      const pick = (v, cmp) => faces.map(([x, n]) => ({ a: Math.atan2(v, x), n })).reduce((p, q) => cmp(q.a, p.a) ? q : p);
+      const lo = pick(zs, (a, b) => a > b), hi = pick(zt, (a, b) => a < b), L = pick(yl, (a, b) => a > b), Rr = pick(yr, (a, b) => a < b);
+      if (lo.a < 0) { lo.a = 0; lo.n = 'горизонт (уровень точки А)'; }
+      const edges = { lo, hi, L, R: Rr, D, zs, zt, yl, yr };
+      if (!(hi.a > lo.a + 1e-9 && Rr.a > L.a + 1e-9)) return { edges, list: [] };
+      const B = (blds || []).map((b, i) => { const Db = D + b.l; return { i, Db, pa: Math.atan2(b.off - b.a / 2, Db), pb: Math.atan2(b.off + b.a / 2, Db), top: Math.atan2(b.Hp - raw.hp, Db) }; });
+      const br = [L.a, Rr.a]; B.forEach(b => [b.pa, b.pb].forEach(p => { if (p > L.a && p < Rr.a) br.push(p); })); br.sort((a, b) => a - b);
+      const parts = [];
+      for (let i = 0; i < br.length - 1; i++) {
+        const pa = br[i], pb = br[i + 1]; if (pb - pa < 1e-12) continue; const pm = (pa + pb) / 2;
+        let tc = lo.a; B.filter(b => b.pa <= pm && b.pb >= pm).sort((a, b) => a.Db - b.Db).forEach(b => { const t = Math.min(b.top, hi.a); if (t > tc + 1e-12) { parts.push({ type: 'bld', bld: b.i, ta: tc, tb: t, pa, pb }); tc = t; } });
+        if (hi.a > tc + 1e-12) parts.push({ type: 'sky', ta: tc, tb: hi.a, pa, pb });
+      }
+      const list = [];
+      parts.forEach(s => { const m = list[list.length - 1]; if (m && m.type === s.type && m.bld === s.bld && Math.abs(m.ta - s.ta) < 1e-12 && Math.abs(m.tb - s.tb) < 1e-12 && Math.abs(m.pb - s.pa) < 1e-12) m.pb = s.pb; else list.push({ ...s }); });
+      list.forEach(s => {
+        const za = D * Math.tan(s.ta), zb = D * Math.tan(s.tb), zm = (za + zb) / 2;
+        s.ya = D * Math.tan(s.pa); s.yb = D * Math.tan(s.pb); s.za = za; s.zb = zb; s.R = Math.hypot(D, zm); s.gamma = Math.atan2(zm, D) * 180 / PI;
+        s.r1a = read1(s.ta); s.r1b = read1(s.tb); s.n1g = tenth(s.r1b - s.r1a); s.n1a = N1(s.tb) - N1(s.ta);
+        s.r2a = read2(s.ya, s.R); s.r2b = read2(s.yb, s.R); s.n2g = tenth(s.r2b - s.r2a); s.n2a = N2(Math.atan(s.yb / s.R)) - N2(Math.atan(s.ya / s.R));
+      });
+      return { edges, list };
+    }
+    return { N1, N2, TH, PSI, read1, read2, sectors };
+  })();
+
+  // совмещённая схема в одном масштабе: сверху — разрез с графиком I (полюс в А), снизу — план с графиком II
+  // (полюс на оси, проходящей через А перпендикулярно стене, на расстоянии R от наружной грани — горизонталь R совпадает с гранью)
+  function danScheme(raw, wi, dsec, sel) {
+    const it = [], win = raw.windows[wi], s0 = dsec.list[sel] || dsec.list[0], e = dsec.edges, dst = raw.dst, lt = raw.lt, D = e.D, ds = raw.ds || 0;
+    const R = s0 ? s0.R : D, Rg = Math.max(R, D) * 1.12, deg = a => (a * 180 / Math.PI);
+    const hp = raw.hp, H = Math.max(raw.H || 0, win.hpd + win.ho + 0.3);
+    // ---- разрез: x — глубина (внутренняя грань стены x = 0, А при x = lт), z — от пола
+    const A = { x: lt, z: hp }, pol = (r, th) => [A.x - r * Math.cos(th), A.z + r * Math.sin(th)];
+    // высота разреза ограничена: проём, точка C и запас 1,2 м; лучи графика I обрезаются по верхней границе
+    const zTop = Math.max(win.hpd + win.ho, s0 ? hp + (s0.za + s0.zb) / 2 : 0, hp + 1) + 1.2;
+    const clipR = th => Math.min(Rg, Math.sin(th) > 1e-9 ? (zTop - A.z) / Math.sin(th) : Rg);
+    const xL = Math.min(-dst - 0.6, A.x - Rg - 0.2);
+    it.push({ t: 'line', x1: xL, y1: 0, x2: raw.dp + 0.2, y2: 0, c: 'room' });
+    if (hp > 0) { it.push({ t: 'line', x1: 0, y1: hp, x2: raw.dp, y2: hp, c: 'axis' }); it.push({ t: 'text', x: raw.dp - 0.05, y: hp + 0.08, s: 'УРП', c: 'txt', a: 'end' }); }
+    it.push({ t: 'rect', x: -dst, y: 0, w: dst, h: win.hpd, c: 'wall' });
+    it.push({ t: 'rect', x: -dst, y: win.hpd + win.ho, w: dst, h: Math.max(0.2, H - win.hpd - win.ho), c: 'wall' });
+    it.push({ t: 'line', x1: -dst / 2, y1: win.hpd, x2: -dst / 2, y2: win.hpd + win.ho, c: 'glass' });
+    // видимые участки выбранного проёма (выделен выбранный)
+    dsec.list.forEach((s, k) => it.push({ t: 'poly', pts: [[A.x, A.z], pol(clipR(s.ta), s.ta), pol(clipR(s.tb), s.tb)], c: s.type === 'sky' ? (k === sel ? 'skysel' : 'skyf') : (k === sel ? 'bldsel' : 'bldf') }));
+    // лучи графика I (номер — у конца луча, каждый десятый; пятые — средней линией)
+    for (let k = 0; k <= 50; k++) { const th = DAN.TH(k), rr = clipR(th), p = pol(rr, th); it.push({ t: 'line', x1: A.x, y1: A.z, x2: p[0], y2: p[1], c: k % 10 === 0 ? 'gr10' : k % 5 === 0 ? 'gr5' : 'gr1' }); if (k % 10 === 0) { const q = pol(rr + 0.15, th); it.push({ t: 'text', x: q[0], y: q[1] - 0.04, s: String(k), c: 'grt', a: 'middle' }); } }
+    // ограничивающие рёбра и граничные лучи
+    if (s0) {
+      [s0.ta, s0.tb].forEach(th => { const p = pol(clipR(th), th); it.push({ t: 'line', x1: A.x, y1: A.z, x2: p[0], y2: p[1], c: 'lim' }); });
+      const C = { x: -dst, z: hp + (s0.za + s0.zb) / 2 };
+      const arc = []; for (let i = 0; i <= 90; i++) { const q = pol(s0.R, i * Math.PI / 180); if (q[1] > zTop) break; arc.push(q); }
+      it.push({ t: 'pline', pts: arc, c: 'arc' });
+      it.push({ t: 'circle', x: C.x, y: C.z, r: 0.05, c: 'cpt' }); it.push({ t: 'text', x: C.x - 0.08, y: C.z + 0.08, s: 'C', c: 'txtb', a: 'end' });
+      it.push({ t: 'line', x1: A.x, y1: A.z, x2: C.x, y2: C.z, c: 'ray' });
+    }
+    [[e.zs, e.lo], [e.zt, e.hi]].forEach(([z, g]) => { if (g.n.startsWith('горизонт')) return; const x = g.n === 'внутренняя грань' ? 0 : -dst; it.push({ t: 'circle', x, y: hp + z, r: 0.045, c: 'edge' }); });
+    it.push({ t: 'circle', x: A.x, y: A.z, r: 0.07, c: 'pt' }); it.push({ t: 'text', x: A.x + 0.1, y: A.z + 0.1, s: 'А', c: 'txtb' });
+    it.push({ t: 'dim', x1: -dst, y1: -0.35, x2: 0, y2: -0.35, s: 'Δст' });
+    it.push({ t: 'dim', x1: 0, y1: -0.35, x2: lt, y2: -0.35, s: 'lт = ' + r2(lt) });
+    const topZ = zTop + 0.45;
+    it.push({ t: 'text', x: xL + 0.05, y: topZ, s: 'Разрез · график I', c: 'cap' });
+    // ---- план: y — вдоль стены, ниже разреза; полюс графика II — P
+    const yr = [win.s - win.bo / 2, win.s + win.bo / 2, ds - 1, ds + 1, ...(s0 ? [ds + s0.ya, ds + s0.yb] : [])], half = Math.max(1.4, ...yr.map(y => Math.abs(y - ds))) + 0.5;
+    const off = -0.9 - half, Y = y => off + (y - ds); // ds — ось через А
+    const Px = -dst + R, P = { x: Px, y: Y(ds) };
+    it.push({ t: 'rect', x: -dst, y: Y(ds - half), w: dst, h: 2 * half, c: 'wall' });
+    raw.windows.forEach((w2, j) => { const a = w2.s - w2.bo / 2, b = w2.s + w2.bo / 2; if (b < ds - half || a > ds + half) return; it.push({ t: 'rect', x: -dst, y: Y(Math.max(a, ds - half)), w: dst, h: Math.min(b, ds + half) - Math.max(a, ds - half), c: j === wi ? 'opn' : 'opn2' }); });
+    it.push({ t: 'line', x1: -dst, y1: Y(ds - half), x2: -dst, y2: Y(ds + half), c: 'hz' });
+    it.push({ t: 'line', x1: xL, y1: Y(ds), x2: Math.max(Px, A.x) + 0.3, y2: Y(ds), c: 'axis' });
+    if (s0) {
+      dsec.list.forEach((s, k) => it.push({ t: 'poly', pts: [[P.x, P.y], [-dst, Y(ds + s.ya)], [-dst, Y(ds + s.yb)]], c: s.type === 'sky' ? (k === sel ? 'skysel' : 'skyf') : (k === sel ? 'bldsel' : 'bldf') }));
+      for (let k = 0; k <= 50; k++) [1, -1].forEach(sg => { if (k === 0 && sg < 0) return; const yy = sg * R * Math.tan(DAN.PSI(k)); if (Math.abs(yy) > half + 0.05) return; it.push({ t: 'line', x1: P.x, y1: P.y, x2: -dst - 0.25, y2: Y(ds + yy * (R + 0.25) / R), c: k % 10 === 0 ? 'gr10' : k % 5 === 0 ? 'gr5' : 'gr1' }); if (k % 5 === 0) it.push({ t: 'text', x: -dst - 0.3, y: Y(ds + yy * (R + 0.3) / R) - 0.05, s: String(k), c: 'grt', a: 'end' }); });
+      [s0.ya, s0.yb].forEach(y => it.push({ t: 'line', x1: P.x, y1: P.y, x2: -dst, y2: Y(ds + y), c: 'lim' }));
+      // истинные ограничивающие лучи из А (через рёбра откосов)
+      [s0.ya, s0.yb].forEach(y => it.push({ t: 'line', x1: A.x, y1: Y(ds), x2: -dst, y2: Y(ds + y), c: 'rayb' }));
+      it.push({ t: 'circle', x: P.x, y: P.y, r: 0.06, c: 'cpt' }); it.push({ t: 'text', x: P.x + 0.08, y: P.y - 0.3, s: 'P', c: 'txtb' });
+      it.push({ t: 'dim', x1: -dst, y1: Y(ds - half) - 0.3, x2: Px, y2: Y(ds - half) - 0.3, s: 'R = ' + r2(R) });
+    }
+    it.push({ t: 'circle', x: A.x, y: Y(ds), r: 0.07, c: 'pt' }); it.push({ t: 'text', x: A.x + 0.1, y: Y(ds) + 0.1, s: 'А', c: 'txtb' });
+    it.push({ t: 'text', x: xL + 0.05, y: Y(ds + half) + 0.25, s: 'План · график II (полюс P)', c: 'cap' });
+    const xR = Math.max(raw.dp + 0.3, Px + 0.6);
+    return { box: [xL - 0.2, Y(ds - half) - 0.75, xR, topZ + 0.3], it };
+  }
+
   /* ---------- рендер в SVG ---------- */
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
   function toSVG(sc, opt) {
@@ -1070,6 +1189,7 @@ const Schemes = (function () {
       else if (e.t === 'rect') o += `<rect x="${X(e.x)}" y="${Y(e.y + e.h)}" width="${e.w * s}" height="${e.h * s}" class="s-${e.c}"/>`;
       else if (e.t === 'circle') o += `<circle cx="${X(e.x)}" cy="${Y(e.y)}" r="${e.c === 'pt' ? Math.max(e.r * s, pr) : e.r * s}" class="s-${e.c}"/>`;
       else if (e.t === 'poly') o += `<polygon points="${e.pts.map(p => X(p[0]) + ',' + Y(p[1])).join(' ')}" class="s-${e.c}"/>`;
+      else if (e.t === 'pline') o += `<polyline points="${e.pts.map(p => X(p[0]) + ',' + Y(p[1])).join(' ')}" class="s-${e.c}"/>`;
       else if (e.t === 'text') o += `<text x="${X(e.x)}" y="${Y(e.y)}" text-anchor="${e.a || 'start'}" class="s-${e.c}">${esc(e.s)}</text>`;
       else if (e.t === 'dim' || e.t === 'dimv') {
         o += `<line x1="${X(e.x1)}" y1="${Y(e.y1)}" x2="${X(e.x2)}" y2="${Y(e.y2)}" class="s-dim" marker-start="url(#ar)" marker-end="url(#ar)"/>`;
@@ -1087,7 +1207,11 @@ const Schemes = (function () {
     ray: { stroke: '#c48a00', lw: 0.3, dash: [1.2, 0.8] }, rayb: { stroke: '#c48a00', lw: 0.2 }, skyf: { fill: '#fbefc9', stroke: '#c48a00', lw: 0.15 },
     bld: { fill: '#c9cfd4', stroke: '#2b3640', lw: 0.2 }, pt: { fill: '#b3261e', stroke: '#b3261e', lw: 0.2 },
     axis: { stroke: '#7a8691', lw: 0.2, dash: [2, 0.6, 0.4, 0.6] }, lan: { fill: '#e3eef8', stroke: '#1f6fb2', lw: 0.3 },
-    dim: { stroke: '#4c5a66', lw: 0.15 }, opq: { stroke: '#2b3640', lw: 0.45 }
+    dim: { stroke: '#4c5a66', lw: 0.15 }, opq: { stroke: '#2b3640', lw: 0.45 },
+    skysel: { fill: '#f6d27a', stroke: '#c48a00', lw: 0.25 }, bldf: { fill: '#dfe3e6', stroke: '#6b7780', lw: 0.15 }, bldsel: { fill: '#b9c2c9', stroke: '#2b3640', lw: 0.25 },
+    gr1: { stroke: '#9fb4c7', lw: 0.06 }, gr5: { stroke: '#6f8fae', lw: 0.12 }, gr10: { stroke: '#2d5d8b', lw: 0.2 }, lim: { stroke: '#b3261e', lw: 0.35 },
+    arc: { stroke: '#2d5d8b', lw: 0.25, dash: [1, 0.6] }, cpt: { fill: '#2d5d8b', stroke: '#2d5d8b', lw: 0.2 }, edge: { fill: '#ffffff', stroke: '#b3261e', lw: 0.3 },
+    opn: { fill: '#cfe3f5', stroke: '#1f6fb2', lw: 0.3 }, opn2: { fill: '#eef3f7', stroke: '#7a8691', lw: 0.15 }, hz: { stroke: '#2d5d8b', lw: 0.3 }
   };
   function toPDF(doc, sc, bx, by, bw, bh) {
     const [x0, y0, x1, y1] = sc.box, W = x1 - x0, H = y1 - y0;
@@ -1098,9 +1222,10 @@ const Schemes = (function () {
       const st = PST[e.c] || { stroke: '#1b2329', lw: 0.2 };
       if (e.t === 'line') doc.line(X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), { color: st.stroke, lw: st.lw, dash: st.dash });
       else if (e.t === 'rect') doc.rect(X(e.x), Y(e.y + e.h), e.w * k, e.h * k, { fill: st.fill, stroke: st.stroke, lw: st.lw });
-      else if (e.t === 'circle') doc.circle(X(e.x), Y(e.y), Math.max(e.r * k, e.c === 'pt' ? 0.7 : 0), { fill: st.fill, stroke: st.stroke, lw: st.lw });
+      else if (e.t === 'circle') doc.circle(X(e.x), Y(e.y), Math.max(e.r * k, e.c === 'pt' ? 0.7 : (e.c === 'cpt' || e.c === 'edge') ? 0.5 : 0), { fill: st.fill, stroke: st.stroke, lw: st.lw });
       else if (e.t === 'poly') doc.poly(e.pts.map(p => [X(p[0]), Y(p[1])]), { fill: st.fill, stroke: st.stroke, lw: st.lw, close: true });
-      else if (e.t === 'text') doc.text(e.s, X(e.x), Y(e.y), { size: e.c === 'cap' ? 7 : fs, font: e.c === 'txtb' || e.c === 'cap' ? 'B' : 'R', align: e.a === 'middle' ? 'center' : (e.a === 'end' ? 'right' : 'left'), color: '#1b2329' });
+      else if (e.t === 'pline') doc.poly(e.pts.map(p => [X(p[0]), Y(p[1])]), { stroke: st.stroke, lw: st.lw, dash: st.dash, close: false });
+      else if (e.t === 'text') doc.text(e.s, X(e.x), Y(e.y), { size: e.c === 'cap' ? 7 : e.c === 'grt' ? 5 : fs, font: e.c === 'txtb' || e.c === 'cap' ? 'B' : 'R', align: e.a === 'middle' ? 'center' : (e.a === 'end' ? 'right' : 'left'), color: '#1b2329' });
       else if (e.t === 'dim' || e.t === 'dimv') {
         doc.line(X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), { color: '#4c5a66', lw: 0.15 });
         [[e.x1, e.y1], [e.x2, e.y2]].forEach(([x, y]) => doc.line(X(x) - 0.6, Y(y) + 0.6, X(x) + 0.6, Y(y) - 0.6, { color: '#4c5a66', lw: 0.25 }));
@@ -1109,7 +1234,7 @@ const Schemes = (function () {
       }
     });
   }
-  return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF };
+  return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF, DAN, danScheme };
 })();
 if (typeof module !== 'undefined') module.exports = Schemes;
 
@@ -1234,7 +1359,8 @@ const Report = (function () {
       y += 2;
       if (blk.note) para(blk.note, { size: 7, color: GREY });
     };
-    for (const b of model) {
+    const flat = []; model.forEach(b => { if (b.type === 'dan') b.blocks.forEach(x => flat.push(x)); else flat.push(b); });
+    for (const b of flat) {
       if (b.type === 'pagebreak') { newPage(); continue; }
       if (b.type === 'h1') { ensure(14); y += 5; doc.text(b.text, C.x + C.w / 2, y, { size: 13, font: 'B', align: 'center' }); y += 2; if (b.sub) { y += 4; doc.text(b.sub, C.x + C.w / 2, y, { size: 9, align: 'center', color: GREY }); } y += 4; continue; }
       if (b.type === 'h2') { ensure(16); y += 3.5; doc.text(b.text, C.x, y, { size: 10, font: 'B' }); y += 2.5; continue; }
@@ -1791,6 +1917,7 @@ const KEO = (function () {
           rows: w.blds.map((b, i) => [i + 1, f(b.l), f(b.Hp), f(b.a), f(b.rhoF), f(b.la), f(b.aH), f(b.bfv), f(b.z1), f(b.z2), f(b.kzd0v), f(b.kzd, 3)]),
           note: `bф — табл. Б.1; z1 = a·(lт + Δст) / ((l + lт + Δст)·bс.п), z2 = Hр·(lт + Δст) / ((l + lт + Δст)·(hо + hпд)) — рис. Б.4; Kзд0 — табл. Б.8 при (lт + Δст)/dп = ${f(w.ldOut)}; Kзд = 1 + (Kзд0 − 1)·Σεзд / (Σεб + Σεзд) (Б.7), Σεб = ${f(w.sumEb, 4)}, Σεзд = ${f(w.sumEzd, 4)}.` });
       }
+      if (wi === danSel(st, r).wall) { const db = danBlocks(st, C); if (db) M.push(db); }
       M.push({ type: 'h3', text: 'Расчётное значение КЕО — формула (Б.1)' });
       M.push({ type: 'formula', lines: ['e_{р}^{б} = C_{N}·[Σ ε_{б}·q(γ) + Σ ε_{зд}·b_{ф}·K_{зд}]·r_{0}·τ_{о}·K·MF'], src: 'СП 367.1325800.2025, прил. Б, формула (Б.1). Для проёмов с разными τо и K расчёт выполнен по каждому проёму, результаты суммированы.' });
       const lines = w.wins.map((x, i) => `проём ${i + 1}: ${f(w.CN)}·(${f(x.sumSky, 4)} + ${f(x.sumBld, 4)})·${f(w.r0, 4)}·${f(x.tau0, 4)}·${f(x.K)}·${f(w.MF)} = ${f(x.e, 4)} %`);
@@ -1799,6 +1926,44 @@ const KEO = (function () {
     });
     if (r.walls.length > 1) M.push({ type: 'formula', lines: [`e_{р} = ${r.walls.map(w => f(w.e, 4)).join(' + ')} = ${f(r.e, 4)} ≈ ${f(r.eR)} %`], src: 'Световые проёмы различной ориентации: КЕО от каждой стены рассчитан отдельно и просуммирован (п. 8.4.1, примечание, СП 367).' });
     else M.push({ type: 'formula', lines: [`e_{р} = ${f(r.e, 4)} ≈ ${f(r.eR)} %`] });
+  }
+
+  /* ---------- проверка по графикам Данилюка: выбранные стена / проём / участок ---------- */
+  function danSel(st, r) {
+    const d = st.dan || {}, wi = Math.min(Math.max(0, +d.wall || 0), r.walls.length - 1), w = r.walls[wi];
+    const ki = Math.min(Math.max(0, +d.win || 0), w.wins.length - 1), n = w.wins[ki].sectors.length;
+    return { wall: wi, win: ki, sec: n ? Math.min(Math.max(0, +d.sec || 0), n - 1) : 0 };
+  }
+  function danCheck(st, C) {
+    if (!C || !C.ok || st.mode !== 'side') return null;
+    const r = C.res, sel = danSel(st, r), w = r.walls[sel.wall], raw = w.inp, x = w.wins[sel.win];
+    const d = Schemes.DAN.sectors(raw, raw.windows[sel.win], raw.buildings), e = d.edges, dg = a => a * 180 / Math.PI;
+    const same = d.list.length === x.sectors.length;
+    const nm = (s, k) => s.type === 'sky' ? `небо ${k + 1}` : `здание ${s.bld + 1}`;
+    const geo = d.list.map((s, k) => { const c = x.sectors[k] || {};
+      return { k, cells: [nm(s, k), `${f(dg(s.ta), 2)}…${f(dg(s.tb), 2)}`, `${f(s.r1a, 1)} / ${f(s.r1b, 1)}`, f(s.n1g, 1), f(c.n1raw, 3), f(c.n1, 1), f(s.R, 3), `${f(s.ya, 3)}…${f(s.yb, 3)}`, `${f(s.r2a, 1)} / ${f(s.r2b, 1)}`, f(s.n2g, 1), f(c.n2raw, 3), f(c.n2, 1)] }; });
+    const val = x.sectors.map((c, k) => { const bl = c.type === 'bld' ? w.blds[c.bld] : null, eq = bl ? c.eps * bl.bfv * bl.kzd : c.eps * c.q;
+      return { k, cells: [nm(c, k), f(c.eps, 4), f(c.gamma, 2), bl ? '—' : f(c.q, 4), bl ? `${f(c.eps, 4)}·${f(bl.bfv)}·${f(bl.kzd, 3)} = ${f(eq, 4)}` : f(eq, 4), f(w.CN * eq * w.r0 * x.tau0 * x.K * w.MF, 4)] }; });
+    const dev = { n1: 0, n2: 0, raw: 0 };
+    d.list.forEach((s, k) => { const c = x.sectors[k]; if (!c) return; dev.n1 = Math.max(dev.n1, Math.abs(s.n1g - c.n1)); dev.n2 = Math.max(dev.n2, Math.abs(s.n2g - c.n2)); dev.raw = Math.max(dev.raw, Math.abs(s.n1a - c.n1raw), Math.abs(s.n2a - c.n2raw)); });
+    const eTxt = `Ограничивающие рёбра проёма ${sel.win + 1}: снизу — ${e.lo.n}${e.lo.n.startsWith('горизонт') ? '' : ' (подоконник)'}, θн = ${f(dg(e.lo.a), 2)}°; сверху — ${e.hi.n} (перемычка), θв = ${f(dg(e.hi.a), 2)}°; в плане слева — ${e.L.n}, справа — ${e.R.n} (откосы). Расстояние от А до наружной грани D = lт + Δст = ${f(e.D, 3)} м.`;
+    return { sel, w, x, raw, d, same, geo, val, dev, eTxt, scheme: Schemes.danScheme(raw, sel.win, d, sel.sec), title: `${r.walls.length > 1 ? `стена ${sel.wall + 1}, ` : ''}проём ${sel.win + 1}${d.list[sel.sec] ? ', участок ' + nm(d.list[sel.sec], sel.sec) : ''}` };
+  }
+  const DAN_GEO_COLS = [{ h: 'Участок', w: 11 }, { h: 'θн…θв, °', w: 14, a: 'center' }, { h: 'Отсчёт гр. I у θн / θв', w: 12, a: 'center' }, { h: 'n1 по графику', w: 8, a: 'center' }, { h: 'n1 аналит. до округл.', w: 10, a: 'center' }, { h: 'n1 в расчёте', w: 8, a: 'center' }, { h: 'R, м', w: 8, a: 'center' }, { h: 'y1…y2 на грани, м', w: 14, a: 'center' }, { h: 'Отсчёт гр. II у y1 / y2', w: 12, a: 'center' }, { h: 'n2 по графику', w: 8, a: 'center' }, { h: 'n2 аналит. до округл.', w: 10, a: 'center' }, { h: 'n2 в расчёте', w: 8, a: 'center' }];
+  const DAN_VAL_COLS = [{ h: 'Участок', w: 12 }, { h: 'ε = 0,01·n1·n2, %', w: 14, a: 'center' }, { h: 'γ, °', w: 9, a: 'center' }, { h: 'q(γ) (3.2)', w: 10, a: 'center' }, { h: 'ε·q  или  εзд·bф·Kзд', w: 26, a: 'center' }, { h: 'Вклад в e, %', w: 12, a: 'center' }];
+  function danNote(dc) {
+    return `Метод расчёта — аналитический: n1 = 50·(cos θн − cos θв), n2 = (100/π)·[ψ + ½·sin 2ψ], tg ψ = y/R — формулы, по которым построены графики I и II (рис. 8.8, 8.10 СП 367), с округлением до 0,1 луча. Проверка независима от ядра: видимая область построена заново по рёбрам проёма, число лучей считано с графиков, построенных по их определению (луч k графика I — 50·(1 − cos θk) = k, графика II — (100/π)·(ψk + ½·sin 2ψk) = k), с отсчётом каждой границы по ближайшей пунктирной линии десятых долей (n = разность отсчётов). Это проверяет построение видимой области (рёбра, плоскость C, радиус R) и считывание; соответствие самих печатных графиков формулам здесь не проверяется — для этого нужна оцифровка рис. 8.8/8.10. Максимальное расхождение отсчёта с расчётом: n1 — ${f(dc.dev.n1, 1)}, n2 — ${f(dc.dev.n2, 1)} луча (погрешность считывания ±0,1 у каждой границы); аналитика проверки и ядра до округления — ${dc.dev.raw < 1e-6 ? 'совпадает' : 'различается на ' + f(dc.dev.raw, 4)}${dc.same ? '' : '; ЧИСЛО УЧАСТКОВ РАЗЛИЧАЕТСЯ — проверьте исходные данные'}. Вклад = CN·(ε·q)·r0·τо·K·MF; τо = ${f(dc.x.tau0, 4)} (${dc.x.w.tau0src}); K = ${f(dc.x.K)} (${dc.x.w.Ksrc}). Затеняющие элементы фасада лучи не обрезают — их влияние учтено K (п. 8.4.2); противостоящие здания выделены отдельными участками. Графики применимы к прямоугольным проёмам.`;
+  }
+  function danBlocks(st, C) {
+    const dc = danCheck(st, C); if (!dc) return null;
+    const sb = dc.scheme.box, ratio = (sb[3] - sb[1]) / (sb[2] - sb[0]);
+    return { type: 'dan', dc, blocks: [
+      { type: 'h3', text: `Проверка по графикам Данилюка I и II: ${dc.title}` },
+      { type: 'p', small: true, text: dc.eTxt },
+      { type: 'scheme', h: Math.min(175, Math.max(70, 171 * ratio)), schemes: [dc.scheme], caption: 'Разрез и план в одном масштабе. Разрез: полюс графика I в расчётной точке А, лучи — сплошные линии (подписаны 0, 10…50; показана часть графика до высоты проёма), красные — граничные лучи выбранного участка через ограничивающие рёбра, пунктирная дуга — полуокружность через середину участка C (радиус R). План: полюс P графика II на оси через А на расстоянии R от наружной грани (горизонталь R совпадает с гранью), подписи — номера лучей; тонкие линии из А — истинные лучи через откосы. Выделен выбранный участок; серым — фасады противостоящих зданий.' },
+      { type: 'table', title: 'Считывание с графиков и сравнение с расчётом (числа лучей)', size: 6.4, cols: DAN_GEO_COLS, rows: dc.geo.map(g => g.cells) },
+      { type: 'table', title: `Вклад участков проёма ${dc.sel.win + 1} (значения расчёта)`, size: 6.8, cols: DAN_VAL_COLS, rows: dc.val.map(v => v.cells), note: danNote(dc) }
+    ] };
   }
 
   function topTypesModel(M, st, r, num) {
@@ -1963,7 +2128,7 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { migrate, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 if (typeof module !== 'undefined') module.exports = KEO;
 
@@ -2319,6 +2484,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
       if (b.type === 'h1' || b.type === 'verdict' || b.type === 'scheme') return;
       if (b.type === 'h2') { close(); h += `<details class="sec" data-sec="${esc(b.text)}"><summary><span>${esc(b.text)}</span></summary><div class="sec-b">`; open = true; return; }
       if (!open) { h += '<details class="sec"><summary><span>Раздел</span></summary><div class="sec-b">'; open = true; }
+      if (b.type === 'dan') { h += danHTML(b); return; }
       if (b.type === 'h3') h += `<h4>${esc(b.text)}</h4>`;
       else if (b.type === 'p') h += `<p class="${b.small ? 'small' : ''}">${esc(b.text)}</p>`;
       else if (b.type === 'formula') h += `<div class="formula">${b.lines.map(l => `<div>${Report.richHTML(l)}</div>`).join('')}${b.src ? `<p class="small">${esc(b.src)}</p>` : ''}</div>`;
@@ -2326,9 +2492,29 @@ if (typeof module !== 'undefined') module.exports = KEO;
       else if (b.type === 'table') h += `${b.title ? `<p class="cap">${Report.richHTML(b.title)}</p>` : ''}<div class="tblw"><table class="rep"><thead><tr>${b.cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${b.rows.map(r => `<tr>${(Array.isArray(r) ? r : r.cells).map((c, i) => `<td class="${b.cols[i].a === 'center' ? 'c num' : ''}">${Report.richHTML(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${b.note ? `<p class="small">${esc(b.note)}</p>` : ''}`;
     });
     close();
-    const openSecs = new Set([...el.querySelectorAll('details.sec[open]')].map(d => d.dataset.sec));
+    const openSecs = new Set([...el.querySelectorAll('details[data-sec][open]')].map(d => d.dataset.sec));
     el.innerHTML = h;
-    el.querySelectorAll('details.sec').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
+    el.querySelectorAll('details[data-sec]').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
+  }
+
+  // проверка по графикам Данилюка: выбор стены, проёма и участка (строка таблицы подсвечивает область на схеме)
+  const tblHTML = (cols, rows, sel) => `<div class="tblw"><table class="rep"><thead><tr>${cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr data-dsec="${r.k}" aria-selected="${r.k === sel}" tabindex="0">${r.cells.map((c, i) => `<td class="${cols[i].a === 'center' ? 'c num' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  function danHTML(b) {
+    const dc = b.dc, r = C.res, sel = dc.sel, B = b.blocks;
+    const opt = (n, cur, lbl) => Array.from({ length: n }, (_, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${lbl(i)}</option>`).join('');
+    const w = r.walls[sel.wall], x = w.wins[sel.win];
+    return `<details class="more dan" data-sec="dan"><summary>Проверка по графикам Данилюка I и II — ${esc(dc.title)}</summary><div class="more-b">
+      <div class="sel">${r.walls.length > 1 ? `<label class="fld"><span class="lbl">Стена</span><span class="inpw"><select data-dan="wall">${opt(r.walls.length, sel.wall, i => `Стена ${i + 1}`)}</select></span></label>` : ''}
+      <label class="fld"><span class="lbl">Проём</span><span class="inpw"><select data-dan="win">${opt(w.wins.length, sel.win, i => `Проём ${i + 1}`)}</select></span></label>
+      <label class="fld"><span class="lbl">Участок</span><span class="inpw"><select data-dan="sec">${x.sectors.length ? opt(x.sectors.length, sel.sec, i => x.sectors[i].type === 'sky' ? `небо ${i + 1}` : `здание ${x.sectors[i].bld + 1}`) : '<option>небо не видно</option>'}</select></span></label></div>
+      <p class="small">${esc(B[1].text)}</p>
+      <div class="svgw">${Schemes.toSVG(dc.scheme, { label: 'Графики Данилюка: разрез и план' })}</div><p class="small">${esc(B[2].caption)}</p>
+      <p class="cap">${esc(B[3].title)}</p>${tblHTML(KEO.DAN_GEO_COLS, dc.geo, sel.sec)}
+      <p class="cap">${esc(B[4].title)}</p>${tblHTML(KEO.DAN_VAL_COLS, dc.val, sel.sec)}<p class="small">${esc(B[4].note)}</p></div></details>`;
+  }
+  function danPick(k, v) {
+    S.dan = { ...(S.dan || {}), [k]: v }; if (k === 'wall') { S.dan.win = 0; S.dan.sec = 0; } if (k === 'win') S.dan.sec = 0;
+    save(); renderBreakdown();
   }
 
   /* ---------- события ---------- */
@@ -2440,6 +2626,9 @@ if (typeof module !== 'undefined') module.exports = KEO;
     document.addEventListener('click', onClick);
     $('#ex-menu').addEventListener('change', e => { const v = e.target.value; e.target.value = ''; if (!v) return; $('#first-note').hidden = true; S = v === 'side' ? exampleSide() : v === 'top' ? exampleTop() : v === 'b2' ? exampleB2() : (() => { const s = exampleTop(); s.mode = 'comb'; return s; })(); if (v === 'new') { S = KEO.defaultState(); } renderForm(); update(); toast(v === 'new' ? 'Новый расчёт' : 'Загружен пример'); });
     $('#btn-save').addEventListener('click', saveJSON);
+    $('#breakdown').addEventListener('change', e => { const k = e.target.dataset && e.target.dataset.dan; if (k) danPick(k, +e.target.value); });
+    $('#breakdown').addEventListener('click', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr) danPick('sec', +tr.dataset.dsec); });
+    $('#breakdown').addEventListener('keydown', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); danPick('sec', +tr.dataset.dsec); } });
     $('#file-open').addEventListener('change', e => { if (e.target.files[0]) openJSON(e.target.files[0]); e.target.value = ''; });
     document.querySelectorAll('[data-pdf]').forEach(b => b.addEventListener('click', downloadPDF));
     renderForm(); update();

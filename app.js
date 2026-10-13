@@ -348,6 +348,7 @@
       if (b.type === 'h1' || b.type === 'verdict' || b.type === 'scheme') return;
       if (b.type === 'h2') { close(); h += `<details class="sec" data-sec="${esc(b.text)}"><summary><span>${esc(b.text)}</span></summary><div class="sec-b">`; open = true; return; }
       if (!open) { h += '<details class="sec"><summary><span>Раздел</span></summary><div class="sec-b">'; open = true; }
+      if (b.type === 'dan') { h += danHTML(b); return; }
       if (b.type === 'h3') h += `<h4>${esc(b.text)}</h4>`;
       else if (b.type === 'p') h += `<p class="${b.small ? 'small' : ''}">${esc(b.text)}</p>`;
       else if (b.type === 'formula') h += `<div class="formula">${b.lines.map(l => `<div>${Report.richHTML(l)}</div>`).join('')}${b.src ? `<p class="small">${esc(b.src)}</p>` : ''}</div>`;
@@ -355,9 +356,29 @@
       else if (b.type === 'table') h += `${b.title ? `<p class="cap">${Report.richHTML(b.title)}</p>` : ''}<div class="tblw"><table class="rep"><thead><tr>${b.cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${b.rows.map(r => `<tr>${(Array.isArray(r) ? r : r.cells).map((c, i) => `<td class="${b.cols[i].a === 'center' ? 'c num' : ''}">${Report.richHTML(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${b.note ? `<p class="small">${esc(b.note)}</p>` : ''}`;
     });
     close();
-    const openSecs = new Set([...el.querySelectorAll('details.sec[open]')].map(d => d.dataset.sec));
+    const openSecs = new Set([...el.querySelectorAll('details[data-sec][open]')].map(d => d.dataset.sec));
     el.innerHTML = h;
-    el.querySelectorAll('details.sec').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
+    el.querySelectorAll('details[data-sec]').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
+  }
+
+  // проверка по графикам Данилюка: выбор стены, проёма и участка (строка таблицы подсвечивает область на схеме)
+  const tblHTML = (cols, rows, sel) => `<div class="tblw"><table class="rep"><thead><tr>${cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr data-dsec="${r.k}" aria-selected="${r.k === sel}" tabindex="0">${r.cells.map((c, i) => `<td class="${cols[i].a === 'center' ? 'c num' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  function danHTML(b) {
+    const dc = b.dc, r = C.res, sel = dc.sel, B = b.blocks;
+    const opt = (n, cur, lbl) => Array.from({ length: n }, (_, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${lbl(i)}</option>`).join('');
+    const w = r.walls[sel.wall], x = w.wins[sel.win];
+    return `<details class="more dan" data-sec="dan"><summary>Проверка по графикам Данилюка I и II — ${esc(dc.title)}</summary><div class="more-b">
+      <div class="sel">${r.walls.length > 1 ? `<label class="fld"><span class="lbl">Стена</span><span class="inpw"><select data-dan="wall">${opt(r.walls.length, sel.wall, i => `Стена ${i + 1}`)}</select></span></label>` : ''}
+      <label class="fld"><span class="lbl">Проём</span><span class="inpw"><select data-dan="win">${opt(w.wins.length, sel.win, i => `Проём ${i + 1}`)}</select></span></label>
+      <label class="fld"><span class="lbl">Участок</span><span class="inpw"><select data-dan="sec">${x.sectors.length ? opt(x.sectors.length, sel.sec, i => x.sectors[i].type === 'sky' ? `небо ${i + 1}` : `здание ${x.sectors[i].bld + 1}`) : '<option>небо не видно</option>'}</select></span></label></div>
+      <p class="small">${esc(B[1].text)}</p>
+      <div class="svgw">${Schemes.toSVG(dc.scheme, { label: 'Графики Данилюка: разрез и план' })}</div><p class="small">${esc(B[2].caption)}</p>
+      <p class="cap">${esc(B[3].title)}</p>${tblHTML(KEO.DAN_GEO_COLS, dc.geo, sel.sec)}
+      <p class="cap">${esc(B[4].title)}</p>${tblHTML(KEO.DAN_VAL_COLS, dc.val, sel.sec)}<p class="small">${esc(B[4].note)}</p></div></details>`;
+  }
+  function danPick(k, v) {
+    S.dan = { ...(S.dan || {}), [k]: v }; if (k === 'wall') { S.dan.win = 0; S.dan.sec = 0; } if (k === 'win') S.dan.sec = 0;
+    save(); renderBreakdown();
   }
 
   /* ---------- события ---------- */
@@ -469,6 +490,9 @@
     document.addEventListener('click', onClick);
     $('#ex-menu').addEventListener('change', e => { const v = e.target.value; e.target.value = ''; if (!v) return; $('#first-note').hidden = true; S = v === 'side' ? exampleSide() : v === 'top' ? exampleTop() : v === 'b2' ? exampleB2() : (() => { const s = exampleTop(); s.mode = 'comb'; return s; })(); if (v === 'new') { S = KEO.defaultState(); } renderForm(); update(); toast(v === 'new' ? 'Новый расчёт' : 'Загружен пример'); });
     $('#btn-save').addEventListener('click', saveJSON);
+    $('#breakdown').addEventListener('change', e => { const k = e.target.dataset && e.target.dataset.dan; if (k) danPick(k, +e.target.value); });
+    $('#breakdown').addEventListener('click', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr) danPick('sec', +tr.dataset.dsec); });
+    $('#breakdown').addEventListener('keydown', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); danPick('sec', +tr.dataset.dsec); } });
     $('#file-open').addEventListener('change', e => { if (e.target.files[0]) openJSON(e.target.files[0]); e.target.value = ''; });
     document.querySelectorAll('[data-pdf]').forEach(b => b.addEventListener('click', downloadPDF));
     renderForm(); update();

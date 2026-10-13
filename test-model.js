@@ -149,5 +149,44 @@ console.log('\n=== П.2. Площади и ρср ===');
   ok('старый файл с принятым помощником: 0,414 сохранено, площади не подменены', r.v === 0.414 && /совпадает с помощником/.test(r.label) && m.st.rhoCalc.s[0][0] === 17.7);
 }
 
+console.log('\n=== П.4. Графики Данилюка ===');
+{
+  // арифметика скриншота (не тест геометрии): ε = 0,01·6,6·36,9
+  near('ε = 0,01·6,6·36,9 = 2,4354 %', 0.01 * 6.6 * 36.9, 2.4354, 1e-12);
+  ok('γ = 16,95° (округлено): q(3.2) при γ ∈ [16,945; 16,955] = 0,5844…0,5846, ε·q = 1,4233…1,4238 — 1,4236 из таблицы согласуется (q и γ округлены для показа)', Engine.qGamma(16.945) < 0.58465 && Engine.qGamma(16.955) > 0.58455 && 2.4354 * Engine.qGamma(16.945) < 1.4236 && 2.4354 * Engine.qGamma(16.955) > 1.4236);
+  const W = (hpd, ho, bo, s) => ({ ...KEO.defaultWindow(s), hpd, ho, bo });
+  const mk = (p, wins, blds) => { const st = KEO.defaultState(); Object.assign(st, { groupManual: true, group: 5, roomId: 'A1', hpManual: p.hp, rtManual: 'manual' }); st.side.walls = [{ ...KEO.defaultWall('В'), dp: p.dp || 6, bp: p.bp || 6, H: 3.3, dst: p.dst, lt: p.lt, ds: p.ds || 0, t1c: 0.64, t2: 0, windows: wins, buildings: blds || [] }]; return st; };
+  const check = (name, st) => {
+    const C = KEO.compute(st); if (!C.ok) { ok(name + ': расчёт', false, C.err.join('; ')); return null; }
+    let all = true, info = [];
+    C.res.walls[0].wins.forEach((x, i) => { st.dan = { wall: 0, win: i, sec: 0 }; const d = KEO.danCheck(st, C); const good = d.same && d.dev.raw < 1e-9 && d.dev.n1 <= 0.1 + 1e-9 && d.dev.n2 <= 0.1 + 1e-9; all = all && good; info.push(`пр.${i + 1}: участков ${d.d.list.length}, Δn1 ${d.dev.n1.toFixed(1)}, Δn2 ${d.dev.n2.toFixed(1)}`); });
+    ok(`${name}: независимая геометрия = ядро до округления; отсчёт по графику ±0,1`, all, info.join('; '));
+    return C;
+  };
+  let st = mk({ hp: 0, lt: 4.05, dst: 0.72, dp: 8.1, bp: 3.06 }, [W(0.5, 2.2, 1.65, 0)]);
+  let C = check('симметричное окно (АР2 прил. 1, пом. 1.003)', st);
+  st.dan = { wall: 0, win: 0, sec: 0 }; let d = KEO.danCheck(st, C), g = d.d.list[0];
+  ok('симметрия: отсчёты по графику II ±10,2', g.r2a === -g.r2b && g.r2b === 10.2);
+  ok('эталон АР2: n1 6,1 и n2 20,5 (расчёт); по графику n2 = 20,4 — расхождение считывания 0,1', C.res.walls[0].wins[0].sectors[0].n1 === 6.1 && C.res.walls[0].wins[0].sectors[0].n2 === 20.5 && g.n2g === 20.4);
+  check('смещённые точка и проём', mk({ hp: 0.8, lt: 3, dst: 0.4, ds: 0.7 }, [W(0.9, 1.8, 1.2, -1.3)]));
+  C = check('толстая стена 0,9 м', mk({ hp: 0, lt: 2, dst: 0.9 }, [W(0.6, 2.0, 1.5, 1.2)]));
+  st = mk({ hp: 0, lt: 2, dst: 0.9 }, [W(0.6, 2.0, 1.5, 1.2)]); d = KEO.danCheck(st, KEO.compute(st));
+  ok('толстая стена: подоконник и ближний откос — внутренняя грань, перемычка и дальний откос — наружная', d.d.edges.lo.n === 'внутренняя грань' && d.d.edges.hi.n === 'наружная грань' && d.d.edges.L.n === 'внутренняя грань' && d.d.edges.R.n === 'наружная грань');
+  check('несколько окон (АР2 прил. 2, пом. 1.004)', mk({ hp: 0, lt: 7, dst: 0.72, dp: 8, bp: 7.4 }, [W(0.5, 2.2, 1.65, -2.88), W(0.5, 2.2, 1.65, -1.12), W(0.5, 2.2, 1.65, 0.62), W(0.5, 2.2, 1.65, 2.38)]));
+  st = mk({ hp: 1.5, lt: 3, dst: 0.4 }, [W(0.2, 0.9, 1.2, 0)]); C = KEO.compute(st); d = KEO.danCheck(st, C);
+  ok('небо не видно (верх окна ниже точки): участков нет ни в ядре, ни в проверке', C.ok && C.res.walls[0].wins[0].sectors.length === 0 && d.d.list.length === 0);
+  st = mk({ hp: 0.8, lt: 3, dst: 0.5 }, [W(0.8, 1.8, 1.5, 0)], [{ l: 15, Hp: 6, a: 20, off: 3, rhoF: 0.4 }]);
+  C = check('противостоящее здание', st); d = KEO.danCheck(st, C);
+  ok('здание и небо — отдельные участки', d.d.list.some(x => x.type === 'bld') && d.d.list.some(x => x.type === 'sky') && d.val.some(v => /·/.test(v.cells[4])));
+  // п. 8.4.2: затеняющие элементы не обрезают лучи — геометрия одна при любом K
+  const g0 = JSON.stringify(KEO.danCheck(st, C).d.list);
+  ['balcony', 'loggia', 'canopy', 'screen'].forEach(t => { const s2 = clone(st); Object.assign(s2.side.walls[0], { kType: t, kDepth: 1.2 }); const C2 = KEO.compute(s2), d2 = KEO.danCheck(s2, C2); ok(`${t}: участки те же, K только множитель (п. 8.4.2)`, JSON.stringify(d2.d.list) === g0 && C2.res.walls[0].wins[0].K < 1); });
+  // схема: подписи не выходят за рамку, PDF и разбор — тот же выбор
+  const sc = d.scheme, [x0, y0, x1, y1] = sc.box;
+  ok('схема: все точки и подписи внутри рамки', sc.it.every(e => (e.x === undefined || (e.x >= x0 && e.x <= x1)) && (e.y === undefined || (e.y >= y0 && e.y <= y1))));
+  st.dan = { wall: 0, win: 0, sec: 1 }; const M = KEO.buildModel(st, KEO.compute(st)), db = M.find(b => b.type === 'dan');
+  ok('отчёт содержит выбранный участок и те же числа', db && db.dc.sel.sec === 1 && /участок небо 2/.test(db.blocks[0].text) && db.blocks[3].rows.length === d.geo.length);
+}
+
 console.log(`\nИтог: ${total - fails}/${total} проверок пройдено`);
 process.exit(fails ? 1 : 0);
