@@ -105,6 +105,8 @@ const BimCalc = (function () {
     st.meta = { code: S.code || '', object: S.object || '', room: title(sp), author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
     st.region = S.region; st.group = S.group; st.groupManual = true; st.bType = row ? row.g : (S.bGroup || st.bType); st.roomId = row ? row.id : '';
     st.rho = S.rho; st.env = 'normal';
+    // ρср из настроек модуля: 0,55 — значение по примечанию 2 к табл. Б.6/Б.7; иное — задано пользователем в настройках
+    if (Math.abs(+S.rho - 0.55) > 1e-9) { st.rhoMode = 'manual'; st.rhoBasis = 'задано в настройках модуля «КЕО по модели»'; }
     return st;
   }
   // главные оси пространства в плане (для верхнего света): начало — угол охватывающего прямоугольника
