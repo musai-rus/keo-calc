@@ -209,6 +209,7 @@ const BimCalc = (function () {
         if (sideWalls(oppSig, Ac, env, pts, [], true, rule).length) { multi = true; A = Ac; notes.push('двустороннее боковое освещение (проёмы в противоположных стенах) — расчётная точка в центре помещения (СП 52.13330.2016, п. 5.3)'); }
         else notes.push('остекление противоположной стены из центра помещения не видно (за перегородкой) — освещение одностороннее, точка по п. 5.3 СП 52 от основной стены');
       } else if (F.length > 1) notes.push(`расчётная точка — по п. 5.3 СП 52 от основной стены; ${opp.length ? 'остекление противоположной стены < 25 % основного' : 'проёмы других стен — в смежных стенах (не двустороннее освещение)'}, их вклад суммируется (СП 367, п. 8.4.1, прим.)`);
+      if(env.roomContains && !env.roomContains(A))return {err:'Расчётная точка вне Room: требуется отдельная схема для сложного контура',notes,A};
       const walls = sideWalls(F, A, env, pts, notes, F.length > 1, rule);
       if (!walls.length) return { err: 'остекление не видно из расчётной точки', notes, A };
       const st = baseState(env, sp, row); st.mode = 'side';
@@ -248,7 +249,7 @@ const BimCalc = (function () {
       });
     });
     const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
-    if(sp.roomGeometry && P.some(p=>!inside(pts,p,0.15)))return {err:'Характерный разрез выходит за границы Room: требуется отдельная схема расчётных точек для сложной формы',notes};
+    if(sp.roomGeometry && P.some(p=>env.roomContains ? !env.roomContains(p) : !inside(pts,p,0.15)))return {err:'Характерный разрез выходит за границы Room: требуется отдельная схема расчётных точек для сложной формы',notes};
     P.forEach((p, j) => { if (!inside(pts, p, 0.3)) notes.push(`РТ${j + 1} вне контура пространства (сложная форма в плане) — результат в ней ориентировочный`); });
     if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes, lanContrib };
 

@@ -185,6 +185,7 @@ const KeoBim = (function () {
       const lsCalc = ls.filter(l => l.conf === 'b3'), lanPending = ls.filter(l => !l.conf).length;
       if (!o.length && !lsCalc.length) { out.push({ ...base, kind: 'dark', lans: ls, lanPending }); return; }
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
+        roomContains: A => BimRooms.inside(sp.rooms[0].geometry.segments,...A),
         roomSection: (A,t) => BimRooms.section(sp.rooms[0].geometry.segments,A,t),
         rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
@@ -247,7 +248,6 @@ const KeoBim = (function () {
     if (r.kind === 'unknown') return { k: 'err', t: 'уточните состав' };
     if (r.kind === 'err') return { k: 'err', t: r.err };
     if (r.sp && r.sp.unknown.length) return { k: 'err', t: 'уточните состав' };
-    if (r.lanPending) return { k: 'err', t: 'уточните тип фонаря' };
     if (r.mode === 'comb') { if (!r.comb) return { k: 'err', t: 'ошибка данных' }; if (r.comb.normOk === null) return { k: 'none', t: 'не нормируется' }; return r.comb.pass ? { k: 'ok', t: 'соответствует*' } : { k: 'bad', t: 'не соответствует*' }; }
     if (!r.C || !r.C.ok) return { k: 'err', t: (r.C && r.C.err || []).join('; ') || 'ошибка данных' };
     if (r.C.normOk === null) return { k: 'none', t: 'не нормируется' };
@@ -428,7 +428,7 @@ const KeoBim = (function () {
     st.res.forEach(r => r.kind !== 'nogeo' && r.rooms.forEach(rm => cnt.set(rm.key, (cnt.get(rm.key) || 0) + 1)));
     const ex = all.filter(isExcluded).length, inSp = [...cnt.values()].filter(n => n === 1).length, dup = [...cnt.values()].filter(n => n > 1).length;
     const nogeo = st.res.filter(r => r.kind === 'nogeo').length, units = all.filter(r => r.warn && r.warn.length).length;
-    return { all: all.length, ex, inSp, dup, nogeo, units, noLevel: (st.noLevel || []).length, lans: LANS.length, lansIn: LANS.filter(l => l.lvl).length };
+    return { all: all.length, ex, inSp, dup, nogeo, units, noLevel: (st.noLevel || []).length, lans: LANS.length, lansIn: LANS.filter(l => l.lvl && l.space >= 0).length };
   }
   function renderList() {
     const main = document.getElementById('kb-main'); if (!main) return;
