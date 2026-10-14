@@ -160,6 +160,7 @@ const Report = (function () {
   }
   return { parseRich, richHTML, toPDF, f };
 })();
+
 /* КЕО — расчётное ядро. СП 367.1325800.2025, СП 52.13330.2016.
    Чистые функции: на вход — исходные данные, на выход — результат + журнал шагов (для отчёта). */
 const Engine = (function () {
@@ -605,6 +606,7 @@ const Engine = (function () {
 
   return { lanternsB2, b2Exact, b2Section, lanternProfile, kfOf, tiltIdx, KIND_NAME, qGamma, n1Rays, Gp, interp, r0Lookup, kzd0Lookup, bfLookup, KLookup, r2Lookup, kcLookup, CNwall, CNzenith, MF, sideSectors, sideWall, side, lanternIndex, top, combined, avgB10, r2f, deg, rad };
 })();
+
 /* Схемы (план/разрез) как набор примитивов в метрах → SVG (экран) и PDF (отчёт). */
 const Schemes = (function () {
   const r2 = (x, n = 2) => Number(x).toFixed(n).replace('.', ',');
@@ -942,6 +944,7 @@ const Schemes = (function () {
   }
   return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF, DAN, danScheme };
 })();
+
 /* Состояние → входные данные расчёта → результат → модель отчёта. Без DOM. */
 const KEO = (function () {
   const f = Report.f, R = Engine;
@@ -1691,6 +1694,7 @@ const KEO = (function () {
 
   return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
+
 /* КЕО по модели — расчётные пространства (чистые функции, без Viewer; проверяются bim/test-bim.js).
    R  — растр с линиями разделения помещений (для опознания помещений Revit);
    Rp — растр только физических преград: стены, витражи, двери, окна, колонны (для света и состава пространства). */
@@ -1912,6 +1916,7 @@ const BimSpaces = (function () {
 
   return { conv, unitOf, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
 })();
+
 /* КЕО по модели Autodesk Viewer — геометрия: срезы, растр помещений, проёмы, карта высот.
    Работает внутри страницы с уже загруженной моделью (NOP_VIEWER). Единицы — метры, координаты — мировые координаты Viewer × масштаб единиц. */
 const BimGeom = (function () {
@@ -1961,14 +1966,35 @@ const BimGeom = (function () {
     }).filter(r => r.area > 0 || r.warn.length);
   }
 
+  // Viewer может хранить half-float позиции внутри Float32Array: vbstride не означает xyz Float32.
+  // Декодирование доверяем Viewer; запасной путь — только явно обычные Float32 позиции.
+  function positionReader(g, e, S = 1) {
+    const pos = g.attributes && g.attributes.position;
+    const ve = typeof Autodesk !== 'undefined' && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.VertexEnumerator;
+    let read;
+    if (ve && ve.makeReadPositionFunc) read = ve.makeReadPositionFunc(g);
+    else {
+      if (!pos || (pos.bytesPerItem && pos.bytesPerItem !== 4) || pos.normalized || (pos.itemSize && pos.itemSize !== 3))
+        throw new Error('КЕО: формат координат требует декодера Autodesk Viewer. Перезагрузите модель.');
+      const vb = g.vb || pos.array, st = g.vb ? g.vbstride : pos.itemSize, off = g.vb ? (pos.offset ?? pos.itemOffset ?? 0) : 0;
+      read = (i, p) => { p.x = vb[i * st + off]; p.y = vb[i * st + off + 1]; p.z = vb[i * st + off + 2]; };
+    }
+    const p = new THREE.Vector3();
+    return i => {
+      read(i, p);
+      const q = [(e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12]) * S, (e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13]) * S, (e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14]) * S];
+      if (!q.every(Number.isFinite)) throw new Error('КЕО: некорректные координаты геометрии Viewer. Расчёт остановлен.');
+      return q;
+    };
+  }
+
   // перебор треугольников / линий элемента в мировых координатах (единицы модели)
   function eachGeom(C, dbId, onTri, onLine, fragFilter) {
     const mat = new THREE.Matrix4();
     C.it.enumNodeFragments(dbId, f => {
       if (fragFilter && !fragFilter(f)) return;
       const g = C.fl.getGeometry(f); if (!g || !g.vb) return; C.fl.getWorldMatrix(f, mat); const e = mat.elements;
-      const st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, vb = g.vb;
-      const P = i => { const x = vb[i * st + off], y = vb[i * st + off + 1], z = vb[i * st + off + 2]; return [e[0] * x + e[4] * y + e[8] * z + e[12], e[1] * x + e[5] * y + e[9] * z + e[13], e[2] * x + e[6] * y + e[10] * z + e[14]]; };
+      const P = positionReader(g, e);
       const ib = g.ib || (g.index && g.index.array);
       if (g.isLines) { if (!onLine) return; if (ib) for (let i = 0; i + 1 < ib.length; i += 2) onLine(P(ib[i]), P(ib[i + 1])); return; }
       if (!onTri || !ib) return;
@@ -2070,8 +2096,8 @@ const BimGeom = (function () {
       C.it.enumNodeFragments(id, f => {
         const mt = C.fl.getMaterial(f), glass = !!(mt && (mt.transparent || mt.opacity < 0.95));
         const g = C.fl.getGeometry(f); if (!g || !g.vb || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
-        const e = mat4.elements, st = g.vbstride, off = (g.attributes.position.offset ?? g.attributes.position.itemOffset) || 0, n = g.vb.length / st, Q = [];
-        for (let i = 0; i < n; i++) { const x = g.vb[i * st + off], y = g.vb[i * st + off + 1], z = g.vb[i * st + off + 2]; Q.push([(e[0] * x + e[4] * y + e[8] * z + e[12]) * S, (e[1] * x + e[5] * y + e[9] * z + e[13]) * S, (e[2] * x + e[6] * y + e[10] * z + e[14]) * S]); }
+        const n = g.vb.length / g.vbstride, Q = [], read = positionReader(g, mat4.elements, S);
+        for (let i = 0; i < n; i++) Q.push(read(i));
         const ib = g.ib || (g.index && g.index.array);
         if (ib) for (let i = 0; i + 2 < ib.length; i += 3) { const a = Q[ib[i]], b = Q[ib[i + 1]], cc = Q[ib[i + 2]]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = cc[0] - a[0], vy = cc[1] - a[1], vz = cc[2] - a[2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, ar = Math.hypot(nx, ny, nz) / 2; Aa += ar; NZa += Math.abs(nz) / 2; if (glass) { A += ar; NZ += Math.abs(nz) / 2; if (nz > 0) up += nz / 2; } }
         Q.forEach(q => Pa.push(q)); if (glass) Q.forEach(q => P.push(q));
@@ -2234,6 +2260,7 @@ const BimGeom = (function () {
 
   return { ctx, catalog, rooms, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
 })();
+
 /* КЕО по модели: из геометрии помещения и его проёмов — исходные данные калькулятора (то же состояние, что вводится вручную),
    расчёт тем же ядром и моделью (KEO.compute). Методика расчёта не меняется: модель только «снимает размеры». */
 const BimCalc = (function () {
@@ -2524,6 +2551,7 @@ const BimCalc = (function () {
 
   return { mapNorm, guessGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();
+
 /* КЕО по модели — запуск в окне Autodesk Viewer: анализ, подсветка помещений на плане, метки, таблица и разбор. */
 const KeoBim = (function () {
   const G = BimGeom, Cc = BimCalc, SP = BimSpaces, LIB = { DATA, Engine, Report, Schemes, KEO };
@@ -3152,4 +3180,5 @@ const KeoBim = (function () {
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
 window.KeoBimLib = { BimGeom, BimCalc, BimSpaces };
+
 })();
