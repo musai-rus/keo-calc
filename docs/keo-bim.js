@@ -1081,19 +1081,22 @@ const KEO = (function () {
   }
   // эффективные коэффициенты проёма — единственный источник для ядра, формы и отчёта
   function winCoef(gen, x, i) {
-    const err = [], n = i + 1;
+    const err = [], warn = [], n = i + 1;
     const m = { t2: winMode(x, 't2'), tau0: winMode(x, 'tau0'), K: winMode(x, 'K') };
-    const man = key => { const c = coefCheck(x[OVR[key][1]], key); if (c.st !== 'ok') err.push(`Проём ${n}: ${c.st === 'empty' ? `${COEF_RULES[key].name} — режим «вручную», значение не введено` : c.msg}`); return c.v; };
+    const msg = (key, c) => `Проём ${n}: ${c.st === 'empty' ? `${COEF_RULES[key].name} — режим «вручную», значение не введено` : c.msg}`;
+    const man = key => { const c = coefCheck(x[OVR[key][1]], key); if (c.st !== 'ok') err.push(msg(key, c)); return c.v; };
     const basis = key => { const b = OVR[key][2] && x[OVR[key][2]]; return b ? String(b) : 'основание не указано'; };
     let t2 = { v: gen.t2.v, src: 'общий для стены', mode: 'wall' };
-    if (m.t2 === 'manual') { const v = man('t2'); t2 = { v, src: 'задан для проёма', mode: 'manual' }; }
+    // при ручном τо τ2 проёма не участвует в расчёте: его ошибка не блокирует результат, а выводится предупреждением
+    if (m.t2 === 'manual' && m.tau0 === 'manual') { const c = coefCheck(x[OVR.t2[1]], 't2'); if (c.st !== 'ok') warn.push(`${msg('t2', c)} — не используется (τо задано вручную), в расчёт не входит`); t2 = { v: c.st === 'ok' ? c.v : NaN, src: 'задан для проёма', mode: 'manual' }; }
+    else if (m.t2 === 'manual') { const v = man('t2'); t2 = { v, src: 'задан для проёма', mode: 'manual' }; }
     let tau0;
     if (m.tau0 === 'manual') { const v = man('tau0'); tau0 = { v, mode: 'manual', src: `задано вручную для проёма ${n}: ${basis('tau0')}; τ1…τ5 не используются` }; t2.used = false; }
     else { const v = gen.t1.v * t2.v * 1 * gen.t4.v * gen.t5.v; tau0 = { v, mode: 'wall', src: `τо = τ1·τ2·τ3·τ4·τ5 = ${f(gen.t1.v)}·${f(t2.v)}·1,00·${f(gen.t4.v)}·${f(gen.t5.v)} (формула (Б.8) СП 367)${m.t2 === 'manual' ? `; τ2 — заданный для проёма ${n}` : ''}` }; t2.used = true; }
     let K;
     if (m.K === 'manual') { const v = man('K'); K = { v, mode: 'manual', src: `задано вручную для проёма ${n}: ${basis('K')}` }; }
     else K = { v: gen.K.v, mode: gen.K.mode, src: gen.K.src, tab: gen.K.tab };
-    return { t1: gen.t1.v, t2, t4: gen.t4.v, t5: gen.t5.v, tau0, K, modes: m, err };
+    return { t1: gen.t1.v, t2, t4: gen.t4.v, t5: gen.t5.v, tau0, K, modes: m, err, warn };
   }
   /* ---------- средневзвешенный коэффициент отражения ρср ----------
      Режимы: default — 0,55 (примечание 2 к табл. Б.6/Б.7: коэффициенты отражения неизвестны);
@@ -1104,8 +1107,16 @@ const KEO = (function () {
   const RHO_ROWS = [['floor', 'Пол'], ['walls', 'Стены (непрозрачные, без окон)'], ['ceil', 'Потолок'], ['win', 'Окна']];
   function rhoMode(st) {
     if (['default', 'surf', 'manual', 'legacy'].includes(st.rhoMode)) return st.rhoMode;
-    // прежний формат (нет rhoMode): 0,55 без помощника — то же значение по умолчанию; иначе источник не подтверждён
-    return !(st.rhoCalc && st.rhoCalc.on) && Math.abs(+st.rho - 0.55) < 1e-9 ? 'default' : 'legacy';
+    // прежний формат (нет rhoMode): происхождение числа неизвестно (0,55 могло быть введено вручную или получено расчётом) —
+    // число сохраняется, источник не подтверждён, пока пользователь не выберет режим
+    return 'legacy';
+  }
+  // переключение источника ρср; при переходе в «вручную» применённое значение прежнего режима переносится в поле
+  function setRhoMode(st, v) {
+    // значение берётся по режиму ДО переключения (иначе проверка видит уже «вручную» и переносить нечего)
+    if (v === 'manual' && st.rhoMode !== 'manual') { const rh = rhoOf(st); if (!rh.err.length && Number.isFinite(rh.v)) st.rho = rh.v; }
+    st.rhoMode = v;
+    return st;
   }
   // оболочка комнаты (один раз на помещение) по подтверждённой геометрии прямоугольной комнаты с плоским потолком
   function roomShell(st) {
@@ -1131,12 +1142,18 @@ const KEO = (function () {
         S += (o.y1 - o.y0) * (o.z1 - o.z0);
         if (o.y0 < -w.len / 2 - 0.005 || o.y1 > w.len / 2 + 0.005 || o.z0 < -0.005 || o.z1 > w.H + 0.005) err.push(`ρср по поверхностям: ${pre}проём ${o.i + 1} выходит за пределы стены ${f(w.len)} × ${f(w.H)} м — площадь стен определить нельзя`);
       });
-      for (let p = 0; p < box.length; p++) for (let q = p + 1; q < box.length; q++) {
-        const A = box[p], B = box[q];
-        if (Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.005 && Math.min(A.z1, B.z1) - Math.max(A.z0, B.z0) > 0.005) err.push(`ρср по поверхностям: ${pre}проёмы ${A.i + 1} и ${B.i + 1} перекрываются — площадь окон была бы учтена дважды`);
-      }
     });
     return { S, err };
+  }
+  // перекрытие проёмов на развёртке стены — ошибка исходных данных при любом источнике ρср:
+  // свет через общий участок (и его площадь в ρср) был бы учтён дважды
+  function windowOverlaps(windows) {
+    const box = windows.map((x, i) => ({ i, y0: +x.s - +x.bo / 2, y1: +x.s + +x.bo / 2, z0: +x.hpd, z1: +x.hpd + +x.ho })), out = [];
+    for (let p = 0; p < box.length; p++) for (let q = p + 1; q < box.length; q++) {
+      const A = box[p], B = box[q];
+      if (Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.005 && Math.min(A.z1, B.z1) - Math.max(A.z0, B.z0) > 0.005) out.push(`Проёмы ${A.i + 1} и ${B.i + 1} перекрываются — свет и площадь окон были бы учтены дважды; проверьте s, bо, hпд, hо`);
+    }
+    return out;
   }
   function rhoOf(st) {
     const mode = rhoMode(st), top = st.mode === 'top', err = [], warn = [];
@@ -1189,7 +1206,11 @@ const KEO = (function () {
     const d = defaultState();
     const st = { ...d, ...o, meta: { ...d.meta, ...o.meta }, top: { ...d.top, ...o.top, b2: (o.top && o.top.b2) || d.top.b2, sys: (o.top && o.top.sys) || 'shaft' }, side: { ...d.side, ...o.side }, comb: { ...d.comb, ...o.comb }, rhoCalc: { ...d.rhoCalc, ...o.rhoCalc }, rhoSurf: { ...d.rhoSurf, ...(o.rhoSurf || {}) }, dan: { ...d.dan, ...(o.dan || {}) } };
     const notes = [];
-    if (!o.rhoMode) { st.rhoMode = rhoMode(o); if (st.rhoMode === 'legacy') notes.push(`ρср = ${f(+o.rho, 3)} из файла прежней версии — источник не подтверждён; значение сохранено`); }
+    if (!o.rhoMode) {
+      st.rhoMode = rhoMode(o);
+      if (o.rho === undefined || o.rho === null || o.rho === '') { st.rho = null; notes.push('ρср: в файле прежней версии значения нет — выберите режим'); }
+      else notes.push(`ρср = ${f(+o.rho, 3)} из файла прежней версии — источник не подтверждён; значение сохранено`);
+    }
     st.side.walls.forEach(w => { if (w.kManual === undefined) w.kManual = null; if (w.kBasis === undefined) w.kBasis = ''; w.windows.forEach(x => { if (x.tau0b === undefined) x.tau0b = ''; if (x.Kb === undefined) x.Kb = ''; }); });
     migrateWindows(st).forEach(n => notes.push(n));
     return { st, notes };
@@ -1215,14 +1236,14 @@ const KEO = (function () {
     return { group: g, rho: rhoOf(st).v, hp, MF: mfOf(st, 3), walls };
   }
   // ошибки ручных коэффициентов (до выдачи результата)
-  function coefErrors(st) {
+  function coefErrors(st, warn) {
     const walls = st.mode === 'comb' ? st.side.walls.slice(0, 1) : st.side.walls, err = [];
     const dp = w => st.mode === 'comb' ? +st.top.L : +w.dp;
     walls.forEach((w, wi) => {
       const pre = walls.length > 1 ? `Стена ${wi + 1}. ` : '';
       const gen = wallCoef(st, w, dp(w));
       gen.err.forEach(e => err.push(pre + e));
-      w.windows.forEach((x, i) => winCoef(gen, x, i).err.forEach(e => err.push(pre + e)));
+      w.windows.forEach((x, i) => { const c = winCoef(gen, x, i); c.err.forEach(e => err.push(pre + e)); if (warn) c.warn.forEach(e => warn.push(pre + e)); });
     });
     return err;
   }
@@ -1266,12 +1287,13 @@ const KEO = (function () {
     const pos = (v, n) => { if (!(+v > 0)) err.push(`${n}: нужно положительное число`); };
     const rh = rhoOf(st); rh.err.forEach(e => err.push(e)); rh.warn.forEach(e => warn.push(e));
     if (rh.mode === 'legacy') warn.push('ρср: источник не подтверждён (файл прежней версии) — выберите режим «0,55», «По поверхностям» или «Вручную».');
-    if (st.mode !== 'top') { coefErrors(st).forEach(e => err.push(e)); migrateWindows(JSON.parse(JSON.stringify({ side: st.side }))).forEach(n => warn.push(n)); }
+    if (st.mode !== 'top') { coefErrors(st, warn).forEach(e => err.push(e)); migrateWindows(JSON.parse(JSON.stringify({ side: st.side }))).forEach(n => warn.push(n)); }
     if (st.mode !== 'top') {
       const walls = st.mode === 'comb' ? st.side.walls.slice(0, 1) : st.side.walls;
       walls.forEach((w, wi) => {
         const pre = walls.length > 1 ? `Стена ${wi + 1}. ` : '';
         if (st.mode === 'side') { pos(w.dp, pre + 'Глубина помещения dп'); pos(w.bp, pre + 'Ширина помещения bп'); }
+        windowOverlaps(w.windows).forEach(e => err.push(pre + e));
         if (!(+w.dst >= 0)) err.push(pre + 'Толщина стены Δст должна быть ≥ 0');
         if (!w.windows.length) err.push(pre + 'Добавьте хотя бы один световой проём');
         w.windows.forEach((x, i) => { if (!(+x.ho > 0 && +x.bo > 0 && +x.hpd >= 0)) err.push(`${pre}Окно ${i + 1}: проверьте hпд, hо, bо`); });
@@ -1667,7 +1689,7 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 /* КЕО по модели — расчётные пространства (чистые функции, без Viewer; проверяются bim/test-bim.js).
    R  — растр с линиями разделения помещений (для опознания помещений Revit);
