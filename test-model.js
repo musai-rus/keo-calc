@@ -214,5 +214,20 @@ console.log('\n=== П.4. Графики Данилюка ===');
   ok('отчёт содержит выбранный участок и те же числа', db && db.dc.sel.sec === 1 && /участок небо 2/.test(db.blocks[0].text) && db.blocks[3].rows.length === d.geo.length);
 }
 
+console.log('\n=== Контрольные примеры АР2 (verify/) ===');
+{
+  // исходные данные контрольных примеров должны совпадать с АР2: назначение, норма, ориентация
+  const ref = JSON.parse(fs.readFileSync(path.join(__dirname, 'verify/danilyuk-ref.json'), 'utf8'));
+  const exp = { 'АР2 прил. 1, пом. 1.003': { name: 'Раздевальные', norm: 0.7, orient: 'В', pass: true }, 'АР2 прил. 19, пом. 1.086': { name: 'Спальные', norm: 0.5, orient: 'З', pass: true } };
+  Object.entries(exp).forEach(([k, e]) => {
+    const o = ref[k], st = KEO.migrate(o.state).st, C = KEO.compute(st), rm = KEO.room(st);
+    ok(`${k}: назначение «${e.name}», норма ${e.norm} % (АР2: ${o.ref.roomName || '?'}, ${o.ref.norm} %)`, rm && rm.name === e.name && C.ok && C.norm.v === e.norm && o.ref.norm === e.norm, rm && `${rm.name}, норма ${C.ok ? C.norm.v : '—'}`);
+    ok(`${k}: ориентация ${e.orient} (АР2: ${o.ref.orient || '?'})`, st.side.walls.every(w => w.orient === e.orient) && o.ref.orient === KEO.ORIENT_NAME[e.orient], st.side.walls.map(w => w.orient).join(','));
+    ok(`${k}: вывод «соответствует», как в АР2`, C.ok && C.pass === e.pass);
+    const file = path.join(__dirname, `verify/Контроль ${o.ref.room} — исходные.json`);
+    ok(`${k}: файл «${path.basename(file)}» совпадает с исходными данными сверки`, JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8'))) === JSON.stringify(o.state));
+  });
+}
+
 console.log(`\nИтог: ${total - fails}/${total} проверок пройдено`);
 process.exit(fails ? 1 : 0);
