@@ -52,7 +52,7 @@ function arState(p) {
   return st;
 }
 const files = process.argv.slice(2);
-if (files.length) files.forEach(fn => { const j = JSON.parse(fs.readFileSync(fn, 'utf8')); Object.entries(j.states || { [path.basename(fn)]: j }).forEach(([k, st]) => check(k, KEO.migrate({ ...st, meta: KEO.defaultState().meta }).st)); });
+if (files.length) files.forEach(fn => { const j = JSON.parse(fs.readFileSync(fn, 'utf8')); Object.entries(j.states || { [path.basename(fn)]: j }).forEach(([k, st]) => check(k, Object.assign(KEO.defaultState(), st, { meta: KEO.defaultState().meta, rhoCalc: KEO.defaultState().rhoCalc }))); });
 else {
   check('АР2 прил. 1, пом. 1.003 (эталон e = 1,27 %)', arState({ orient: 'В', dp: 8.10, bp: 3.06, lt: 4.05, dst: 0.72, windows: [W(0.5, 2.2, 1.65, 0)] }));
   check('АР2 прил. 2, пом. 1.004 (эталон e = 1,59 %)', arState({ orient: 'В', dp: 8.0, bp: 7.4, lt: 7.0, dst: 0.72, windows: [W(0.5, 2.2, 1.65, -2.88, 0.75), W(0.5, 2.2, 1.65, -1.12, 0.75), W(0.5, 2.2, 1.65, 0.62, 0.70), W(0.5, 2.2, 1.65, 2.38, 0.75)] }));

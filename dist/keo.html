@@ -105,23 +105,8 @@ table.grid-t{border-collapse:collapse;width:100%;min-width:520px}
 .grid-t td{padding:3px 4px;border-bottom:1px solid var(--line)}
 .grid-t td.n{font-family:var(--f-mono);color:var(--muted);text-align:center;width:28px}
 .grid-t input{width:100%;min-width:56px;border:1px solid var(--line);border-radius:4px;padding:5px 6px;background:var(--surface);font-variant-numeric:tabular-nums}
-.grid-t td.eff{font-family:var(--f-mono);font-size:12.5px;white-space:nowrap;color:var(--ink)}
-.grid-t tr.exc td{border-bottom:1px solid var(--line);padding-top:0}
-.grid-t tr:has(+tr.exc) td{border-bottom:0}
-details.excd>summary{cursor:pointer;font-size:13px;color:var(--accent);padding:2px 0 4px}
-.exc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:3px 0;font-size:13px}
-.exc-row .seg button{padding:4px 8px;font-size:13px}
-.exc-l{min-width:96px;color:var(--muted)}
-.grid-t .exc-row input.exc-v{width:76px;min-width:60px}
-.grid-t .exc-row input.exc-b{flex:1 1 160px;min-width:120px}
-.exc-row input:disabled{opacity:.55;background:var(--surface-2)}
-.exc-row.off .exc-l{text-decoration:line-through}
-.btn.sm{padding:4px 8px;font-size:12.5px}
-.exc-res{margin:4px 0 0}
-.bad-t{color:var(--bad);font-weight:500} .warn-t{color:var(--warn)}
-.rho-b{border-top:1px dashed var(--line-2);padding-top:12px}
-table.rho-t{min-width:560px}
-.grid-t td.c{text-align:center;font-family:var(--f-mono);font-size:13px;white-space:nowrap}
+.grid-t td.ovr{display:flex;gap:3px}
+.grid-t td.ovr input{min-width:44px;font-size:13px}
 .icon{border:1px solid transparent;background:transparent;font-size:18px;line-height:1;width:30px;height:30px;border-radius:4px;cursor:pointer;color:var(--muted)}
 .icon:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
 .icon:disabled{opacity:.3}
@@ -181,21 +166,6 @@ svg.scheme *{vector-effect:non-scaling-stroke}
 .s-txt,.s-dimt{fill:var(--ink);font-family:var(--f-body);font-size:var(--fs,32px)}
 .s-txtb{fill:var(--ink);font-family:var(--f-disp);font-weight:600;font-size:calc(var(--fs,32px)*1.08)}
 .s-cap{fill:var(--muted);font-family:var(--f-disp);font-weight:600;font-size:var(--fs,32px);letter-spacing:.04em}
-.s-skysel{fill:var(--sky);fill-opacity:.45;stroke:var(--sky);stroke-width:1.2}
-.s-bldf{fill:var(--line);fill-opacity:.6;stroke:var(--muted);stroke-width:.6}
-.s-bldsel{fill:var(--line-2);fill-opacity:.8;stroke:var(--ink);stroke-width:1.2}
-.s-gr1{stroke:var(--accent);stroke-opacity:.25;stroke-width:.5}
-.s-gr5{stroke:var(--accent);stroke-opacity:.5;stroke-width:.8}
-.s-gr10{stroke:var(--accent);stroke-width:1.1}
-.s-grt{fill:var(--accent);font-family:var(--f-mono);font-size:calc(var(--fs,32px)*.62)}
-.s-lim{stroke:var(--bad);stroke-width:1.8}
-.s-arc{stroke:var(--accent);stroke-width:1.4;stroke-dasharray:7 4;fill:none}
-.s-cpt{fill:var(--accent)} .s-edge{fill:var(--surface);stroke:var(--bad);stroke-width:1.5}
-.s-opn{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2} .s-opn2{fill:var(--surface-2);stroke:var(--muted);stroke-width:.6}
-.s-hz{stroke:var(--accent);stroke-width:1.5}
-.dan svg.scheme{max-height:none}
-.dan .sel{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:flex-end}
-.dan tr[data-dsec]{cursor:pointer} .dan tr[data-dsec][aria-selected="true"] td{background:var(--sky-soft);font-weight:600}
 .b2prof{max-width:260px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--surface-2)}
 .b2prof svg.scheme{max-height:110px}
 .fld.off{opacity:.45}
@@ -391,16 +361,8 @@ const Engine = (function () {
     if (!type || type === 'none') return { v: 1, notes: [], tab: null };
     const T = D.K[type], key = pos === 'wall1' ? 'wall1' : 'center';
     const byDepth = D.K.depths.map((_, di) => interp(T.el, T[key][di], depthEl, 'extrap').v);
-    const r = interp(D.K.depths, byDepth, depthRoom, 'extrap'), v = r.v;
-    // способ получения (только описание — на значение не влияет): узел таблицы / интерполяция / экстраполяция по выносу и глубине
-    const node = (xs, x) => xs.some(a => Math.abs(a - x) < 1e-9);
-    const elLo = Math.min(...T.el), elHi = Math.max(...T.el), dLo = Math.min(...D.K.depths), dHi = Math.max(...D.K.depths);
-    const how = {
-      el: depthEl < elLo - 1e-9 || depthEl > elHi + 1e-9 ? 'extrap' : node(T.el, depthEl) ? 'node' : 'interp',
-      depth: depthRoom < dLo - 1e-9 || depthRoom > dHi + 1e-9 ? 'extrap' : node(D.K.depths, depthRoom) ? 'node' : 'interp',
-      elRange: [elLo, elHi], depthRange: [dLo, dHi], clamped: v > 1 || v < 0, raw: v
-    };
-    return { v: Math.min(1, Math.max(0, v)), notes: [], tab: T.tab, title: T.title, how, pos: key };
+    const v = interp(D.K.depths, byDepth, depthRoom, 'extrap').v;
+    return { v: Math.min(1, Math.max(0, v)), notes: [], tab: T.tab, title: T.title };
   }
 
   // r2 — табл. Б.21
@@ -507,8 +469,7 @@ const Engine = (function () {
     const wins = inp.windows.map((w, wi) => {
       const sec = sideSectors(P, inp.dst, w, blds);
       const tau0 = w.tau0 !== undefined ? w.tau0 : (w.t1 * w.t2 * (w.t3 || 1) * (w.t4 || 1) * (w.t5 || 1));
-      // явные τо и K (с источником) передаёт модель (KEO.winCoef); иначе — произведение τ и табличный K
-      const K = w.K !== undefined ? { v: w.K, tab: null, title: w.Ksrc || 'задан вручную', src: w.Ksrc } : KLookup(w.kType, inp.dp, w.kDepth || 0, inp.kPos);
+      const K = w.K !== undefined ? { v: w.K, tab: null, title: 'задан вручную' } : KLookup(w.kType, inp.dp, w.kDepth || 0, inp.kPos);
       return { idx: wi, w, ...sec, tau0, K: K.v, Kinfo: K };
     });
     const sumEb = wins.reduce((s, w) => s + w.sectors.filter(x => x.type === 'sky').reduce((a, x) => a + x.eps, 0), 0);
@@ -1071,110 +1032,6 @@ const Schemes = (function () {
     return { box: [-0.7, -1.5, L + 1.5, B + 1.4], it };
   }
 
-  /* ---------- проверка по графикам Данилюка I и II (СП 367: п. 8.4.1, рис. 8.8–8.11; Б.2.10–Б.2.11, (Б.11), (Б.12)) ----------
-     Независимо от ядра: углы видимой области строятся заново по исходным размерам (рёбра проёма на внутренней и наружной
-     гранях стены, противостоящие здания), затем число лучей СЧИТЫВАЕТСЯ с графиков, построенных по их определению:
-     луч k графика I — угол возвышения θk, 50·(1 − cos θk) = k; луч k графика II — угол ψk от оси, (100/π)·(ψk + ½·sin 2ψk) = k.
-     Отсчёт у каждой границы — номер луча с десятыми по ближайшей пунктирной линии (n = отсчёт у верхней/правой − у нижней/левой).
-     Затеняющие элементы фасада (балкон, лоджия, козырёк, экран) лучи не обрезают — их влияние учтено K (п. 8.4.2).
-     Только для прямоугольных проёмов. */
-  const DAN = (() => {
-    const PI = Math.PI, N1 = th => 50 * (1 - Math.cos(th)), TH = k => Math.acos(1 - k / 50);
-    const N2 = p => (100 / PI) * (p + 0.5 * Math.sin(2 * p));
-    const PSI = (() => { const c = []; for (let k = 0; k <= 50; k++) { let a = 0, b = PI / 2; for (let i = 0; i < 60; i++) { const m = (a + b) / 2; if (N2(m) < k) a = m; else b = m; } c.push((a + b) / 2); } return k => c[k]; })();
-    const tenth = x => Math.round(x * 10) / 10;
-    // отсчёт по графику: ближайшая пунктирная линия десятых долей луча (пунктир графика — доли луча: k + j/10)
-    function read1(th) { return tenth(N1(th)); }
-    function read2(y, R) { return Math.sign(y) * tenth(N2(Math.atan(Math.abs(y) / R))); }
-    // видимые участки одного проёма: небо и фасады противостоящих зданий
-    function sectors(raw, win, blds) {
-      const lt = raw.lt, D = raw.lt + raw.dst, faces = [[lt, 'внутренняя грань'], [D, 'наружная грань']];
-      const zs = win.hpd - raw.hp, zt = win.hpd + win.ho - raw.hp, yl = win.s - win.bo / 2 - (raw.ds || 0), yr = win.s + win.bo / 2 - (raw.ds || 0);
-      const pick = (v, cmp) => faces.map(([x, n]) => ({ a: Math.atan2(v, x), n })).reduce((p, q) => cmp(q.a, p.a) ? q : p);
-      const lo = pick(zs, (a, b) => a > b), hi = pick(zt, (a, b) => a < b), L = pick(yl, (a, b) => a > b), Rr = pick(yr, (a, b) => a < b);
-      if (lo.a < 0) { lo.a = 0; lo.n = 'горизонт (уровень точки А)'; }
-      const edges = { lo, hi, L, R: Rr, D, zs, zt, yl, yr };
-      if (!(hi.a > lo.a + 1e-9 && Rr.a > L.a + 1e-9)) return { edges, list: [] };
-      const B = (blds || []).map((b, i) => { const Db = D + b.l; return { i, Db, pa: Math.atan2(b.off - b.a / 2, Db), pb: Math.atan2(b.off + b.a / 2, Db), top: Math.atan2(b.Hp - raw.hp, Db) }; });
-      const br = [L.a, Rr.a]; B.forEach(b => [b.pa, b.pb].forEach(p => { if (p > L.a && p < Rr.a) br.push(p); })); br.sort((a, b) => a - b);
-      const parts = [];
-      for (let i = 0; i < br.length - 1; i++) {
-        const pa = br[i], pb = br[i + 1]; if (pb - pa < 1e-12) continue; const pm = (pa + pb) / 2;
-        let tc = lo.a; B.filter(b => b.pa <= pm && b.pb >= pm).sort((a, b) => a.Db - b.Db).forEach(b => { const t = Math.min(b.top, hi.a); if (t > tc + 1e-12) { parts.push({ type: 'bld', bld: b.i, ta: tc, tb: t, pa, pb }); tc = t; } });
-        if (hi.a > tc + 1e-12) parts.push({ type: 'sky', ta: tc, tb: hi.a, pa, pb });
-      }
-      const list = [];
-      parts.forEach(s => { const m = list[list.length - 1]; if (m && m.type === s.type && m.bld === s.bld && Math.abs(m.ta - s.ta) < 1e-12 && Math.abs(m.tb - s.tb) < 1e-12 && Math.abs(m.pb - s.pa) < 1e-12) m.pb = s.pb; else list.push({ ...s }); });
-      list.forEach(s => {
-        const za = D * Math.tan(s.ta), zb = D * Math.tan(s.tb), zm = (za + zb) / 2;
-        s.ya = D * Math.tan(s.pa); s.yb = D * Math.tan(s.pb); s.za = za; s.zb = zb; s.R = Math.hypot(D, zm); s.gamma = Math.atan2(zm, D) * 180 / PI;
-        s.r1a = read1(s.ta); s.r1b = read1(s.tb); s.n1g = tenth(s.r1b - s.r1a); s.n1a = N1(s.tb) - N1(s.ta);
-        s.r2a = read2(s.ya, s.R); s.r2b = read2(s.yb, s.R); s.n2g = tenth(s.r2b - s.r2a); s.n2a = N2(Math.atan(s.yb / s.R)) - N2(Math.atan(s.ya / s.R));
-      });
-      return { edges, list };
-    }
-    return { N1, N2, TH, PSI, read1, read2, sectors };
-  })();
-
-  // совмещённая схема в одном масштабе: сверху — разрез с графиком I (полюс в А), снизу — план с графиком II
-  // (полюс на оси, проходящей через А перпендикулярно стене, на расстоянии R от наружной грани — горизонталь R совпадает с гранью)
-  function danScheme(raw, wi, dsec, sel) {
-    const it = [], win = raw.windows[wi], s0 = dsec.list[sel] || dsec.list[0], e = dsec.edges, dst = raw.dst, lt = raw.lt, D = e.D, ds = raw.ds || 0;
-    const R = s0 ? s0.R : D, Rg = Math.max(R, D) * 1.12, deg = a => (a * 180 / Math.PI);
-    const hp = raw.hp, H = Math.max(raw.H || 0, win.hpd + win.ho + 0.3);
-    // ---- разрез: x — глубина (внутренняя грань стены x = 0, А при x = lт), z — от пола
-    const A = { x: lt, z: hp }, pol = (r, th) => [A.x - r * Math.cos(th), A.z + r * Math.sin(th)];
-    // высота разреза ограничена: проём, точка C и запас 1,2 м; лучи графика I обрезаются по верхней границе
-    const zTop = Math.max(win.hpd + win.ho, s0 ? hp + (s0.za + s0.zb) / 2 : 0, hp + 1) + 1.2;
-    const clipR = th => Math.min(Rg, Math.sin(th) > 1e-9 ? (zTop - A.z) / Math.sin(th) : Rg);
-    const xL = Math.min(-dst - 0.6, A.x - Rg - 0.2);
-    it.push({ t: 'line', x1: xL, y1: 0, x2: raw.dp + 0.2, y2: 0, c: 'room' });
-    if (hp > 0) { it.push({ t: 'line', x1: 0, y1: hp, x2: raw.dp, y2: hp, c: 'axis' }); it.push({ t: 'text', x: raw.dp - 0.05, y: hp + 0.08, s: 'УРП', c: 'txt', a: 'end' }); }
-    it.push({ t: 'rect', x: -dst, y: 0, w: dst, h: win.hpd, c: 'wall' });
-    it.push({ t: 'rect', x: -dst, y: win.hpd + win.ho, w: dst, h: Math.max(0.2, H - win.hpd - win.ho), c: 'wall' });
-    it.push({ t: 'line', x1: -dst / 2, y1: win.hpd, x2: -dst / 2, y2: win.hpd + win.ho, c: 'glass' });
-    // видимые участки выбранного проёма (выделен выбранный)
-    dsec.list.forEach((s, k) => it.push({ t: 'poly', pts: [[A.x, A.z], pol(clipR(s.ta), s.ta), pol(clipR(s.tb), s.tb)], c: s.type === 'sky' ? (k === sel ? 'skysel' : 'skyf') : (k === sel ? 'bldsel' : 'bldf') }));
-    // лучи графика I (номер — у конца луча, каждый десятый; пятые — средней линией)
-    for (let k = 0; k <= 50; k++) { const th = DAN.TH(k), rr = clipR(th), p = pol(rr, th); it.push({ t: 'line', x1: A.x, y1: A.z, x2: p[0], y2: p[1], c: k % 10 === 0 ? 'gr10' : k % 5 === 0 ? 'gr5' : 'gr1' }); if (k % 10 === 0) { const q = pol(rr + 0.15, th); it.push({ t: 'text', x: q[0], y: q[1] - 0.04, s: String(k), c: 'grt', a: 'middle' }); } }
-    // ограничивающие рёбра и граничные лучи
-    if (s0) {
-      [s0.ta, s0.tb].forEach(th => { const p = pol(clipR(th), th); it.push({ t: 'line', x1: A.x, y1: A.z, x2: p[0], y2: p[1], c: 'lim' }); });
-      const C = { x: -dst, z: hp + (s0.za + s0.zb) / 2 };
-      const arc = []; for (let i = 0; i <= 90; i++) { const q = pol(s0.R, i * Math.PI / 180); if (q[1] > zTop) break; arc.push(q); }
-      it.push({ t: 'pline', pts: arc, c: 'arc' });
-      it.push({ t: 'circle', x: C.x, y: C.z, r: 0.05, c: 'cpt' }); it.push({ t: 'text', x: C.x - 0.08, y: C.z + 0.08, s: 'C', c: 'txtb', a: 'end' });
-      it.push({ t: 'line', x1: A.x, y1: A.z, x2: C.x, y2: C.z, c: 'ray' });
-    }
-    [[e.zs, e.lo], [e.zt, e.hi]].forEach(([z, g]) => { if (g.n.startsWith('горизонт')) return; const x = g.n === 'внутренняя грань' ? 0 : -dst; it.push({ t: 'circle', x, y: hp + z, r: 0.045, c: 'edge' }); });
-    it.push({ t: 'circle', x: A.x, y: A.z, r: 0.07, c: 'pt' }); it.push({ t: 'text', x: A.x + 0.1, y: A.z + 0.1, s: 'А', c: 'txtb' });
-    it.push({ t: 'dim', x1: -dst, y1: -0.35, x2: 0, y2: -0.35, s: 'Δст' });
-    it.push({ t: 'dim', x1: 0, y1: -0.35, x2: lt, y2: -0.35, s: 'lт = ' + r2(lt) });
-    const topZ = zTop + 0.45;
-    it.push({ t: 'text', x: xL + 0.05, y: topZ, s: 'Разрез · график I', c: 'cap' });
-    // ---- план: y — вдоль стены, ниже разреза; полюс графика II — P
-    const yr = [win.s - win.bo / 2, win.s + win.bo / 2, ds - 1, ds + 1, ...(s0 ? [ds + s0.ya, ds + s0.yb] : [])], half = Math.max(1.4, ...yr.map(y => Math.abs(y - ds))) + 0.5;
-    const off = -0.9 - half, Y = y => off + (y - ds); // ds — ось через А
-    const Px = -dst + R, P = { x: Px, y: Y(ds) };
-    it.push({ t: 'rect', x: -dst, y: Y(ds - half), w: dst, h: 2 * half, c: 'wall' });
-    raw.windows.forEach((w2, j) => { const a = w2.s - w2.bo / 2, b = w2.s + w2.bo / 2; if (b < ds - half || a > ds + half) return; it.push({ t: 'rect', x: -dst, y: Y(Math.max(a, ds - half)), w: dst, h: Math.min(b, ds + half) - Math.max(a, ds - half), c: j === wi ? 'opn' : 'opn2' }); });
-    it.push({ t: 'line', x1: -dst, y1: Y(ds - half), x2: -dst, y2: Y(ds + half), c: 'hz' });
-    it.push({ t: 'line', x1: xL, y1: Y(ds), x2: Math.max(Px, A.x) + 0.3, y2: Y(ds), c: 'axis' });
-    if (s0) {
-      dsec.list.forEach((s, k) => it.push({ t: 'poly', pts: [[P.x, P.y], [-dst, Y(ds + s.ya)], [-dst, Y(ds + s.yb)]], c: s.type === 'sky' ? (k === sel ? 'skysel' : 'skyf') : (k === sel ? 'bldsel' : 'bldf') }));
-      for (let k = 0; k <= 50; k++) [1, -1].forEach(sg => { if (k === 0 && sg < 0) return; const yy = sg * R * Math.tan(DAN.PSI(k)); if (Math.abs(yy) > half + 0.05) return; it.push({ t: 'line', x1: P.x, y1: P.y, x2: -dst - 0.25, y2: Y(ds + yy * (R + 0.25) / R), c: k % 10 === 0 ? 'gr10' : k % 5 === 0 ? 'gr5' : 'gr1' }); if (k % 5 === 0) it.push({ t: 'text', x: -dst - 0.3, y: Y(ds + yy * (R + 0.3) / R) - 0.05, s: String(k), c: 'grt', a: 'end' }); });
-      [s0.ya, s0.yb].forEach(y => it.push({ t: 'line', x1: P.x, y1: P.y, x2: -dst, y2: Y(ds + y), c: 'lim' }));
-      // истинные ограничивающие лучи из А (через рёбра откосов)
-      [s0.ya, s0.yb].forEach(y => it.push({ t: 'line', x1: A.x, y1: Y(ds), x2: -dst, y2: Y(ds + y), c: 'rayb' }));
-      it.push({ t: 'circle', x: P.x, y: P.y, r: 0.06, c: 'cpt' }); it.push({ t: 'text', x: P.x + 0.08, y: P.y - 0.3, s: 'P', c: 'txtb' });
-      it.push({ t: 'dim', x1: -dst, y1: Y(ds - half) - 0.3, x2: Px, y2: Y(ds - half) - 0.3, s: 'R = ' + r2(R) });
-    }
-    it.push({ t: 'circle', x: A.x, y: Y(ds), r: 0.07, c: 'pt' }); it.push({ t: 'text', x: A.x + 0.1, y: Y(ds) + 0.1, s: 'А', c: 'txtb' });
-    it.push({ t: 'text', x: xL + 0.05, y: Y(ds + half) + 0.25, s: 'План · график II (полюс P)', c: 'cap' });
-    const xR = Math.max(raw.dp + 0.3, Px + 0.6);
-    return { box: [xL - 0.2, Y(ds - half) - 0.75, xR, topZ + 0.3], it };
-  }
-
   /* ---------- рендер в SVG ---------- */
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
   function toSVG(sc, opt) {
@@ -1189,7 +1046,6 @@ const Schemes = (function () {
       else if (e.t === 'rect') o += `<rect x="${X(e.x)}" y="${Y(e.y + e.h)}" width="${e.w * s}" height="${e.h * s}" class="s-${e.c}"/>`;
       else if (e.t === 'circle') o += `<circle cx="${X(e.x)}" cy="${Y(e.y)}" r="${e.c === 'pt' ? Math.max(e.r * s, pr) : e.r * s}" class="s-${e.c}"/>`;
       else if (e.t === 'poly') o += `<polygon points="${e.pts.map(p => X(p[0]) + ',' + Y(p[1])).join(' ')}" class="s-${e.c}"/>`;
-      else if (e.t === 'pline') o += `<polyline points="${e.pts.map(p => X(p[0]) + ',' + Y(p[1])).join(' ')}" class="s-${e.c}"/>`;
       else if (e.t === 'text') o += `<text x="${X(e.x)}" y="${Y(e.y)}" text-anchor="${e.a || 'start'}" class="s-${e.c}">${esc(e.s)}</text>`;
       else if (e.t === 'dim' || e.t === 'dimv') {
         o += `<line x1="${X(e.x1)}" y1="${Y(e.y1)}" x2="${X(e.x2)}" y2="${Y(e.y2)}" class="s-dim" marker-start="url(#ar)" marker-end="url(#ar)"/>`;
@@ -1207,11 +1063,7 @@ const Schemes = (function () {
     ray: { stroke: '#c48a00', lw: 0.3, dash: [1.2, 0.8] }, rayb: { stroke: '#c48a00', lw: 0.2 }, skyf: { fill: '#fbefc9', stroke: '#c48a00', lw: 0.15 },
     bld: { fill: '#c9cfd4', stroke: '#2b3640', lw: 0.2 }, pt: { fill: '#b3261e', stroke: '#b3261e', lw: 0.2 },
     axis: { stroke: '#7a8691', lw: 0.2, dash: [2, 0.6, 0.4, 0.6] }, lan: { fill: '#e3eef8', stroke: '#1f6fb2', lw: 0.3 },
-    dim: { stroke: '#4c5a66', lw: 0.15 }, opq: { stroke: '#2b3640', lw: 0.45 },
-    skysel: { fill: '#f6d27a', stroke: '#c48a00', lw: 0.25 }, bldf: { fill: '#dfe3e6', stroke: '#6b7780', lw: 0.15 }, bldsel: { fill: '#b9c2c9', stroke: '#2b3640', lw: 0.25 },
-    gr1: { stroke: '#9fb4c7', lw: 0.06 }, gr5: { stroke: '#6f8fae', lw: 0.12 }, gr10: { stroke: '#2d5d8b', lw: 0.2 }, lim: { stroke: '#b3261e', lw: 0.35 },
-    arc: { stroke: '#2d5d8b', lw: 0.25, dash: [1, 0.6] }, cpt: { fill: '#2d5d8b', stroke: '#2d5d8b', lw: 0.2 }, edge: { fill: '#ffffff', stroke: '#b3261e', lw: 0.3 },
-    opn: { fill: '#cfe3f5', stroke: '#1f6fb2', lw: 0.3 }, opn2: { fill: '#eef3f7', stroke: '#7a8691', lw: 0.15 }, hz: { stroke: '#2d5d8b', lw: 0.3 }
+    dim: { stroke: '#4c5a66', lw: 0.15 }, opq: { stroke: '#2b3640', lw: 0.45 }
   };
   function toPDF(doc, sc, bx, by, bw, bh) {
     const [x0, y0, x1, y1] = sc.box, W = x1 - x0, H = y1 - y0;
@@ -1222,10 +1074,9 @@ const Schemes = (function () {
       const st = PST[e.c] || { stroke: '#1b2329', lw: 0.2 };
       if (e.t === 'line') doc.line(X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), { color: st.stroke, lw: st.lw, dash: st.dash });
       else if (e.t === 'rect') doc.rect(X(e.x), Y(e.y + e.h), e.w * k, e.h * k, { fill: st.fill, stroke: st.stroke, lw: st.lw });
-      else if (e.t === 'circle') doc.circle(X(e.x), Y(e.y), Math.max(e.r * k, e.c === 'pt' ? 0.7 : (e.c === 'cpt' || e.c === 'edge') ? 0.5 : 0), { fill: st.fill, stroke: st.stroke, lw: st.lw });
+      else if (e.t === 'circle') doc.circle(X(e.x), Y(e.y), Math.max(e.r * k, e.c === 'pt' ? 0.7 : 0), { fill: st.fill, stroke: st.stroke, lw: st.lw });
       else if (e.t === 'poly') doc.poly(e.pts.map(p => [X(p[0]), Y(p[1])]), { fill: st.fill, stroke: st.stroke, lw: st.lw, close: true });
-      else if (e.t === 'pline') doc.poly(e.pts.map(p => [X(p[0]), Y(p[1])]), { stroke: st.stroke, lw: st.lw, dash: st.dash, close: false });
-      else if (e.t === 'text') doc.text(e.s, X(e.x), Y(e.y), { size: e.c === 'cap' ? 7 : e.c === 'grt' ? 5 : fs, font: e.c === 'txtb' || e.c === 'cap' ? 'B' : 'R', align: e.a === 'middle' ? 'center' : (e.a === 'end' ? 'right' : 'left'), color: '#1b2329' });
+      else if (e.t === 'text') doc.text(e.s, X(e.x), Y(e.y), { size: e.c === 'cap' ? 7 : fs, font: e.c === 'txtb' || e.c === 'cap' ? 'B' : 'R', align: e.a === 'middle' ? 'center' : (e.a === 'end' ? 'right' : 'left'), color: '#1b2329' });
       else if (e.t === 'dim' || e.t === 'dimv') {
         doc.line(X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), { color: '#4c5a66', lw: 0.15 });
         [[e.x1, e.y1], [e.x2, e.y2]].forEach(([x, y]) => doc.line(X(x) - 0.6, Y(y) + 0.6, X(x) + 0.6, Y(y) - 0.6, { color: '#4c5a66', lw: 0.25 }));
@@ -1234,7 +1085,7 @@ const Schemes = (function () {
       }
     });
   }
-  return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF, DAN, danScheme };
+  return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF };
 })();
 if (typeof module !== 'undefined') module.exports = Schemes;
 
@@ -1359,8 +1210,7 @@ const Report = (function () {
       y += 2;
       if (blk.note) para(blk.note, { size: 7, color: GREY });
     };
-    const flat = []; model.forEach(b => { if (b.type === 'dan') b.blocks.forEach(x => flat.push(x)); else flat.push(b); });
-    for (const b of flat) {
+    for (const b of model) {
       if (b.type === 'pagebreak') { newPage(); continue; }
       if (b.type === 'h1') { ensure(14); y += 5; doc.text(b.text, C.x + C.w / 2, y, { size: 13, font: 'B', align: 'center' }); y += 2; if (b.sub) { y += 4; doc.text(b.sub, C.x + C.w / 2, y, { size: 9, align: 'center', color: GREY }); } y += 4; continue; }
       if (b.type === 'h2') { ensure(16); y += 3.5; doc.text(b.text, C.x, y, { size: 10, font: 'B' }); y += 2.5; continue; }
@@ -1416,11 +1266,11 @@ const KEO = (function () {
     manual: 'задано вручную'
   };
   const RT_REF = { center: 'п. 5.3 ж) СП 52.13330.2016', far1: 'п. 5.3 а), в), д) СП 52.13330.2016', 'far1.2': 'п. 5.3 г) СП 52.13330.2016', manual: '—' };
-  const K_TITLES = { none: 'Нет', balcony: 'Балкон над/перед окном (табл. Б.17)', loggia: 'Лоджия (табл. Б.18)', canopy: 'Горизонтальный козырёк (табл. Б.19)', screen: 'Вертикальный экран (табл. Б.20)', manual: 'Задать K вручную' };
+  const K_TITLES = { none: 'Нет', balcony: 'Балкон над/перед окном', loggia: 'Лоджия', canopy: 'Горизонтальный козырёк', screen: 'Вертикальный экран' };
 
-  function defaultWindow(s) { return { hpd: 0.8, ho: 1.8, bo: 1.5, s: s || 0, t2m: 'wall', t2o: null, tau0m: 'wall', tau0o: null, tau0b: '', Km: 'wall', Ko: null, Kb: '' }; }
+  function defaultWindow(s) { return { hpd: 0.8, ho: 1.8, bo: 1.5, s: s || 0, t2o: null, tau0o: null, Ko: null }; }
   function defaultWall(orient) {
-    return { orient: orient || 'Ю', dp: 6.0, bp: 6.0, H: 3.0, dst: 0.5, lt: 3.0, ds: 0, t1: 0, t1c: null, t2: 0, t4: 0, t5: 1, kType: 'none', kDepth: 1.5, kManual: null, kBasis: '', windows: [defaultWindow(-1.4), defaultWindow(1.4)], buildings: [] };
+    return { orient: orient || 'Ю', dp: 6.0, bp: 6.0, H: 3.0, dst: 0.5, lt: 3.0, ds: 0, t1: 0, t1c: null, t2: 0, t4: 0, t5: 1, kType: 'none', kDepth: 1.5, windows: [defaultWindow(-1.4), defaultWindow(1.4)], buildings: [] };
   }
   function defaultType() { return { name: 'Фонарь 1', shape: 'round', av: 1.5, bv: 1.5, an: 1.5, bn: 1.5, dv: 1.5, dn: 1.5, hsf: 1.0, refl: 'diffuse', rhoW: 0.7, t1: 0.48, t2: 0.75, t3: 1, t4: 1, net: false, tilt: 0, lanterns: [{ x: 3, y: 3 }] }; }
 
@@ -1436,10 +1286,8 @@ const KEO = (function () {
       region: 'г. Москва', group: 1, groupManual: false,
       bType: 'Административные здания, здания государственных учреждений, проектные и научные организации', roomId: 'A1',
       lightSys: 'ЕО', normManual: null, hpManual: null, rtManual: null,
-      env: 'normal', glassMult: 1, rho: 0.55, rhoMode: 'default', rhoBasis: '', rhoGeo: 'auto',
-      rhoSurf: { floor: { S: null, rho: null, src: '' }, walls: { S: null, rho: null, src: '' }, ceil: { S: null, rho: null, src: '' }, win: { S: null, rho: null, src: '' } }, rhoRows: [],
-      rhoCalc: { on: false, s: [] },
-      dan: { wall: 0, win: 0, sec: 0 },
+      env: 'normal', glassMult: 1, rho: 0.55,
+      rhoCalc: { on: false, s: [[30, 0.3], [60, 0.7], [30, 0.8], [6, 0.2]] },
       side: { walls: [defaultWall('Ю')] },
       top: { sys: 'shaft', L: 8, B: 6, H: 4.2, spans: 1, l1: null, y0: null, nPts: 0, types: [defaultType()], b2: [defaultB2Type()] },
       comb: { wallSide: 'x0' }
@@ -1463,250 +1311,23 @@ const KEO = (function () {
   }
   function ltAuto(rule, dp) { return rule === 'far1' ? dp - 1 : rule === 'far1.2' ? dp - 1.2 : dp / 2; }
   function mfOf(st, angleIdx) { return R.MF(st.env, angleIdx, st.glassMult).v; }
-  function tau1Wall(w) { const c = coefCheck(w.t1c, 't1c'); return c.st === 'ok' ? c.v : DATA.tau1[w.t1].v; }
-
-  /* ---------- ручные коэффициенты: явное состояние присутствия ----------
-     Ввод → { st: 'empty' | 'ok' | 'invalid', v, msg }. Пустое поле, null и undefined — «не задано»;
-     «0,36» и «0.36» — одно число; нечисловая строка, ±∞ — ошибка (не молчаливый возврат к общему значению).
-     Допустимость нуля и диапазон — по полю (COEF_RULES); недопустимое значение вызывает ошибку исходных данных. */
-  const COEF_RULES = {
-    t1c: { name: 'τ1 по паспорту', lo: 0, hi: 1, zero: false },
-    t2: { name: 'τ2 проёма', lo: 0, hi: 1, zero: false },
-    tau0: { name: 'τо проёма', lo: 0, hi: 1, zero: false },
-    K: { name: 'K', lo: 0, hi: 1, zero: false }
-  };
-  function readNum(v) {
-    if (v === null || v === undefined) return { st: 'empty' };
-    if (typeof v === 'number') return Number.isFinite(v) ? { st: 'num', v } : { st: 'invalid', raw: v };
-    const s = String(v).replace(/\s/g, '').replace(',', '.');
-    if (s === '') return { st: 'empty' };
-    if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) return { st: 'invalid', raw: v };
-    const x = Number(s); return Number.isFinite(x) ? { st: 'num', v: x } : { st: 'invalid', raw: v };
-  }
-  function coefCheck(v, key) {
-    const R0 = COEF_RULES[key], r = readNum(v);
-    if (r.st === 'empty') return { st: 'empty' };
-    if (r.st === 'invalid') return { st: 'invalid', msg: `${R0.name}: «${r.raw}» — не число` };
-    if (r.v === 0 && !R0.zero) return { st: 'invalid', v: 0, msg: `${R0.name}: ноль недопустим (проём без пропускания удалите из расчёта)` };
-    if (r.v < R0.lo || r.v > R0.hi) return { st: 'invalid', v: r.v, msg: `${R0.name} = ${f(r.v, 3)} — вне диапазона ${f(R0.lo, 0)}…${f(R0.hi, 0)}` };
-    return { st: 'ok', v: r.v };
-  }
-  // режим исключения проёма: явный t2m/tau0m/Km; в файлах прежних версий режима нет —
-  // тогда «вручную», если значение задано и не ноль (так работала прежняя проверка истинности), иначе «по общим»
-  const OVR = { t2: ['t2m', 't2o'], tau0: ['tau0m', 'tau0o', 'tau0b'], K: ['Km', 'Ko', 'Kb'] };
-  function winMode(x, key) {
-    const m = x[OVR[key][0]]; if (m === 'manual' || m === 'wall') return m;
-    const r = readNum(x[OVR[key][1]]); return r.st === 'num' && r.v !== 0 ? 'manual' : 'wall';
-  }
-  // приведение старого файла к явным режимам (значения не меняются); возвращает замечания о неоднозначных данных
-  function migrateWindows(st) {
-    const notes = [];
-    (st.side && st.side.walls || []).forEach((w, wi) => (w.windows || []).forEach((x, i) => Object.keys(OVR).forEach(k => {
-      const [mk, vk] = OVR[k]; if (x[mk] === 'manual' || x[mk] === 'wall') return;
-      const r = readNum(x[vk]); x[mk] = winMode(x, k);
-      if (r.st === 'num' && r.v === 0) notes.push(`Стена ${wi + 1}, проём ${i + 1}: в файле ${COEF_RULES[k].name} = 0 — прежняя версия его не применяла; оставлено «по общим параметрам», значение сохранено`);
-      if (r.st === 'invalid') notes.push(`Стена ${wi + 1}, проём ${i + 1}: в файле ${COEF_RULES[k].name} = «${r.raw}» — не число; оставлено «по общим параметрам»`);
-    })));
-    return notes;
-  }
-
-  // общие для стены коэффициенты: τ1, τ2, τ4, τ5 и вычисленные τо и K («по общим параметрам стены»)
-  function wallCoef(st, W, dpK) {
-    const rule = rtOf(st), kPos = rule === 'center' ? 'center' : 'wall1';
-    const t1c = coefCheck(W.t1c, 't1c');
-    const t1 = { v: t1c.st === 'ok' ? t1c.v : DATA.tau1[W.t1].v, src: t1c.st === 'ok' ? 'по данным производителя' : `${DATA.tau1[W.t1].t} (${DATA.tau1[W.t1].r}); табл. Б.13/Б.14 — принято нижнее значение` };
-    const t2 = { v: DATA.tau2[W.t2].v, src: `${DATA.tau2[W.t2].t}; табл. Б.15` };
-    const t4 = { v: DATA.tau4[W.t4].v, src: `${DATA.tau4[W.t4].t}; табл. Б.16` };
-    const t5 = { v: +W.t5 || 1 };
-    const tau0 = t1.v * t2.v * 1 * t4.v * t5.v;
-    const K = kOf(W, dpK, kPos);
-    return { t1, t2, t4, t5, tau0, K, kPos, err: [t1c.st === 'invalid' ? t1c.msg : null, ...K.err].filter(Boolean) };
-  }
-  const posText = p => p === 'center' ? 'расчётная точка в центре помещения' : 'расчётная точка в 1 м от стены, наиболее удалённой от проёмов';
-  const howText = (h, el) => {
-    const a = h.el === 'node' && h.depth === 'node' ? 'значение в узле таблицы' : [h.el === 'interp' ? 'интерполяция по выносу' : h.el === 'extrap' ? `экстраполяция по выносу (табл.: ${f(h.elRange[0], 1)}…${f(h.elRange[1], 1)} м)` : null, h.depth === 'interp' ? 'интерполяция по глубине помещения' : h.depth === 'extrap' ? `экстраполяция по глубине помещения (табл.: ${f(h.depthRange[0], 0)}…${f(h.depthRange[1], 0)} м)` : null].filter(Boolean).join(', ');
-    return a + (h.clamped ? `; экстраполяция дала ${f(h.raw, 3)} — ограничено диапазоном 0…1` : '') + (h.el === 'extrap' || h.depth === 'extrap' ? ' (примечание к таблице допускает экстраполяцию)' : '');
-  };
-  // K стены: нет элемента / таблица Б.17–Б.20 / вручную для стены
-  function kOf(W, dp, kPos) {
-    if (W.kType === 'manual') {
-      const c = coefCheck(W.kManual, 'K');
-      if (c.st !== 'ok') return { v: NaN, mode: 'manual', src: 'задано вручную для стены', err: [`K стены: ${c.st === 'empty' ? 'режим «вручную», значение не введено' : c.msg}`] };
-      return { v: c.v, mode: 'manual', tab: null, src: `задано вручную для стены: ${W.kBasis ? W.kBasis : 'основание не указано'}`, err: [] };
-    }
-    if (!W.kType || W.kType === 'none') return { v: 1, mode: 'none', tab: null, src: 'K = 1,00; затеняющие элементы отсутствуют', err: [] };
-    const depth = readNum(W.kDepth);
-    if (depth.st !== 'num' || !(depth.v > 0)) return { v: NaN, mode: 'table', src: '', err: ['K: укажите вынос затеняющего элемента больше нуля'] };
-    const k = R.KLookup(W.kType, dp, depth.v, kPos);
-    return { v: k.v, mode: 'table', tab: k.tab, info: k, src: `СП 367.1325800.2025, табл. ${k.tab} (${k.title.toLowerCase()}): вынос ${f(depth.v)} м; глубина помещения ${f(dp)} м; ${posText(kPos)}; ${howText(k.how)}`, err: [] };
-  }
-  // эффективные коэффициенты проёма — единственный источник для ядра, формы и отчёта
-  function winCoef(gen, x, i) {
-    const err = [], warn = [], n = i + 1;
-    const m = { t2: winMode(x, 't2'), tau0: winMode(x, 'tau0'), K: winMode(x, 'K') };
-    const msg = (key, c) => `Проём ${n}: ${c.st === 'empty' ? `${COEF_RULES[key].name} — режим «вручную», значение не введено` : c.msg}`;
-    const man = key => { const c = coefCheck(x[OVR[key][1]], key); if (c.st !== 'ok') err.push(msg(key, c)); return c.v; };
-    const basis = key => { const b = OVR[key][2] && x[OVR[key][2]]; return b ? String(b) : 'основание не указано'; };
-    let t2 = { v: gen.t2.v, src: 'общий для стены', mode: 'wall' };
-    // при ручном τо τ2 проёма не участвует в расчёте: его ошибка не блокирует результат, а выводится предупреждением
-    if (m.t2 === 'manual' && m.tau0 === 'manual') { const c = coefCheck(x[OVR.t2[1]], 't2'); if (c.st !== 'ok') warn.push(`${msg('t2', c)} — не используется (τо задано вручную), в расчёт не входит`); t2 = { v: c.st === 'ok' ? c.v : NaN, src: 'задан для проёма', mode: 'manual' }; }
-    else if (m.t2 === 'manual') { const v = man('t2'); t2 = { v, src: 'задан для проёма', mode: 'manual' }; }
-    let tau0;
-    if (m.tau0 === 'manual') { const v = man('tau0'); tau0 = { v, mode: 'manual', src: `задано вручную для проёма ${n}: ${basis('tau0')}; τ1…τ5 не используются` }; t2.used = false; }
-    else { const v = gen.t1.v * t2.v * 1 * gen.t4.v * gen.t5.v; tau0 = { v, mode: 'wall', src: `τо = τ1·τ2·τ3·τ4·τ5 = ${f(gen.t1.v)}·${f(t2.v)}·1,00·${f(gen.t4.v)}·${f(gen.t5.v)} (формула (Б.8) СП 367)${m.t2 === 'manual' ? `; τ2 — заданный для проёма ${n}` : ''}` }; t2.used = true; }
-    let K;
-    if (m.K === 'manual') { const v = man('K'); K = { v, mode: 'manual', src: `задано вручную для проёма ${n}: ${basis('K')}` }; }
-    else K = { v: gen.K.v, mode: gen.K.mode, src: gen.K.src, tab: gen.K.tab };
-    return { t1: gen.t1.v, t2, t4: gen.t4.v, t5: gen.t5.v, tau0, K, modes: m, err, warn };
-  }
-  /* ---------- средневзвешенный коэффициент отражения ρср ----------
-     Режимы: default — 0,55 (примечание 2 к табл. Б.6/Б.7: коэффициенты отражения неизвестны);
-     surf — по поверхностям, формула (3.6) п. 3.13; состав — по примечанию 2 к табл. Б.6/Б.7 (боковой: пол, стены, потолок, окна),
-     для r2 верхнего света — табл. Б.21 (пол, стены, потолок); manual — одно значение и основание пользователя;
-     legacy — файл прежней версии: число сохранено, источник не подтверждён.
-     Применяемое значение округляется до сотых (как прочие аргументы таблиц r0 и r2), точное — выводится рядом. */
-  const RHO_ROWS = [['floor', 'Пол'], ['walls', 'Стены (непрозрачные, без окон)'], ['ceil', 'Потолок'], ['win', 'Окна']];
-  function rhoMode(st) {
-    if (['default', 'surf', 'manual', 'legacy'].includes(st.rhoMode)) return st.rhoMode;
-    // прежний формат (нет rhoMode): происхождение числа неизвестно (0,55 могло быть введено вручную или получено расчётом) —
-    // число сохраняется, источник не подтверждён, пока пользователь не выберет режим
-    return 'legacy';
-  }
-  // переключение источника ρср; при переходе в «вручную» применённое значение прежнего режима переносится в поле
-  function setRhoMode(st, v) {
-    // значение берётся по режиму ДО переключения (иначе проверка видит уже «вручную» и переносить нечего)
-    if (v === 'manual' && st.rhoMode !== 'manual') { const rh = rhoOf(st); if (!rh.err.length && Number.isFinite(rh.v)) st.rho = rh.v; }
-    st.rhoMode = v;
-    return st;
-  }
-  // оболочка комнаты (один раз на помещение) по подтверждённой геометрии прямоугольной комнаты с плоским потолком
-  function roomShell(st) {
-    const err = [], warn = [];
-    if (st.mode === 'side') {
-      const W = st.side.walls, a = +W[0].dp, b = +W[0].bp, H = +W[0].H;
-      W.slice(1).forEach((w, i) => {
-        const same = Math.abs(+w.H - H) < 0.005 && ((Math.abs(+w.dp - a) < 0.005 && Math.abs(+w.bp - b) < 0.005) || (Math.abs(+w.dp - b) < 0.005 && Math.abs(+w.bp - a) < 0.005));
-        if (!same) err.push(`ρср по поверхностям: габариты стены ${i + 2} (${f(w.dp)} × ${f(w.bp)} × ${f(w.H)} м) не согласуются со стеной 1 (${f(a)} × ${f(b)} × ${f(H)} м) — оболочку комнаты нельзя определить однозначно. Исправьте dп, bп, H или задайте площади ручной ведомостью.`);
-      });
-      return { a, b, H, walls: W.map(w => ({ len: +w.bp, H: +w.H, windows: w.windows })), err, warn };
-    }
-    const T = st.top;
-    return { a: +T.L, b: +T.B, H: +T.H, walls: st.mode === 'comb' ? [{ len: +T.B, H: +T.H, windows: st.side.walls[0].windows }] : [], err, warn };
-  }
-  function windowsArea(shell) {
-    const err = []; let S = 0;
-    shell.walls.forEach((w, wi) => {
-      const pre = shell.walls.length > 1 ? `стена ${wi + 1}, ` : '';
-      const box = w.windows.map((x, i) => ({ i, y0: +x.s - +x.bo / 2, y1: +x.s + +x.bo / 2, z0: +x.hpd, z1: +x.hpd + +x.ho }));
-      box.forEach(o => {
-        if (!(o.y1 > o.y0 && o.z1 > o.z0)) return;
-        S += (o.y1 - o.y0) * (o.z1 - o.z0);
-        if (o.y0 < -w.len / 2 - 0.005 || o.y1 > w.len / 2 + 0.005 || o.z0 < -0.005 || o.z1 > w.H + 0.005) err.push(`ρср по поверхностям: ${pre}проём ${o.i + 1} выходит за пределы стены ${f(w.len)} × ${f(w.H)} м — площадь стен определить нельзя`);
-      });
-    });
-    return { S, err };
-  }
-  // перекрытие проёмов на развёртке стены — ошибка исходных данных при любом источнике ρср:
-  // свет через общий участок (и его площадь в ρср) был бы учтён дважды
-  function windowOverlaps(windows) {
-    const box = windows.map((x, i) => ({ i, y0: +x.s - +x.bo / 2, y1: +x.s + +x.bo / 2, z0: +x.hpd, z1: +x.hpd + +x.ho })), out = [];
-    for (let p = 0; p < box.length; p++) for (let q = p + 1; q < box.length; q++) {
-      const A = box[p], B = box[q];
-      if (Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.005 && Math.min(A.z1, B.z1) - Math.max(A.z0, B.z0) > 0.005) out.push(`Проёмы ${A.i + 1} и ${B.i + 1} перекрываются — свет и площадь окон были бы учтены дважды; проверьте s, bо, hпд, hо`);
-    }
-    return out;
-  }
-  function rhoOf(st) {
-    const mode = rhoMode(st), top = st.mode === 'top', err = [], warn = [];
-    const tabRef = st.mode === 'side' ? 'примечание 2 к табл. Б.6 (точка на УРП) / Б.7 (точка на полу)' : st.mode === 'top' ? 'табл. Б.21 (r2: пол, стены, потолок)' : 'примечание 2 к табл. Б.6/Б.7 и табл. Б.21';
-    if (mode === 'default') return { v: 0.55, exact: 0.55, mode, label: `0,55 — коэффициенты отражения отделки неизвестны: для жилых и общественных зданий ρср = 0,55 (СП 367.1325800.2025, примечание 2 к табл. Б.6/Б.7)`, err, warn };
-    if (mode === 'manual') {
-      const r = readNum(st.rho);
-      if (r.st !== 'num' || !(r.v > 0 && r.v < 1)) err.push(`ρср: ${r.st === 'empty' ? 'режим «вручную», значение не введено' : r.st === 'invalid' ? `«${r.raw}» — не число` : `${f(r.v)} — должно быть больше 0 и меньше 1`}`);
-      return { v: r.v, exact: r.v, mode, label: `задано вручную: ${st.rhoBasis ? st.rhoBasis : 'основание не указано'}`, err, warn };
-    }
-    if (mode === 'legacy') {
-      const rc = st.rhoCalc, ok = rc && rc.on && rc.s && Math.abs(rc.s.reduce((a, x) => a + (+x[0] || 0) * (+x[1] || 0), 0) / (rc.s.reduce((a, x) => a + (+x[0] || 0), 0) || 1) - +st.rho) < 0.0005;
-      const r = readNum(st.rho); if (r.st !== 'num' || !(r.v > 0 && r.v < 1)) err.push('ρср: в файле нет корректного значения — выберите режим');
-      return { v: r.v, exact: r.v, mode, label: ok ? `источник не подтверждён: файл прежней версии, ρср = ${f(r.v, 3)} совпадает с помощником (площади ${rc.s.map(x => f(x[0], 1)).join(' / ')} м² и ρ ${rc.s.map(x => f(x[1])).join(' / ')} — происхождение площадей и коэффициентов не подтверждено)` : 'источник не подтверждён (файл прежней версии); выберите режим ρср', err, warn };
-    }
-    // surf
-    const rows = [];
-    const rs = st.rhoSurf || {};
-    if (st.rhoGeo === 'manual') {
-      (st.rhoRows || []).forEach((x, i) => rows.push({ key: 'r' + i, name: x.name || `Поверхность ${i + 1}`, S: readNum(x.S), Sauto: null, man: true, rho: readNum(x.rho), src: x.src || '' }));
-      if (!rows.length) err.push('ρср по поверхностям: ведомость площадей пуста');
-    } else {
-      const sh = roomShell(st); sh.err.forEach(e => err.push(e));
-      if (!(sh.a > 0 && sh.b > 0 && sh.H > 0)) err.push('ρср по поверхностям: нужны размеры помещения больше нуля');
-      const wa = windowsArea(sh); wa.err.forEach(e => err.push(e));
-      const keys = top ? RHO_ROWS.slice(0, 3) : RHO_ROWS;
-      const man = k => readNum(rs[k] && rs[k].S);
-      const Swin = man('win').st === 'num' ? man('win').v : wa.S;
-      const auto = { floor: sh.a * sh.b, ceil: sh.a * sh.b, win: wa.S, walls: 2 * (sh.a + sh.b) * sh.H - (top ? 0 : Swin) };
-      const how = { floor: `a × b = ${f(sh.a)} × ${f(sh.b)}`, ceil: `a × b = ${f(sh.a)} × ${f(sh.b)} (плоский потолок)`, win: 'Σ bо × hо по проёмам (наружный обмер коробки, п. Б.2.7)', walls: top ? `2·(a + b)·H = 2·(${f(sh.a)} + ${f(sh.b)})·${f(sh.H)}` : `2·(a + b)·H − Sок = 2·(${f(sh.a)} + ${f(sh.b)})·${f(sh.H)} − ${f(Swin)}` };
-      keys.forEach(([k, name]) => { const m = man(k); rows.push({ key: k, name: top && k === 'walls' ? 'Стены' : name, S: m.st === 'empty' ? { st: 'num', v: auto[k] } : m, Sauto: auto[k], man: m.st !== 'empty', how: how[k], rho: readNum(rs[k] && rs[k].rho), src: (rs[k] && rs[k].src) || '' }); });
-      if (rows.some(x => x.man)) warn.push('ρср: часть площадей задана вручную — при изменении размеров помещения они не пересчитываются.');
-    }
-    rows.forEach(x => {
-      if (x.S.st !== 'num') err.push(`ρср: ${x.name} — площадь ${x.S.st === 'invalid' ? `«${x.S.raw}» не число` : 'не задана'}`);
-      else if (x.S.v < 0) err.push(`ρср: ${x.name} — отрицательная площадь ${f(x.S.v)} м²${x.key === 'walls' && !x.man ? ' (окна больше площади стен — проверьте размеры)' : ''}`);
-      if (x.rho.st !== 'num') err.push(`ρср: ${x.name} — укажите коэффициент отражения ρ${x.rho.st === 'invalid' ? ` («${x.rho.raw}» не число)` : ''}`);
-      else if (!(x.rho.v >= 0 && x.rho.v < 1)) err.push(`ρср: ${x.name} — ρ = ${f(x.rho.v)} вне диапазона 0…1`);
-    });
-    const sS = rows.reduce((a, x) => a + (x.S.st === 'num' ? x.S.v : 0), 0);
-    if (!err.length && !(sS > 0)) err.push('ρср: сумма площадей равна нулю — ρср не определяется');
-    const exact = err.length ? NaN : rows.reduce((a, x) => a + x.S.v * x.rho.v, 0) / sS;
-    const v = err.length ? NaN : round2(exact);
-    return { v, exact, mode, rows, sumS: sS, geo: st.rhoGeo === 'manual' ? 'manual' : 'auto', label: `по поверхностям: формула (3.6), п. 3.13 СП 367; состав — ${tabRef}; ρср = ${f(exact, 4)}, принято ${f(v)} (округление до сотых)`, err, warn };
-  }
-
-  // загрузка сохранённого состояния (в т. ч. прежних версий): недостающие поля — по умолчанию, но ρ и режимы
-  // исключений восстанавливаются из самих данных, а не подменяются значениями по умолчанию; notes — что пришлось истолковать
-  function migrate(o) {
-    const d = defaultState();
-    const st = { ...d, ...o, meta: { ...d.meta, ...o.meta }, top: { ...d.top, ...o.top, b2: (o.top && o.top.b2) || d.top.b2, sys: (o.top && o.top.sys) || 'shaft' }, side: { ...d.side, ...o.side }, comb: { ...d.comb, ...o.comb }, rhoCalc: { ...d.rhoCalc, ...o.rhoCalc }, rhoSurf: { ...d.rhoSurf, ...(o.rhoSurf || {}) }, dan: { ...d.dan, ...(o.dan || {}) } };
-    const notes = [];
-    if (!o.rhoMode) {
-      st.rhoMode = rhoMode(o);
-      if (o.rho === undefined || o.rho === null || o.rho === '') { st.rho = null; notes.push('ρср: в файле прежней версии значения нет — выберите режим'); }
-      else notes.push(`ρср = ${f(+o.rho, 3)} из файла прежней версии — источник не подтверждён; значение сохранено`);
-    }
-    st.side.walls.forEach(w => { if (w.kManual === undefined) w.kManual = null; if (w.kBasis === undefined) w.kBasis = ''; w.windows.forEach(x => { if (x.tau0b === undefined) x.tau0b = ''; if (x.Kb === undefined) x.Kb = ''; }); });
-    migrateWindows(st).forEach(n => notes.push(n));
-    return { st, notes };
-  }
-
-  const MODE_TXT = { wall: 'по общим параметрам стены', manual: 'вручную', none: 'по общим параметрам стены', table: 'по общим параметрам стены' };
+  function tau1Wall(w) { return w.t1c !== null && w.t1c !== '' && !isNaN(w.t1c) ? +w.t1c : DATA.tau1[w.t1].v; }
 
   /* ---------- входные данные для движка ---------- */
   function sideInput(st, overrides) {
     const g = groupOf(st), hp = hpOf(st), rule = rtOf(st);
     const walls = st.side.walls.map(w => {
       const lt = rule === 'manual' ? +w.lt : ltAuto(rule, +w.dp);
-      const o = { orient: w.orient, bp: +w.bp, dp: +w.dp, H: +w.H, lt, ds: +w.ds || 0, dst: +w.dst, kPos: rule === 'center' ? 'center' : 'wall1', MF: mfOf(st, 3), ...(overrides || {}) };
-      const gen = wallCoef(st, w, o.dp);
-      o.windows = w.windows.map((x, i) => {
-        const c = winCoef(gen, x, i);
-        return { hpd: +x.hpd, ho: +x.ho, bo: +x.bo, s: +x.s, t1: c.t1, t2: c.t2.v, t4: c.t4, t5: c.t5, tau0: c.tau0.v, K: c.K.v, kType: w.kType, kDepth: +w.kDepth, tau0src: c.tau0.src, Ksrc: c.K.src, coef: c };
-      });
-      o.buildings = w.buildings.map(b => ({ l: +b.l, Hp: +b.Hp, a: +b.a, off: +b.off || 0, rhoF: +b.rhoF }));
-      o.gen = gen;
-      return o;
+      const t1 = tau1Wall(w), t2 = DATA.tau2[w.t2].v, t4 = DATA.tau4[w.t4].v;
+      return {
+        orient: w.orient, bp: +w.bp, dp: +w.dp, H: +w.H, lt, ds: +w.ds || 0, dst: +w.dst, kPos: rule === 'center' ? 'center' : 'wall1',
+        MF: mfOf(st, 3),
+        windows: w.windows.map(x => ({ hpd: +x.hpd, ho: +x.ho, bo: +x.bo, s: +x.s, t1, t2: x.t2o ? +x.t2o : t2, t4, t5: +w.t5 || 1, tau0: x.tau0o ? +x.tau0o : undefined, K: x.Ko ? +x.Ko : (w.kType === 'none' ? 1 : undefined), kType: w.kType, kDepth: +w.kDepth })),
+        buildings: w.buildings.map(b => ({ l: +b.l, Hp: +b.Hp, a: +b.a, off: +b.off || 0, rhoF: +b.rhoF })),
+        ...(overrides || {})
+      };
     });
-    return { group: g, rho: rhoOf(st).v, hp, MF: mfOf(st, 3), walls };
-  }
-  // ошибки ручных коэффициентов (до выдачи результата)
-  function coefErrors(st, warn) {
-    const walls = st.mode === 'comb' ? st.side.walls.slice(0, 1) : st.side.walls, err = [];
-    const dp = w => st.mode === 'comb' ? +st.top.L : +w.dp;
-    walls.forEach((w, wi) => {
-      const pre = walls.length > 1 ? `Стена ${wi + 1}. ` : '';
-      const gen = wallCoef(st, w, dp(w));
-      gen.err.forEach(e => err.push(pre + e));
-      w.windows.forEach((x, i) => { const c = winCoef(gen, x, i); c.err.forEach(e => err.push(pre + e)); if (warn) c.warn.forEach(e => warn.push(pre + e)); });
-    });
-    return err;
+    return { group: g, rho: +st.rho, hp, MF: mfOf(st, 3), walls };
   }
   function topPoints(st) {
     const T = st.top, L = +T.L, B = +T.B, y0 = T.y0 !== null && T.y0 !== '' ? +T.y0 : B / 2;
@@ -1717,7 +1338,7 @@ const KEO = (function () {
   function topInput(st) {
     const T = st.top, g = groupOf(st);
     return {
-      group: g, rho: rhoOf(st).v, H: +T.H, hurp: hpOf(st), spans: +T.spans || 1, l1: T.l1 ? +T.l1 : +T.B,
+      group: g, rho: +st.rho, H: +T.H, hurp: hpOf(st), spans: +T.spans || 1, l1: T.l1 ? +T.l1 : +T.B,
       points: topPoints(st),
       types: T.types.map(t => ({
         name: t.name, shape: t.shape, av: +t.av, bv: +t.bv, an: +t.an, bn: +t.bn, dv: +t.dv, dn: +t.dn, hsf: +t.hsf, refl: t.refl, rhoW: +t.rhoW,
@@ -1730,7 +1351,7 @@ const KEO = (function () {
   function b2Input(st) {
     const T = st.top, g = groupOf(st), B = +T.B, L = +T.L, spans = +T.spans || 1;
     return {
-      group: g, rho: rhoOf(st).v, L, W: B, Hk: +T.H, hurp: hpOf(st), spans, l1: T.l1 ? +T.l1 : L / spans,
+      group: g, rho: +st.rho, L, W: B, Hk: +T.H, hurp: hpOf(st), spans, l1: T.l1 ? +T.l1 : L / spans,
       y0: T.y0 !== null && T.y0 !== '' ? +T.y0 : B / 2, points: topPoints(st),
       types: (T.b2 || []).map(t => {
         const tt = { name: t.name, kind: t.kind, b: +t.b, hst: +t.hst || 0, ho: t.kind === 'A' ? (+t.b / 2) * Math.tan(+t.beta * Math.PI / 180) : +t.ho, beta: +t.beta, face: t.face || 'R',
@@ -1746,15 +1367,11 @@ const KEO = (function () {
   function validate(st) {
     const err = [], warn = [];
     const pos = (v, n) => { if (!(+v > 0)) err.push(`${n}: нужно положительное число`); };
-    const rh = rhoOf(st); rh.err.forEach(e => err.push(e)); rh.warn.forEach(e => warn.push(e));
-    if (rh.mode === 'legacy') warn.push('ρср: источник не подтверждён (файл прежней версии) — выберите режим «0,55», «По поверхностям» или «Вручную».');
-    if (st.mode !== 'top') { coefErrors(st, warn).forEach(e => err.push(e)); migrateWindows(JSON.parse(JSON.stringify({ side: st.side }))).forEach(n => warn.push(n)); }
     if (st.mode !== 'top') {
       const walls = st.mode === 'comb' ? st.side.walls.slice(0, 1) : st.side.walls;
       walls.forEach((w, wi) => {
         const pre = walls.length > 1 ? `Стена ${wi + 1}. ` : '';
         if (st.mode === 'side') { pos(w.dp, pre + 'Глубина помещения dп'); pos(w.bp, pre + 'Ширина помещения bп'); }
-        windowOverlaps(w.windows).forEach(e => err.push(pre + e));
         if (!(+w.dst >= 0)) err.push(pre + 'Толщина стены Δст должна быть ≥ 0');
         if (!w.windows.length) err.push(pre + 'Добавьте хотя бы один световой проём');
         w.windows.forEach((x, i) => { if (!(+x.ho > 0 && +x.bo > 0 && +x.hpd >= 0)) err.push(`${pre}Окно ${i + 1}: проверьте hпд, hо, bо`); });
@@ -1851,7 +1468,7 @@ const KEO = (function () {
 
     // 1. исходные
     M.push({ type: 'h2', text: '1. Нормативные требования' });
-    const rt = rtOf(st), rh = rhoOf(st);
+    const rt = rtOf(st);
     M.push({ type: 'kv', rows: [
       ['Место строительства', '', st.groupManual ? '—' : st.region, `Группа административного района N = ${g} (СП 52.13330.2016, прил. Е)`],
       ['Назначение помещения', '', n.room ? `п. ${n.room.n}` : '—', n.room ? `${n.room.name} (${n.room.g})` : 'задано вручную'],
@@ -1859,9 +1476,8 @@ const KEO = (function () {
       ['Нормируемое значение КЕО', 'e_{н}', n.v === null ? 'не нормир.' : f(n.v) + ' %', n.manual ? 'задано вручную' : `${n.src}; графа «${n.colName}»`],
       ['Высота расчётной поверхности', 'hр', f(hpOf(st)) + ' м', st.hpManual !== null && st.hpManual !== '' ? 'задано вручную' : 'плоскость нормирования по табл. А.1'],
       ...(st.mode === 'side' ? [['Положение расчётной точки', '', '', `${RT_TEXT[rt]} (${RT_REF[rt]})`]] : [['Расчётные точки', 'N', String(r.e ? r.e.length : ''), 'на пересечении характерного разреза и УРП, первая и последняя — в 1 м от стен (п. 5.5 СП 52.13330.2016, п. 8.5.2 СП 367)']]),
-      ['Средневзвешенный коэффициент отражения', 'ρ_{ср}', f(rh.v), rh.label + (st.mode === 'comb' ? '. В комбинированном режиме одно ρср применено и к r0 (табл. Б.6/Б.7: пол, стены, потолок, окна), и к r2 (табл. Б.21: пол, стены, потолок)' : '')]
+      ['Средневзвешенный коэффициент отражения', 'ρ_{ср}', f(st.rho), st.rhoCalc.on ? 'по формуле (3.6) СП 367' : 'п. 5.10 СП 52.13330.2016 (для жилых и общественных — 0,55)']
     ] });
-    if (rh.mode === 'surf') rhoTable(M, st, rh);
 
     if (st.mode === 'side') sideModel(M, st, C, r);
     else if (st.mode === 'top' && isB2(st)) b2Model(M, st, C, r);
@@ -1879,13 +1495,6 @@ const KEO = (function () {
     return M;
   }
 
-  function rhoTable(M, st, rh) {
-    const rows = rh.rows.map(x => [x.name, f(x.S.v), x.man ? (rh.geo === 'manual' ? 'ведомость (вручную)' : `вручную${x.key === 'walls' ? ' — без окон' : ''}; авто было бы ${f(x.Sauto)}`) : `авто: ${x.how}`, f(x.rho.v), x.src || 'не указан', f(x.S.v * x.rho.v, 3)]);
-    rows.push(['Итого', f(rh.sumS), '', '', '', f(rh.exact * rh.sumS, 3)]);
-    M.push({ type: 'table', title: 'Средневзвешенный коэффициент отражения ρср по поверхностям помещения', cols: [{ h: 'Поверхность', w: 24 }, { h: 'S, м²', w: 10, a: 'center' }, { h: 'Площадь: источник', w: 34 }, { h: 'ρ', w: 8, a: 'center' }, { h: 'ρ: источник', w: 26 }, { h: 'ρ·S', w: 10, a: 'center' }], rows,
-      note: `ρср = Σ ρi·Si / Σ Si = ${f(rh.exact * rh.sumS, 3)} / ${f(rh.sumS)} = ${f(rh.exact, 4)} → принято ${f(rh.v)} (округление до сотых, как прочие аргументы табл. Б.6/Б.7 и Б.21). Формула (3.6), п. 3.13 СП 367.1325800.2025 — общее определение; состав поверхностей при боковом освещении — примечание 2 к табл. Б.6/Б.7 (пол, стены, потолок, окна; коэффициенты — по данным измерений), для r2 верхнего света — табл. Б.21 (пол, стены, потолок). ${rh.geo === 'manual' ? 'Площади — по ручной ведомости (сложный контур, наклонный потолок, ниши): автоматический расчёт не применяется.' : 'Площади — для прямоугольного помещения с плоским потолком; площадь окон — по наружному обмеру коробки (п. Б.2.7), приближение для внутренней поверхности.'}` });
-  }
-
   function sideModel(M, st, C, r) {
     r.walls.forEach((w, wi) => {
       const W = st.side.walls[wi], inp = w.inp;
@@ -1901,30 +1510,26 @@ const KEO = (function () {
         ['Суммарная ширина проёмов с простенками', 'b_{с.п}', f(w.bsp) + ' м', '']
       ] });
       M.push({ type: 'table', title: 'Параметры светопроёмов', cols: [{ h: '№', w: 7, a: 'center' }, { h: 'hпд, м', w: 13, a: 'center' }, { h: 'hо, м', w: 13, a: 'center' }, { h: 'bо, м', w: 13, a: 'center' }, { h: 's, м', w: 13, a: 'center' }, { h: 'τ1', w: 11, a: 'center' }, { h: 'τ2', w: 11, a: 'center' }, { h: 'τ4', w: 11, a: 'center' }, { h: 'τ5', w: 11, a: 'center' }, { h: 'τо', w: 13, a: 'center' }, { h: 'K', w: 12, a: 'center' }],
-        rows: w.wins.map((x, i) => { const c = x.w.coef, um = c && c.tau0.mode === 'manual'; return [i + 1, f(x.w.hpd), f(x.w.ho), f(x.w.bo), f(x.w.s), um ? '—' : f(x.w.t1), um ? '—' : f(x.w.t2) + (c && c.t2.mode === 'manual' ? '*' : ''), um ? '—' : f(x.w.t4), um ? '—' : f(x.w.t5 || 1), f(x.tau0, 4) + (um ? '*' : ''), f(x.K) + (c && c.K.mode === 'manual' && c.modes.K === 'manual' ? '*' : '')]; }),
-        note: 's — смещение оси проёма от оси помещения (вправо — плюс, если смотреть из помещения на окно); hпд — высота подоконника от пола; hо — высота проёма. * — значение задано для проёма вручную (исключение из общих параметров стены); «—» — множитель не используется, т. к. τо проёма задан вручную. Происхождение каждого значения — в таблице «Происхождение τо и K».' });
+        rows: w.wins.map((x, i) => [i + 1, f(x.w.hpd), f(x.w.ho), f(x.w.bo), f(x.w.s), f(x.w.t1), f(x.w.t2), f(x.w.t4), f(x.w.t5 || 1), f(x.tau0, 4), f(x.K)]),
+        note: 's — смещение оси проёма от оси помещения (вправо — плюс, если смотреть из помещения на окно); hпд — высота подоконника от пола; hо — высота проёма.' });
       if (wi === 0) M.push({ type: 'scheme', schemes: [Schemes.sideSection(inp, w), Schemes.sidePlan(inp, w)], caption: 'Схема расчётного помещения: разрез по характерной плоскости и план (жёлтым — видимый из точки А участок неба). Масштаб условный.' });
 
       M.push({ type: 'h2', text: `${3 + wi * 3}. ${pre}Коэффициенты` });
-      const t0 = w.wins[0], gen = inp.gen;
-      const anyExc = w.wins.some(x => x.w.coef && (x.w.coef.modes.tau0 === 'manual' || x.w.coef.modes.K === 'manual' || x.w.coef.modes.t2 === 'manual'));
+      const t0 = w.wins[0];
+      const Ksrc = W.kType === 'none' ? 'нет затеняющих элементов фасада' : `${t0.Kinfo.title || K_TITLES[W.kType]}, глубина ${f(W.kDepth)} м; табл. ${t0.Kinfo.tab} СП 367 (интерполяция/экстраполяция по глубине помещения ${f(inp.dp)} м, точка — ${inp.kPos === 'center' ? 'в центре' : '1 м от стены'})`;
       M.push({ type: 'kv', rows: [
         ['Коэффициент светового климата', 'C_{N}', f(w.CN), `СП 52.13330.2016, табл. 5.1: группа ${C.group}, ориентация ${w.orient} (строка «${w.CNrow}»)`],
         ['Коэффициент эксплуатации', 'MF', f(w.MF), `СП 367, табл. 5.1: ${st.env === 'normal' ? 'нормальные условия среды' : 'пыльные, жаркие и сырые помещения'}, вертикальное остекление 76°–90°${st.glassMult !== 1 ? `, × ${f(st.glassMult)}` : ''}`],
-        ['Светопропускание материала', 'τ_{1}', f(gen.t1.v), gen.t1.src],
-        ['Потери в переплётах', 'τ_{2}', f(gen.t2.v), gen.t2.src + (w.wins.some(x => x.w.coef && x.w.coef.modes.t2 === 'manual') ? '; для отдельных проёмов τ2 задан вручную — см. таблицы ниже' : '')],
+        ['Светопропускание материала', 'τ_{1}', f(t0.w.t1), W.t1c ? 'по данным производителя' : `${DATA.tau1[W.t1].t} (${DATA.tau1[W.t1].r}); табл. Б.13/Б.14 — принято нижнее значение`],
+        (W.windows.some(x => x.t2o) ? ['Потери в переплётах', 'τ_{2}', 'по проёмам', 'заданы для каждого проёма — см. таблицу параметров светопроёмов; табл. Б.15'] : ['Потери в переплётах', 'τ_{2}', f(DATA.tau2[W.t2].v), `${DATA.tau2[W.t2].t}; табл. Б.15`]),
         ['Потери в несущих конструкциях', 'τ_{3}', '1,00', 'при боковом освещении (п. Б.2.7)'],
-        ['Потери в солнцезащитных устройствах', 'τ_{4}', f(gen.t4.v), gen.t4.src],
-        ['Общий коэффициент пропускания — по общим параметрам стены', 'τ_{о}', f(gen.tau0, 4), `τо = τ1·τ2·τ3·τ4·τ5 = ${f(gen.t1.v)}·${f(gen.t2.v)}·1,00·${f(gen.t4.v)}·${f(gen.t5.v)} (формула (Б.8) СП 367)`],
-        ['Потери в элементах фасада — по общим параметрам стены', 'K', f(gen.K.v), gen.K.src],
-        ['Применено в расчёте', 'τ_{о}, K', anyExc ? 'по проёмам' : `${f(t0.tau0, 4)}; ${f(t0.K)}`, anyExc ? 'для части проёмов заданы исключения — см. «Происхождение τо и K по проёмам»' : 'все проёмы — по общим параметрам стены'],
+        ['Потери в солнцезащитных устройствах', 'τ_{4}', f(DATA.tau4[W.t4].v), `${DATA.tau4[W.t4].t}; табл. Б.16`],
+        ['Общий коэффициент пропускания', 'τ_{о}', w.wins.every(x => Math.abs(x.tau0 - t0.tau0) < 1e-9) ? f(t0.tau0, 4) : 'по проёмам', 'τо = τ1·τ2·τ3·τ4·τ5 (Б.8)'],
+        ['Потери в элементах фасада', 'K', f(t0.K), Ksrc],
         ['Высота верха окна над УРП', 'h_{01}', f(w.h01) + ' м', w.onFloor ? 'h01 = hв.о − 0,8 (для точки на полу — от условной рабочей поверхности, заголовок табл. Б.7)' : 'h01 = hв.о − hр'],
-        ['Отражённый свет помещения', 'r_{0}', f(w.r0, 4), `табл. ${w.r0info.table}: dп/h01 = ${f(w.dh)}; lт/dп = ${f(w.ld)}; bп/dп = ${f(w.bd)}; ρср = ${f(rhoOf(st).v)}; линейная интерполяция${w.r0info.notes.length ? '. ' + w.r0info.notes.join('; ') : ''}`]
+        ['Отражённый свет помещения', 'r_{0}', f(w.r0, 4), `табл. ${w.r0info.table}: dп/h01 = ${f(w.dh)}; lт/dп = ${f(w.ld)}; bп/dп = ${f(w.bd)}; ρср = ${f(st.rho)}; линейная интерполяция${w.r0info.notes.length ? '. ' + w.r0info.notes.join('; ') : ''}`]
       ] });
 
-      M.push({ type: 'table', title: 'Происхождение τо и K по проёмам (применённые значения)', cols: [{ h: '№', w: 6, a: 'center' }, { h: 'τо', w: 10, a: 'center' }, { h: 'Источник τо', w: 52 }, { h: 'K', w: 8, a: 'center' }, { h: 'Источник K', w: 52 }],
-        rows: w.wins.map((x, i) => [i + 1, f(x.tau0, 4), x.w.tau0src || 'τо = τ1·τ2·τ3·τ4·τ5 (Б.8)', f(x.K), x.w.Ksrc || '—']),
-        note: 'Приоритет: значение, заданное для проёма вручную, заменяет общее (не умножается на него); ручной τо заменяет всё произведение τ1…τ5; τ2 проёма участвует только при автоматическом τо. Проёмы без исключений следуют общим параметрам стены.' });
       M.push({ type: 'h2', text: `${4 + wi * 3}. ${pre}Геометрический КЕО` });
       M.push({ type: 'p', text: 'Число лучей по графикам I и II А.М. Данилюка (рис. 8.8, 8.10 СП 367) определено аналитически — по формулам, по которым построены графики: n1 = 50·(cos θн − cos θв), где θн, θв — углы возвышения нижней и верхней границ видимого участка в разрезе; n2 = (100/π)·[ψ + ½·sin 2ψ] между границами участка в плане, где tg ψ = y / R, R — расстояние от точки до середины участка C. Число лучей округлено до десятых долей луча, как при подсчёте по графику. Угол γ — угловая высота середины участка неба. q(γ) — по формуле (3.2).', small: true });
       M.push({ type: 'formula', lines: ['ε_{б} = 0,01·n_{1}·n_{2}  (Б.11);    q(γ) = 0,429·[1 + 4·exp(−0,7 / sin γ)]  (3.2)'] });
@@ -1939,7 +1544,6 @@ const KEO = (function () {
           rows: w.blds.map((b, i) => [i + 1, f(b.l), f(b.Hp), f(b.a), f(b.rhoF), f(b.la), f(b.aH), f(b.bfv), f(b.z1), f(b.z2), f(b.kzd0v), f(b.kzd, 3)]),
           note: `bф — табл. Б.1; z1 = a·(lт + Δст) / ((l + lт + Δст)·bс.п), z2 = Hр·(lт + Δст) / ((l + lт + Δст)·(hо + hпд)) — рис. Б.4; Kзд0 — табл. Б.8 при (lт + Δст)/dп = ${f(w.ldOut)}; Kзд = 1 + (Kзд0 − 1)·Σεзд / (Σεб + Σεзд) (Б.7), Σεб = ${f(w.sumEb, 4)}, Σεзд = ${f(w.sumEzd, 4)}.` });
       }
-      if (wi === danSel(st, r).wall) { const db = danBlocks(st, C); if (db) M.push(db); }
       M.push({ type: 'h3', text: 'Расчётное значение КЕО — формула (Б.1)' });
       M.push({ type: 'formula', lines: ['e_{р}^{б} = C_{N}·[Σ ε_{б}·q(γ) + Σ ε_{зд}·b_{ф}·K_{зд}]·r_{0}·τ_{о}·K·MF'], src: 'СП 367.1325800.2025, прил. Б, формула (Б.1). Для проёмов с разными τо и K расчёт выполнен по каждому проёму, результаты суммированы.' });
       const lines = w.wins.map((x, i) => `проём ${i + 1}: ${f(w.CN)}·(${f(x.sumSky, 4)} + ${f(x.sumBld, 4)})·${f(w.r0, 4)}·${f(x.tau0, 4)}·${f(x.K)}·${f(w.MF)} = ${f(x.e, 4)} %`);
@@ -1948,44 +1552,6 @@ const KEO = (function () {
     });
     if (r.walls.length > 1) M.push({ type: 'formula', lines: [`e_{р} = ${r.walls.map(w => f(w.e, 4)).join(' + ')} = ${f(r.e, 4)} ≈ ${f(r.eR)} %`], src: 'Световые проёмы различной ориентации: КЕО от каждой стены рассчитан отдельно и просуммирован (п. 8.4.1, примечание, СП 367).' });
     else M.push({ type: 'formula', lines: [`e_{р} = ${f(r.e, 4)} ≈ ${f(r.eR)} %`] });
-  }
-
-  /* ---------- проверка по графикам Данилюка: выбранные стена / проём / участок ---------- */
-  function danSel(st, r) {
-    const d = st.dan || {}, wi = Math.min(Math.max(0, +d.wall || 0), r.walls.length - 1), w = r.walls[wi];
-    const ki = Math.min(Math.max(0, +d.win || 0), w.wins.length - 1), n = w.wins[ki].sectors.length;
-    return { wall: wi, win: ki, sec: n ? Math.min(Math.max(0, +d.sec || 0), n - 1) : 0 };
-  }
-  function danCheck(st, C) {
-    if (!C || !C.ok || st.mode !== 'side') return null;
-    const r = C.res, sel = danSel(st, r), w = r.walls[sel.wall], raw = w.inp, x = w.wins[sel.win];
-    const d = Schemes.DAN.sectors(raw, raw.windows[sel.win], raw.buildings), e = d.edges, dg = a => a * 180 / Math.PI;
-    const same = d.list.length === x.sectors.length;
-    const nm = (s, k) => s.type === 'sky' ? `небо ${k + 1}` : `здание ${s.bld + 1}`;
-    const geo = d.list.map((s, k) => { const c = x.sectors[k] || {};
-      return { k, cells: [nm(s, k), `${f(dg(s.ta), 2)}…${f(dg(s.tb), 2)}`, `${f(s.r1a, 1)} / ${f(s.r1b, 1)}`, f(s.n1g, 1), f(c.n1raw, 3), f(c.n1, 1), f(s.R, 3), `${f(s.ya, 3)}…${f(s.yb, 3)}`, `${f(s.r2a, 1)} / ${f(s.r2b, 1)}`, f(s.n2g, 1), f(c.n2raw, 3), f(c.n2, 1)] }; });
-    const val = x.sectors.map((c, k) => { const bl = c.type === 'bld' ? w.blds[c.bld] : null, eq = bl ? c.eps * bl.bfv * bl.kzd : c.eps * c.q;
-      return { k, cells: [nm(c, k), f(c.eps, 4), f(c.gamma, 2), bl ? '—' : f(c.q, 4), bl ? `${f(c.eps, 4)}·${f(bl.bfv)}·${f(bl.kzd, 3)} = ${f(eq, 4)}` : f(eq, 4), f(w.CN * eq * w.r0 * x.tau0 * x.K * w.MF, 4)] }; });
-    const dev = { n1: 0, n2: 0, raw: 0 };
-    d.list.forEach((s, k) => { const c = x.sectors[k]; if (!c) return; dev.n1 = Math.max(dev.n1, Math.abs(s.n1g - c.n1)); dev.n2 = Math.max(dev.n2, Math.abs(s.n2g - c.n2)); dev.raw = Math.max(dev.raw, Math.abs(s.n1a - c.n1raw), Math.abs(s.n2a - c.n2raw)); });
-    const eTxt = `Ограничивающие рёбра проёма ${sel.win + 1}: снизу — ${e.lo.n}${e.lo.n.startsWith('горизонт') ? '' : ' (подоконник)'}, θн = ${f(dg(e.lo.a), 2)}°; сверху — ${e.hi.n} (перемычка), θв = ${f(dg(e.hi.a), 2)}°; в плане слева — ${e.L.n}, справа — ${e.R.n} (откосы). Расстояние от А до наружной грани D = lт + Δст = ${f(e.D, 3)} м.`;
-    return { sel, w, x, raw, d, same, geo, val, dev, eTxt, scheme: Schemes.danScheme(raw, sel.win, d, sel.sec), title: `${r.walls.length > 1 ? `стена ${sel.wall + 1}, ` : ''}проём ${sel.win + 1}${d.list[sel.sec] ? ', участок ' + nm(d.list[sel.sec], sel.sec) : ''}` };
-  }
-  const DAN_GEO_COLS = [{ h: 'Участок', w: 11 }, { h: 'θн…θв, °', w: 14, a: 'center' }, { h: 'Отсчёт гр. I у θн / θв', w: 12, a: 'center' }, { h: 'n1 по графику', w: 8, a: 'center' }, { h: 'n1 аналит. до округл.', w: 10, a: 'center' }, { h: 'n1 в расчёте', w: 8, a: 'center' }, { h: 'R, м', w: 8, a: 'center' }, { h: 'y1…y2 на грани, м', w: 14, a: 'center' }, { h: 'Отсчёт гр. II у y1 / y2', w: 12, a: 'center' }, { h: 'n2 по графику', w: 8, a: 'center' }, { h: 'n2 аналит. до округл.', w: 10, a: 'center' }, { h: 'n2 в расчёте', w: 8, a: 'center' }];
-  const DAN_VAL_COLS = [{ h: 'Участок', w: 12 }, { h: 'ε = 0,01·n1·n2, %', w: 14, a: 'center' }, { h: 'γ, °', w: 9, a: 'center' }, { h: 'q(γ) (3.2)', w: 10, a: 'center' }, { h: 'ε·q  или  εзд·bф·Kзд', w: 26, a: 'center' }, { h: 'Вклад в e, %', w: 12, a: 'center' }];
-  function danNote(dc) {
-    return `Метод расчёта — аналитический: n1 = 50·(cos θн − cos θв), n2 = (100/π)·[ψ + ½·sin 2ψ], tg ψ = y/R — формулы, по которым построены графики I и II (рис. 8.8, 8.10 СП 367), с округлением до 0,1 луча. Проверка независима от ядра: видимая область построена заново по рёбрам проёма, число лучей считано с графиков, построенных по их определению (луч k графика I — 50·(1 − cos θk) = k, графика II — (100/π)·(ψk + ½·sin 2ψk) = k), с отсчётом каждой границы по ближайшей пунктирной линии десятых долей (n = разность отсчётов). Это проверяет построение видимой области (рёбра, плоскость C, радиус R) и считывание; соответствие самих печатных графиков формулам здесь не проверяется — для этого нужна оцифровка рис. 8.8/8.10. Максимальное расхождение отсчёта с расчётом: n1 — ${f(dc.dev.n1, 1)}, n2 — ${f(dc.dev.n2, 1)} луча (погрешность считывания ±0,1 у каждой границы); аналитика проверки и ядра до округления — ${dc.dev.raw < 1e-6 ? 'совпадает' : 'различается на ' + f(dc.dev.raw, 4)}${dc.same ? '' : '; ЧИСЛО УЧАСТКОВ РАЗЛИЧАЕТСЯ — проверьте исходные данные'}. Вклад = CN·(ε·q)·r0·τо·K·MF; τо = ${f(dc.x.tau0, 4)} (${dc.x.w.tau0src}); K = ${f(dc.x.K)} (${dc.x.w.Ksrc}). Затеняющие элементы фасада лучи не обрезают — их влияние учтено K (п. 8.4.2); противостоящие здания выделены отдельными участками. Графики применимы к прямоугольным проёмам.`;
-  }
-  function danBlocks(st, C) {
-    const dc = danCheck(st, C); if (!dc) return null;
-    const sb = dc.scheme.box, ratio = (sb[3] - sb[1]) / (sb[2] - sb[0]);
-    return { type: 'dan', dc, blocks: [
-      { type: 'h3', text: `Проверка по графикам Данилюка I и II: ${dc.title}` },
-      { type: 'p', small: true, text: dc.eTxt },
-      { type: 'scheme', h: Math.min(175, Math.max(70, 171 * ratio)), schemes: [dc.scheme], caption: 'Разрез и план в одном масштабе. Разрез: полюс графика I в расчётной точке А, лучи — сплошные линии (подписаны 0, 10…50; показана часть графика до высоты проёма), красные — граничные лучи выбранного участка через ограничивающие рёбра, пунктирная дуга — полуокружность через середину участка C (радиус R). План: полюс P графика II на оси через А на расстоянии R от наружной грани (горизонталь R совпадает с гранью), подписи — номера лучей; тонкие линии из А — истинные лучи через откосы. Выделен выбранный участок; серым — фасады противостоящих зданий.' },
-      { type: 'table', title: 'Считывание с графиков и сравнение с расчётом (числа лучей)', size: 6.4, cols: DAN_GEO_COLS, rows: dc.geo.map(g => g.cells) },
-      { type: 'table', title: `Вклад участков проёма ${dc.sel.win + 1} (значения расчёта)`, size: 6.8, cols: DAN_VAL_COLS, rows: dc.val.map(v => v.cells), note: danNote(dc) }
-    ] };
   }
 
   function topTypesModel(M, st, r, num) {
@@ -2020,7 +1586,7 @@ const KEO = (function () {
       ['Расчётная высота от УРП до нижнего отверстия', 'h_{р}', f(r.hr) + ' м', `hр = H − hурп = ${f(T.H)} − ${f(inp.hurp)}`],
       ['Число пролётов / ширина пролёта', 'l_{1}', `${inp.spans} / ${f(inp.l1)} м`, ''],
       ['Коэффициент светового климата', 'C_{N}', f(r.CN), `СП 52.13330.2016, табл. 5.1, «В зенитных фонарях», группа ${C.group}`],
-      ['Отражённый свет помещения', 'r_{2}', f(r.r2, 3), `табл. Б.21: hр/l1 = ${f(r.hl)}, ρср = ${f(rhoOf(st).v)}, пролётов ${inp.spans}${r.r2info.notes.length ? '. ' + r.r2info.notes.join('; ') : ''}`]
+      ['Отражённый свет помещения', 'r_{2}', f(r.r2, 3), `табл. Б.21: hр/l1 = ${f(r.hl)}, ρср = ${f(st.rho)}, пролётов ${inp.spans}${r.r2info.notes.length ? '. ' + r.r2info.notes.join('; ') : ''}`]
     ] });
     M.push({ type: 'scheme', h: 70, schemes: [Schemes.topPlan({ ...inp, L: +T.L, B: +T.B, y0: pts[0].y, types: inp.types }, pts), Schemes.topSection({ ...inp, L: +T.L, types: inp.types }, pts)], caption: 'Схема расположения фонарей и расчётных точек. Масштаб условный.' });
     M.push({ type: 'h2', text: '3. Расчёт КЕО в точках — формула (Б.3)' });
@@ -2057,8 +1623,8 @@ const KEO = (function () {
   function combSideModel(M, st, C, r, num) {
     M.push({ type: 'h2', text: `${num}. Боковое освещение в тех же точках — формула (Б.1)` });
     M.push({ type: 'table', title: 'Боковой КЕО по точкам', cols: [{ h: 'РТ', w: 10, a: 'center' }, { h: 'lт, м', w: 12, a: 'center' }, { h: 'Σε·q', w: 14, a: 'center' }, { h: 'Σεзд·bф·Kзд', w: 16, a: 'center' }, { h: 'r0', w: 12, a: 'center' }, { h: 'τо', w: 12, a: 'center' }, { h: 'K', w: 10, a: 'center' }, { h: 'eб, %', w: 12, a: 'center' }],
-      rows: r.side.map((s, j) => { const w = s.walls[0]; return [`РТ${j + 1}`, f(w.inp.lt), f(w.wins.reduce((a, x) => a + x.sumSky, 0), 4), f(w.wins.reduce((a, x) => a + x.sumBld, 0), 4), f(w.r0, 3), w.wins.every(x => x.tau0 === w.wins[0].tau0) ? f(w.wins[0].tau0, 4) : 'по проёмам', w.wins.every(x => x.K === w.wins[0].K) ? f(w.wins[0].K) : 'по проёмам', f(w.e)]; }),
-      note: `CN = ${f(r.side[0].walls[0].CN)}, MF = ${f(r.side[0].walls[0].MF)}; r0 — табл. ${r.side[0].walls[0].r0info.table} для каждой точки; n1, n2 — аналитически (графики Данилюка). τо и K по проёмам: ${r.side[0].walls[0].wins.map((x, i) => `проём ${i + 1} — τо ${f(x.tau0, 4)} (${x.w.tau0src}), K ${f(x.K)} (${x.w.Ksrc})`).join('; ')}.` });
+      rows: r.side.map((s, j) => { const w = s.walls[0]; return [`РТ${j + 1}`, f(w.inp.lt), f(w.wins.reduce((a, x) => a + x.sumSky, 0), 4), f(w.wins.reduce((a, x) => a + x.sumBld, 0), 4), f(w.r0, 3), f(w.wins[0].tau0, 4), f(w.wins[0].K), f(w.e)]; }),
+      note: `CN = ${f(r.side[0].walls[0].CN)}, MF = ${f(r.side[0].walls[0].MF)}; r0 — табл. ${r.side[0].walls[0].r0info.table} для каждой точки; n1, n2 — аналитически (графики Данилюка).` });
     M.push({ type: 'h2', text: `${num + 1}. Комбинированное освещение — формула (Б.4)` });
     M.push({ type: 'table', title: 'e_к = e_в + e_б', cols: [{ h: 'РТ', w: 12, a: 'center' }, { h: 'eв, %', w: 14, a: 'center' }, { h: 'eб, %', w: 14, a: 'center' }, { h: 'eк, %', w: 14, a: 'center' }], rows: r.e.map((v, j) => [`РТ${j + 1}`, f(r.top.e[j]), f(r.side[j].e), f(v)]) });
     avgModel(M, r, 'к');
@@ -2083,7 +1649,7 @@ const KEO = (function () {
         ['Общий коэффициент пропускания', 'τ_{о}', f(T.tau0, 4), `τо = τ1·τ2·τ3·τ4·τ5 = ${f(t.t1)}·${f(t.t2)}·${f(t.t3)}·${f(t.t4)}·${f(t.t5)} (Б.8); τ3 — фермы, τ5 = 0,9 — сетка (табл. Б.16, п. Б.2.7)`],
         ['Коэффициент эксплуатации', 'MF', f(T.MF), `табл. 5.1 СП 367: ${st.env === 'normal' ? 'нормальные условия' : 'пыльные, жаркие, сырые'}, наклон остекления ${DATA.MF.angles[R.tiltIdx(t)]}${st.glassMult !== 1 ? `, × ${f(st.glassMult)}` : ''}`],
         ['Высота низа остекления над УРП', 'h_{ф}', f(T.hf) + ' м', ''],
-        ['Отражённый свет помещения', 'r_{2}', f(T.r2, 3), `табл. Б.21: hф/l1 = ${f(T.hl)}, ρср = ${f(rhoOf(st).v)}, пролётов ${inp.spans}, l1 = ${f(inp.l1)} м${T.r2info.notes.length ? '. ' + T.r2info.notes.join('; ') : ''}`]
+        ['Отражённый свет помещения', 'r_{2}', f(T.r2, 3), `табл. Б.21: hф/l1 = ${f(T.hl)}, ρср = ${f(st.rho)}, пролётов ${inp.spans}, l1 = ${f(inp.l1)} м${T.r2info.notes.length ? '. ' + T.r2info.notes.join('; ') : ''}`]
       ] });
     });
   }
@@ -2150,7 +1716,7 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 if (typeof module !== 'undefined') module.exports = KEO;
 
@@ -2168,8 +1734,8 @@ if (typeof module !== 'undefined') module.exports = KEO;
     Object.assign(s, { region: 'Краснодарский край', roomId: 'A57' }); s.bType = DATA.rooms.find(r => r.id === 'A57').g;
     s.meta = { code: '1226-30-01-АР2', object: 'ДОУ на 240 мест (пример)', room: '1.004', author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
     const w = s.side.walls[0]; Object.assign(w, { orient: 'В', dp: 8, bp: 7.4, H: 3.3, dst: 0.72, t1: 0, t1c: 0.64, t2: 1, t4: 0, kType: 'none' });
-    w.windows = [-2.88, -1.12, 0.62, 2.38].map(x => ({ ...KEO.defaultWindow(x), hpd: 0.5, ho: 2.2, bo: 1.65, t2m: 'manual', t2o: 0.75 }));
-    w.windows[2].t2o = 0.70;
+    w.windows = [-2.88, -1.12, 0.62, 2.38].map(x => ({ hpd: 0.5, ho: 2.2, bo: 1.65, s: x, t2o: null, tau0o: null, Ko: null }));
+    w.windows[0].t2o = 0.75; w.windows[1].t2o = 0.75; w.windows[3].t2o = 0.75; w.windows[2].t2o = 0.70;
     return s;
   }
   function exampleTop() {
@@ -2178,7 +1744,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
     s.meta = { code: '1226-30-01-АР3', object: 'ДОУ на 240 мест (пример)', room: '1.G.11.2', author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
     Object.assign(s.top, { L: 8, B: 7.41, H: 4.2, spans: 1, l1: null, y0: 3.71, nPts: 0 });
     s.top.types = [{ ...KEO.defaultType(), name: 'Шахта Ø 2,0', shape: 'round', dv: 2, dn: 2, hsf: 1, refl: 'diffuse', rhoW: 0.7, t1: 0.48, t2: 0.75, lanterns: [{ x: 4.0, y: 5.96 }, { x: 3.63, y: 3.29 }] }];
-    s.side.walls[0] = Object.assign(KEO.defaultWall('В'), { dst: 0.3, t1c: 0.64, t2: 0, windows: [-2.2, 0, 2.2].map(x => ({ ...KEO.defaultWindow(x), hpd: 0.5, ho: 2.6, bo: 1.65 })) });
+    s.side.walls[0] = Object.assign(KEO.defaultWall('В'), { dst: 0.3, t1c: 0.64, t2: 0, windows: [{ hpd: 0.5, ho: 2.6, bo: 1.65, s: -2.2 }, { hpd: 0.5, ho: 2.6, bo: 1.65, s: 0 }, { hpd: 0.5, ho: 2.6, bo: 1.65, s: 2.2 }].map(x => ({ ...x, t2o: null, tau0o: null, Ko: null })) });
     return s;
   }
 
@@ -2201,7 +1767,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
   function inp(path, label, sym, unit, o = {}) {
     const v = getP(S, path); const id = 'f-' + path.replace(/\./g, '-');
     return `<label class="fld ${o.cls || ''}" for="${id}"><span class="lbl">${label}${sym ? ` <i class="sym">${Report.richHTML(sym)}</i>` : ''}</span>
-      <span class="inpw"><input id="${id}" data-k="${path}" data-t="${o.t || 'num'}" inputmode="decimal" autocomplete="off" value="${esc(fv(v))}" placeholder="${esc(o.ph || '')}">${unit ? `<span class="unit">${unit}</span>` : ''}</span>${o.hint ? `<span class="hint">${o.hint}</span>` : ''}</label>`;
+      <span class="inpw"><input id="${id}" data-k="${path}" data-t="num" inputmode="decimal" autocomplete="off" value="${esc(fv(v))}" placeholder="${esc(o.ph || '')}">${unit ? `<span class="unit">${unit}</span>` : ''}</span>${o.hint ? `<span class="hint">${o.hint}</span>` : ''}</label>`;
   }
   function tinp(path, label, o = {}) {
     const v = getP(S, path); const id = 'f-' + path.replace(/\./g, '-');
@@ -2242,30 +1808,13 @@ if (typeof module !== 'undefined') module.exports = KEO;
         <div class="row three">${rule === 'manual' ? inp(`side.walls.${wi}.lt`, 'До расчётной точки', 'l_{т}', 'м') : `<div class="fld"><span class="lbl">До расчётной точки <i class="sym">l<sub>т</sub></i></span><div class="calc">${out('lt' + wi)} м</div><span class="hint">${KEO.RT_TEXT[rule]}</span></div>`}
         ${inp(`side.walls.${wi}.ds`, 'Смещение точки от оси', 'Δs', 'м', { hint: 'вправо — плюс' })}
         <div class="fld"><span class="lbl">Высота точки <i class="sym">h<sub>р</sub></i></span><div class="calc">${out('hp')} м</div><span class="hint">${out('hpNote')}</span></div></div></div>`).join('')}
-      <div class="row two"><div class="fld"><span class="lbl">Двустороннее / угловое освещение</span><div class="btns">${walls.length < 2 ? `<button type="button" class="btn ghost" data-act="addWall">+ Вторая стена с окнами</button>` : `<button type="button" class="btn ghost" data-act="delWall">− Убрать вторую стену</button>`}</div><span class="hint">КЕО от проёмов разной ориентации суммируется (п. 8.4.1)</span></div><div></div></div>
-      ${rhoField()}
+      <div class="row two"><div class="fld"><span class="lbl">Двустороннее / угловое освещение</span><div class="btns">${walls.length < 2 ? `<button type="button" class="btn ghost" data-act="addWall">+ Вторая стена с окнами</button>` : `<button type="button" class="btn ghost" data-act="delWall">− Убрать вторую стену</button>`}</div><span class="hint">КЕО от проёмов разной ориентации суммируется (п. 8.4.1)</span></div>
+      ${rhoField()}</div>
     </section>`;
   }
   function rhoField() {
-    const m = KEO.rhoMode(S), top = S.mode === 'top', rs = S.rhoSurf;
-    const head = `<div class="fld"><span class="lbl">Средневзвешенный коэффициент отражения <i class="sym">ρ<sub>ср</sub></i></span>${seg('rhoMode', [['default', '0,55 — коэффициенты неизвестны'], ['surf', 'По поверхностям'], ['manual', 'Вручную']], { aria: 'Источник ρср' })}${m === 'legacy' ? '<span class="hint warn-t">Файл прежней версии: источник ρср не подтверждён — выберите режим.</span>' : ''}</div>`;
-    const val = `<div class="row two"><label class="fld" for="f-rho"><span class="lbl">ρ<sub>ср</sub> в расчёте${m === 'manual' ? '' : ' <span class="muted">(правка переключит на «Вручную»)</span>'}</span><span class="inpw"><input id="f-rho" data-k="rho" data-t="coef" inputmode="decimal" autocomplete="off" value="${esc(fv(m === 'manual' || m === 'legacy' ? S.rho : ''))}"></span></label>${m === 'manual' ? tinp('rhoBasis', 'Основание (обязательно укажите)', { ph: 'например: измерения отделки, паспорт материалов' }) : '<div></div>'}</div>
-      <p class="small">В расчёте: ρср = <b>${out('rhoV')}</b> — ${out('rhoSrc')}</p>`;
-    let body = '';
-    if (m === 'surf') {
-      const geo = S.rhoGeo === 'manual' ? 'manual' : 'auto';
-      body = `<div class="fld"><span class="lbl">Площади поверхностей</span>${seg('rhoGeo', [['auto', 'По размерам помещения'], ['manual', 'Ручная ведомость']], { aria: 'Площади' })}<span class="hint">${geo === 'auto' ? 'Прямоугольное помещение с плоским потолком: пол и потолок a×b, стены 2(a+b)H минус окна, окна — Σ bо×hо. Пустое поле площади — авто; введённое значение не пересчитывается.' : 'Сложный контур, наклонный потолок, ниши: площади каждой поверхности вводятся вручную; автоматический расчёт не применяется.'}</span></div>`;
-      if (geo === 'auto') {
-        const rows = top ? KEO.RHO_ROWS.slice(0, 3) : KEO.RHO_ROWS;
-        body += `<div class="tblw"><table class="grid-t rho-t"><thead><tr><th>Поверхность</th><th>S авто, м²</th><th>S вручную, м²</th><th>ρ</th><th>Источник ρ</th></tr></thead><tbody>${rows.map(([k, n]) => `<tr><td>${top && k === 'walls' ? 'Стены' : n}</td><td class="c">${out('rhoA-' + k)}</td><td><input aria-label="${n}: площадь вручную" data-k="rhoSurf.${k}.S" data-t="coef" inputmode="decimal" placeholder="авто" value="${esc(fv(rs[k].S))}"></td><td><input aria-label="${n}: ρ" data-k="rhoSurf.${k}.rho" data-t="coef" inputmode="decimal" value="${esc(fv(rs[k].rho))}"></td><td><input aria-label="${n}: источник ρ" data-k="rhoSurf.${k}.src" data-t="str" placeholder="измерения / паспорт / ориентир" value="${esc(rs[k].src)}"></td></tr>`).join('')}</tbody></table></div>
-        <p class="small">${top ? 'Для r2 верхнего света — пол, стены, потолок (табл. Б.21).' : 'Состав — пол, стены, потолок и окна (примечание 2 к табл. Б.6/Б.7). Площадь стен вручную вводится уже <b>без окон</b> — окна повторно не вычитаются. Окна — по наружному обмеру коробки (п. Б.2.7); площадь внутренней поверхности можно уточнить вручную.'}${S.mode === 'comb' ? ' В комбинированном режиме это же ρср применяется и к r2 (табл. Б.21).' : ''}</p>`;
-      } else {
-        body += `<div class="tblw"><table class="grid-t rho-t"><thead><tr><th>Поверхность</th><th>S, м²</th><th>ρ</th><th>Источник ρ</th><th></th></tr></thead><tbody>${(S.rhoRows || []).map((x, i) => `<tr><td><input aria-label="Поверхность ${i + 1}" data-k="rhoRows.${i}.name" data-t="str" value="${esc(x.name)}"></td><td><input aria-label="Поверхность ${i + 1}: площадь" data-k="rhoRows.${i}.S" data-t="coef" inputmode="decimal" value="${esc(fv(x.S))}"></td><td><input aria-label="Поверхность ${i + 1}: ρ" data-k="rhoRows.${i}.rho" data-t="coef" inputmode="decimal" value="${esc(fv(x.rho))}"></td><td><input aria-label="Поверхность ${i + 1}: источник ρ" data-k="rhoRows.${i}.src" data-t="str" value="${esc(x.src)}"></td><td><button type="button" class="icon" data-act="delRhoRow" data-i="${i}" aria-label="Удалить поверхность ${i + 1}">×</button></td></tr>`).join('')}</tbody></table></div>
-        <div class="btns"><button type="button" class="btn ghost" data-act="addRhoRow">+ Поверхность</button><button type="button" class="btn ghost" data-act="fillRhoRows">Заполнить по размерам помещения</button></div>`;
-      }
-      body += `<p class="small">Коэффициенты отражения — по данным измерений (примечание 2 к табл. Б.6/Б.7). Ориентиры по виду отделки (побелка 0,7–0,8; светлая окраска 0,55–0,6; паркет 0,25–0,3; светлый линолеум 0,3–0,4) не являются измеренными — укажите это в источнике. Значение 0,20 из п. Б.2.3 относится к окнам фасадов противостоящих зданий, а не к собственной внутренней поверхности.</p>`;
-    }
-    return `<div class="wallblock rho-b">${head}${val}${body}</div>`;
+    return `<div class="fld"><span class="lbl">Средневзвешенный коэфф. отражения <i class="sym">ρ<sub>ср</sub></i></span><span class="inpw"><input id="f-rho" data-k="rho" data-t="num" inputmode="decimal" value="${fv(S.rho)}"></span><span class="hint">0,55 — для жилых и общественных (п. 5.10 СП 52)</span>
+      ${more('Рассчитать ρср по отделке', `<p class="small">ρср = Σ ρi·Si / Σ Si, формула (3.6) СП 367.</p><div class="rhogrid"><span></span><span class="small">S, м²</span><span class="small">ρ</span>${['Пол', 'Стены', 'Потолок', 'Окна'].map((n, i) => `<span>${n}</span><input aria-label="${n}, площадь" data-k="rhoCalc.s.${i}.0" data-t="num" inputmode="decimal" value="${fv(S.rhoCalc.s[i][0])}"><input aria-label="${n}, коэффициент отражения" data-k="rhoCalc.s.${i}.1" data-t="num" inputmode="decimal" value="${fv(S.rhoCalc.s[i][1])}">`).join('')}</div><div class="btns"><button type="button" class="btn ghost" data-act="applyRho">Принять ρср = ${out('rhoCalc')}</button></div><p class="small">Ориентиры: побелка 0,7–0,8; светлая окраска 0,55–0,6; паркет 0,25–0,3; линолеум светлый 0,3–0,4; окна с переплётами 0,2.</p>`)}</div>`;
   }
 
   function cardRoomTop() {
@@ -2276,42 +1825,25 @@ if (typeof module !== 'undefined') module.exports = KEO;
       <div class="fld"><span class="lbl">Высота УРП <i class="sym">h<sub>урп</sub></i></span><div class="calc">${out('hp')} м</div><span class="hint">${out('hpNote')}</span></div></div>
       <div class="row three">${inp('top.spans', 'Число пролётов', '', '', { hint: '1, 2, 3 и более' })}${b2 ? inp('top.l1', 'Ширина пролёта', 'l_{1}', 'м', { ph: '= L / пролёты', hint: 'для табл. Б.21' }) : inp('top.l1', 'Ширина пролёта', 'l_{1}', 'м', { ph: '= B', hint: 'для однопролётного = ширине' })}
       ${b2 ? `<div class="fld"><span class="lbl">Высота низа остекления над УРП <i class="sym">h<sub>ф</sub></i></span><div class="calc">${out('hf')} м</div><span class="hint">hф = H + hст − hурп (для r2)</span></div>` : `<div class="fld"><span class="lbl">Расчётная высота <i class="sym">h<sub>р</sub></i></span><div class="calc">${out('hr')} м</div><span class="hint">hр = H − hурп</span></div>`}</div>
-      ${rhoField()}
+      <div class="row two">${rhoField()}<div></div></div>
     </section>`;
   }
 
-  // исключения проёма: τ2, τо, K — «по общим параметрам стены» или «вручную»; рядом — что применено в расчёте
-  function excEditor(pre, wi, x, i) {
-    const p = `${pre}.windows.${i}`, md = k => KEO.winMode(x, k), any = ['t2', 'tau0', 'K'].some(k => md(k) === 'manual');
-    const t0m = md('tau0') === 'manual';
-    const line = (k, lbl, vk, bk, note) => { const man = md(k) === 'manual', off = k === 't2' && t0m;
-      return `<div class="exc-row${off ? ' off' : ''}"><span class="exc-l">${lbl}</span>${seg(`${p}.${OVR[k][0]}`, [['wall', 'По общим'], ['manual', 'Вручную']], { aria: `Проём ${i + 1}: ${lbl}` })}
-        <input class="exc-v" aria-label="Проём ${i + 1}: ${lbl} вручную" data-k="${p}.${vk}" data-t="coef" inputmode="decimal" value="${esc(fv(x[vk]))}" ${man && !off ? '' : 'disabled'} placeholder="${man ? 'значение' : 'не задано'}">
-        ${bk ? `<input class="exc-b" aria-label="Проём ${i + 1}: основание ${lbl}" data-k="${p}.${bk}" data-t="str" value="${esc(x[bk] || '')}" ${man ? '' : 'disabled'} placeholder="основание">` : ''}
-        <button type="button" class="btn ghost sm" data-act="clrExc" data-w="${wi}" data-i="${i}" data-c="${k}" ${man || (x[vk] !== null && x[vk] !== '' && x[vk] !== undefined) ? '' : 'disabled'}>Очистить</button>${note ? `<span class="hint">${note}</span>` : ''}</div>`; };
-    return `<details class="excd" ${any ? 'open' : ''}><summary>Исключения проёма ${i + 1}: ${any ? ['t2', 'tau0', 'K'].filter(k => md(k) === 'manual').map(k => ({ t2: 'τ2', tau0: 'τо', K: 'K' })[k]).join(', ') + ' — вручную' : 'нет (по общим параметрам стены)'}</summary>
-      ${line('t2', 'τ2 переплёта', 't2o', null, t0m ? 'не используется: τо проёма задан вручную (значение сохранено)' : '')}
-      ${line('tau0', 'τо целиком', 'tau0o', 'tau0b', md('tau0') === 'manual' ? 'заменяет произведение τ1…τ5' : '')}
-      ${line('K', 'K', 'Ko', 'Kb', md('K') === 'manual' ? 'заменяет K стены (не умножается на него)' : '')}
-      <p class="small exc-res">${out(`wsrc-${wi}-${i}`)}</p></details>`;
-  }
-  const OVR = { t2: ['t2m', 't2o'], tau0: ['tau0m', 'tau0o', 'tau0b'], K: ['Km', 'Ko', 'Kb'] };
   function cardWindows(walls) {
     return walls.map((w, wi) => {
       const pre = `side.walls.${wi}`;
       return `<div class="wallblock">${walls.length > 1 ? `<h3>Стена ${wi + 1}</h3>` : ''}
       <div class="fld"><span class="lbl">Ориентация светопроёмов</span>${seg(pre + '.orient', KEO.ORIENTS.map(o => [o, o]), { cls: 'compass', aria: 'Ориентация' })}<span class="hint">C<sub>N</sub> = ${out('cn' + wi)} — табл. 5.1 СП 52</span></div>
       <div class="row three">${inp(pre + '.dst', 'Толщина наружной стены', 'Δ_{ст}', 'м')}
-      ${sel(pre + '.t1', 'Остекление', DATA.tau1.map((t, i) => [i, `${t.t} — τ1 ${t.r}`]), { t: 'num', sym: 'τ_{1}' })}${inp(pre + '.t1c', 'τ1 по паспорту изделия', 'τ_{1}', '', { ph: 'из таблицы', t: 'coef' })}</div>
+      ${sel(pre + '.t1', 'Остекление', DATA.tau1.map((t, i) => [i, `${t.t} — τ1 ${t.r}`]), { t: 'num', sym: 'τ_{1}' })}${inp(pre + '.t1c', 'τ1 по паспорту изделия', 'τ_{1}', '', { ph: 'из таблицы' })}</div>
       <div class="row three">${sel(pre + '.t2', 'Переплёт', DATA.tau2.map((t, i) => [i, `${t.t} — ${f(t.v)}`]), { t: 'num', sym: 'τ_{2}' })}${sel(pre + '.t4', 'Солнцезащита', DATA.tau4.map((t, i) => [i, `${t.t} — ${f(t.v)}`]), { t: 'num', sym: 'τ_{4}' })}
-      <div class="fld"><span class="lbl"><i class="sym">τ<sub>о</sub></i> по общим параметрам стены</span><div class="calc">${out('tau' + wi)}</div><span class="hint">τо = τ1·τ2·τ3·τ4·τ5, формула (Б.8) СП 367; только для чтения</span></div></div>
+      <div class="fld"><span class="lbl">Общий коэфф. пропускания <i class="sym">τ<sub>о</sub></i></span><div class="calc">${out('tau' + wi)}</div><span class="hint">τо = τ1·τ2·τ3·τ4·τ5 (Б.8)</span></div></div>
       <div class="row three">${sel(pre + '.kType', 'Затеняющий элемент фасада', Object.entries(KEO.K_TITLES), { rebuild: true, sym: 'K' })}
-      ${w.kType === 'manual' ? `<div class="fld">${inp(pre + '.kManual', 'K вручную', 'K', '', { t: 'coef' })}${tinp(pre + '.kBasis', 'Основание K', { ph: 'расчёт, моделирование, паспорт…' })}</div>` : w.kType !== 'none' ? inp(pre + '.kDepth', 'Вынос элемента', '', 'м') : '<div></div>'}<div class="fld"><span class="lbl"><i class="sym">K</i> по общим параметрам стены</span><div class="calc">${out('K' + wi)}</div><span class="hint">${out('Ksrc' + wi)}</span></div></div>
-      <div class="tblw"><table class="grid-t win-t"><thead><tr><th>№</th><th>Подоконник <i class="sym">h<sub>пд</sub></i>, м</th><th>Высота <i class="sym">h<sub>о</sub></i>, м</th><th>Ширина <i class="sym">b<sub>о</sub></i>, м</th><th>Смещение оси <i class="sym">s</i>, м</th><th>В расчёте <i class="sym">τ<sub>о</sub></i> / <i class="sym">K</i></th><th></th></tr></thead><tbody>
+      ${w.kType !== 'none' ? inp(pre + '.kDepth', 'Вынос элемента', '', 'м') : '<div></div>'}<div class="fld"><span class="lbl">Коэффициент <i class="sym">K</i></span><div class="calc">${out('K' + wi)}</div><span class="hint">табл. Б.17–Б.20</span></div></div>
+      <div class="tblw"><table class="grid-t"><thead><tr><th>№</th><th>Подоконник <i class="sym">h<sub>пд</sub></i>, м</th><th>Высота <i class="sym">h<sub>о</sub></i>, м</th><th>Ширина <i class="sym">b<sub>о</sub></i>, м</th><th>Смещение оси <i class="sym">s</i>, м</th><th title="Переопределить τ2, τо или K для отдельного проёма">Особые τ2 / τо / K</th><th></th></tr></thead><tbody>
       ${w.windows.map((x, i) => `<tr><td class="n">${i + 1}</td>${['hpd', 'ho', 'bo', 's'].map(k => `<td><input aria-label="Окно ${i + 1}: ${k}" data-k="${pre}.windows.${i}.${k}" data-t="num" inputmode="decimal" value="${fv(x[k])}"></td>`).join('')}
-        <td class="eff">${out(`we-${wi}-${i}`)}</td>
-        <td><button type="button" class="icon" data-act="delWin" data-w="${wi}" data-i="${i}" aria-label="Удалить окно ${i + 1}" ${w.windows.length < 2 ? 'disabled' : ''}>×</button></td></tr>
-        <tr class="exc"><td></td><td colspan="6">${excEditor(pre, wi, x, i)}</td></tr>`).join('')}
+        <td class="ovr">${['t2o', 'tau0o', 'Ko'].map((k, j) => `<input aria-label="Окно ${i + 1}: ${['τ2', 'τо', 'K'][j]} вручную" placeholder="${['τ2', 'τо', 'K'][j]}" data-k="${pre}.windows.${i}.${k}" data-t="num" inputmode="decimal" value="${fv(x[k])}">`).join('')}</td>
+        <td><button type="button" class="icon" data-act="delWin" data-w="${wi}" data-i="${i}" aria-label="Удалить окно ${i + 1}" ${w.windows.length < 2 ? 'disabled' : ''}>×</button></td></tr>`).join('')}
       </tbody></table></div>
       <div class="btns"><button type="button" class="btn ghost" data-act="addWin" data-w="${wi}">+ Окно</button></div>
       ${more('Расставить одинаковые окна', `<div class="row four"><label class="fld"><span class="lbl">Количество</span><span class="inpw"><input id="gen-n-${wi}" inputmode="numeric" value="${w.windows.length}"></span></label><label class="fld"><span class="lbl">Шаг осей, м</span><span class="inpw"><input id="gen-p-${wi}" inputmode="decimal" value="${fv(w.windows.length > 1 ? Math.abs(w.windows[1].s - w.windows[0].s).toFixed(2) : 2)}"></span></label><label class="fld"><span class="lbl">Смещение группы, м</span><span class="inpw"><input id="gen-o-${wi}" inputmode="decimal" value="0"></span></label><div class="fld"><span class="lbl">&nbsp;</span><button type="button" class="btn" data-act="genWin" data-w="${wi}">Расставить</button></div></div><p class="small">Размеры hпд, hо, bо берутся из первого окна; оси располагаются симметрично относительно оси помещения со смещением группы.</p>`)}
@@ -2428,25 +1960,16 @@ if (typeof module !== 'undefined') module.exports = KEO;
     setOut('facts', room ? `<span class="chip">Группа N = ${g}</span><span class="chip">Плоскость: ${room.h === 0 ? (room.water ? 'поверхность воды' : 'пол, 0,0 м') : 'УРП ' + f(room.h, 1) + ' м'}</span><span class="chip">${S.mode === 'side' ? 'Точка: ' + KEO.RT_TEXT[KEO.rtOf(S)] : 'Точки: по характерному разрезу, крайние — в 1 м от стен'}</span><span class="chip">Нормы ЕО: бок. ${room.eSideN ?? '—'} / верх. ${room.eTopN ?? '—'}; СО: ${room.eSideC ?? '—'} / ${room.eTopC ?? '—'}</span>`.replace(/(\d)\.(\d)/g, '$1,$2') : '');
     setOut('hp', f(hp)); setOut('hpNote', S.hpManual !== null && S.hpManual !== '' ? 'задано вручную' : (hp === 0 ? 'на полу (по норме)' : 'УРП по норме'));
     setOut('hr', f(+S.top.H - hp));
-    const rh = KEO.rhoOf(S);
-    setOut('rhoV', rh.err.length ? '<span class="bad-t">не определено</span>' : f(rh.v) + (rh.mode === 'surf' ? ` <span class="muted">(точно ${f(rh.exact, 4)})</span>` : ''));
-    setOut('rhoSrc', rh.err.length ? `<span class="bad-t">${esc(rh.err[0])}</span>` : esc(rh.label));
-    if (rh.rows) rh.rows.forEach(x => setOut('rhoA-' + x.key, x.Sauto === null ? '—' : f(x.Sauto) + (x.man ? ' <span class="muted">(не применено)</span>' : '')));
-    const rin = $('#f-rho'); if (rin && document.activeElement !== rin && rh.mode !== 'manual' && rh.mode !== 'legacy') rin.value = rh.err.length ? '' : fv(rh.v);
+    const rc = S.rhoCalc.s, sw = rc.reduce((a, x) => a + (+x[0] || 0), 0);
+    setOut('rhoCalc', sw ? f(rc.reduce((a, x) => a + (+x[0] || 0) * (+x[1] || 0), 0) / sw) : '—');
     setOut('mf', S.mode === 'side' ? `${f(KEO.mfOf(S, 3))} — вертикальное остекление окон (76°–90°)` : `${S.top.types.map(t => f(KEO.mfOf(S, +t.tilt || 0))).join(' / ')} — фонари${S.mode === 'comb' ? `; окна — ${f(KEO.mfOf(S, 3))}` : ''}`);
     const rule = KEO.rtOf(S);
     S.side.walls.forEach((w, wi) => {
       setOut('lt' + wi, f(rule === 'manual' ? w.lt : KEO.ltAuto(rule, +w.dp)));
       setOut('cn' + wi, f(Engine.CNwall(g, w.orient).v));
-      const gen = KEO.wallCoef(S, w, S.mode === 'side' ? +w.dp : +S.top.L);
-      setOut('tau' + wi, f(gen.tau0, 4));
-      setOut('K' + wi, isNaN(gen.K.v) ? '—' : f(gen.K.v)); setOut('Ksrc' + wi, gen.err.length ? `<span class="bad-t">${esc(gen.err.join('; '))}</span>` : esc(gen.K.src));
-      w.windows.forEach((x, i) => {
-        const c = KEO.winCoef(gen, x, i), mk = m => m === 'manual' ? ' · <b>вручную</b>' : '';
-        const val = (v, n) => v === undefined || isNaN(v) ? '<span class="bad-t">ошибка</span>' : f(v, n);
-        setOut(`we-${wi}-${i}`, `τо ${val(c.tau0.v, 4)}${mk(c.modes.tau0)}<br>K ${val(c.K.v)}${mk(c.modes.K)}`);
-        setOut(`wsrc-${wi}-${i}`, c.err.length ? `<span class="bad-t">${esc(c.err.join('; '))}</span>` : `В расчёте: τо = ${f(c.tau0.v, 4)} — ${esc(c.tau0.src)}; K = ${f(c.K.v)} — ${esc(c.K.src)}.`);
-      });
+      const t = KEO.tau1Wall(w) * DATA.tau2[w.t2].v * DATA.tau4[w.t4].v; setOut('tau' + wi, f(t, 4));
+      const Kv = w.kType === 'none' ? 1 : Engine.KLookup(w.kType, S.mode === 'side' ? +w.dp : +S.top.L, +w.kDepth, rule === 'center' ? 'center' : 'wall1').v;
+      setOut('K' + wi, f(Kv) + (w.kType === 'none' ? '' : ` <span class="muted">(${rule === 'center' ? 'точка в центре' : '1 м от стены'})</span>`));
     });
     if (S.top.sys === 'b2') {
       const bi = KEO.b2Input(S);
@@ -2506,7 +2029,6 @@ if (typeof module !== 'undefined') module.exports = KEO;
       if (b.type === 'h1' || b.type === 'verdict' || b.type === 'scheme') return;
       if (b.type === 'h2') { close(); h += `<details class="sec" data-sec="${esc(b.text)}"><summary><span>${esc(b.text)}</span></summary><div class="sec-b">`; open = true; return; }
       if (!open) { h += '<details class="sec"><summary><span>Раздел</span></summary><div class="sec-b">'; open = true; }
-      if (b.type === 'dan') { h += danHTML(b); return; }
       if (b.type === 'h3') h += `<h4>${esc(b.text)}</h4>`;
       else if (b.type === 'p') h += `<p class="${b.small ? 'small' : ''}">${esc(b.text)}</p>`;
       else if (b.type === 'formula') h += `<div class="formula">${b.lines.map(l => `<div>${Report.richHTML(l)}</div>`).join('')}${b.src ? `<p class="small">${esc(b.src)}</p>` : ''}</div>`;
@@ -2514,58 +2036,26 @@ if (typeof module !== 'undefined') module.exports = KEO;
       else if (b.type === 'table') h += `${b.title ? `<p class="cap">${Report.richHTML(b.title)}</p>` : ''}<div class="tblw"><table class="rep"><thead><tr>${b.cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${b.rows.map(r => `<tr>${(Array.isArray(r) ? r : r.cells).map((c, i) => `<td class="${b.cols[i].a === 'center' ? 'c num' : ''}">${Report.richHTML(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${b.note ? `<p class="small">${esc(b.note)}</p>` : ''}`;
     });
     close();
-    const openSecs = new Set([...el.querySelectorAll('details[data-sec][open]')].map(d => d.dataset.sec));
+    const openSecs = new Set([...el.querySelectorAll('details.sec[open]')].map(d => d.dataset.sec));
     el.innerHTML = h;
-    el.querySelectorAll('details[data-sec]').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
-  }
-
-  // проверка по графикам Данилюка: выбор стены, проёма и участка (строка таблицы подсвечивает область на схеме)
-  const tblHTML = (cols, rows, sel) => `<div class="tblw"><table class="rep"><thead><tr>${cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr data-dsec="${r.k}" aria-selected="${r.k === sel}" tabindex="0">${r.cells.map((c, i) => `<td class="${cols[i].a === 'center' ? 'c num' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-  function danHTML(b) {
-    const dc = b.dc, r = C.res, sel = dc.sel, B = b.blocks;
-    const opt = (n, cur, lbl) => Array.from({ length: n }, (_, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${lbl(i)}</option>`).join('');
-    const w = r.walls[sel.wall], x = w.wins[sel.win];
-    return `<details class="more dan" data-sec="dan"><summary>Проверка по графикам Данилюка I и II — ${esc(dc.title)}</summary><div class="more-b">
-      <div class="sel">${r.walls.length > 1 ? `<label class="fld"><span class="lbl">Стена</span><span class="inpw"><select data-dan="wall">${opt(r.walls.length, sel.wall, i => `Стена ${i + 1}`)}</select></span></label>` : ''}
-      <label class="fld"><span class="lbl">Проём</span><span class="inpw"><select data-dan="win">${opt(w.wins.length, sel.win, i => `Проём ${i + 1}`)}</select></span></label>
-      <label class="fld"><span class="lbl">Участок</span><span class="inpw"><select data-dan="sec">${x.sectors.length ? opt(x.sectors.length, sel.sec, i => x.sectors[i].type === 'sky' ? `небо ${i + 1}` : `здание ${x.sectors[i].bld + 1}`) : '<option>небо не видно</option>'}</select></span></label></div>
-      <p class="small">${esc(B[1].text)}</p>
-      <div class="svgw">${Schemes.toSVG(dc.scheme, { label: 'Графики Данилюка: разрез и план' })}</div><p class="small">${esc(B[2].caption)}</p>
-      <p class="cap">${esc(B[3].title)}</p>${tblHTML(KEO.DAN_GEO_COLS, dc.geo, sel.sec)}
-      <p class="cap">${esc(B[4].title)}</p>${tblHTML(KEO.DAN_VAL_COLS, dc.val, sel.sec)}<p class="small">${esc(B[4].note)}</p></div></details>`;
-  }
-  function danPick(k, v) {
-    S.dan = { ...(S.dan || {}), [k]: v }; if (k === 'wall') { S.dan.win = 0; S.dan.sec = 0; } if (k === 'win') S.dan.sec = 0;
-    save(); renderBreakdown();
+    el.querySelectorAll('details.sec').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
   }
 
   /* ---------- события ---------- */
   function onInput(e) {
     const t = e.target; const k = t.dataset.k; if (!k) return;
-    // data-t="coef": явное состояние — пусто → null, число (запятая или точка) → число, иное → исходная строка (ошибка в проверке)
-    let v = t.dataset.t === 'num' ? num(t.value) : t.dataset.t === 'coef' ? coefVal(t.value) : t.dataset.t === 'bool' ? t.checked : t.value;
-    if (k === 'rtManual' || k === 'normManual' || k === 'hpManual' || k.endsWith('KcManual') || k === 'top.l1' || k === 'top.y0') { if (v === '') v = null; }
+    let v = t.dataset.t === 'num' ? num(t.value) : t.dataset.t === 'bool' ? t.checked : t.value;
+    if (k === 'rtManual' || k === 'normManual' || k === 'hpManual' || k.endsWith('t1c') || k.endsWith('KcManual') || k.endsWith('o') && /windows\.\d+\.(t2o|tau0o|Ko)$/.test(k) || k === 'top.l1' || k === 'top.y0') { if (v === '') v = null; }
     setP(S, k, v);
-    // простая правка ρср переключает его источник на «вручную»
-    if (k === 'rho' && S.rhoMode !== 'manual') { S.rhoMode = 'manual'; S.rhoBasis = S.rhoBasis || ''; rebuildKeepFocus(); update(); return; }
     if (k === 'bType') { const r = DATA.rooms.find(x => x.g === v); if (r) S.roomId = r.id; }
     const mk = k.match(/^top\.b2\.(\d+)\.kind$/); if (mk) { const t = S.top.b2[+mk[1]]; t.CNrow = KEO.cnRowDefault(v); if (v === 'A' && (+t.beta >= 90 || !t.beta)) t.beta = 45; if (v === 'trap' && +t.ho / Math.tan(+t.beta * Math.PI / 180) >= t.b / 2) t.beta = 70; }
-    if (t.dataset.rebuild) { rebuildKeepFocus(); }
+    if (t.dataset.rebuild) { renderForm(); }
     update();
-  }
-  const coefVal = s => { const r = KEO.readNum(s); return r.st === 'empty' ? null : r.st === 'num' ? r.v : String(s); };
-  function rebuildKeepFocus() {
-    const a = document.activeElement, id = a && a.id, k = a && a.dataset && a.dataset.k, pos = a && a.selectionStart;
-    renderForm();
-    const b = id ? document.getElementById(id) : (k ? document.querySelector(`[data-k="${k}"]`) : null);
-    if (b) { b.focus(); try { if (pos !== null && pos !== undefined) b.setSelectionRange(pos, pos); } catch (e) { /* select */ } }
   }
   function onClick(e) {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.mode) { S.mode = b.dataset.mode; renderForm(); update(); return; }
-    if (b.dataset.seg) { let v = b.dataset.val; if (b.dataset.t === 'num') v = +v; if (b.dataset.seg === 'rhoMode') KEO.setRhoMode(S, v); else setP(S, b.dataset.seg, v);
-      if (b.dataset.seg === 'rhoGeo' && v === 'manual' && !(S.rhoRows || []).length) fillRhoRows();
-      const rebuild = /shape$|top\.sys$|\.face$|^rho(Mode|Geo)$|\.(t2m|tau0m|Km)$/.test(b.dataset.seg); if (rebuild) renderForm(); else b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x === b)); update(); return; }
+    if (b.dataset.seg) { let v = b.dataset.val; if (b.dataset.t === 'num') v = +v; setP(S, b.dataset.seg, v); const rebuild = /shape$|top\.sys$|\.face$/.test(b.dataset.seg); if (rebuild) renderForm(); else b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x === b)); update(); return; }
     if (b.dataset.stab !== undefined) { schemeTab = +b.dataset.stab; renderSchemes(); return; }
     const a = b.dataset.act; if (!a) return;
     const W = S.side.walls[+b.dataset.w || 0];
@@ -2574,7 +2064,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
       delWall: () => { S.side.walls.splice(1); },
       addWin: () => { const last = W.windows[W.windows.length - 1]; W.windows.push({ ...last, s: +(last.s + (last.bo || 1.5) + 0.8).toFixed(2) }); },
       delWin: () => { W.windows.splice(+b.dataset.i, 1); },
-      genWin: () => { const wi = +b.dataset.w || 0; const n = Math.max(1, Math.min(20, parseInt($('#gen-n-' + wi).value) || 1)), p = num($('#gen-p-' + wi).value) || 0, o = num($('#gen-o-' + wi).value) || 0; const base = W.windows[0]; W.windows = Array.from({ length: n }, (_, i) => ({ ...base, ...KEO.defaultWindow(), hpd: base.hpd, ho: base.ho, bo: base.bo, s: +(o + (i - (n - 1) / 2) * p).toFixed(3) })); },
+      genWin: () => { const wi = +b.dataset.w || 0; const n = Math.max(1, Math.min(20, parseInt($('#gen-n-' + wi).value) || 1)), p = num($('#gen-p-' + wi).value) || 0, o = num($('#gen-o-' + wi).value) || 0; const base = W.windows[0]; W.windows = Array.from({ length: n }, (_, i) => ({ ...base, t2o: null, tau0o: null, Ko: null, s: +(o + (i - (n - 1) / 2) * p).toFixed(3) })); },
       addBld: () => { W.buildings.push({ l: 20, Hp: 15, a: 40, off: 0, rhoF: 0.4 }); },
       delBld: () => { W.buildings.splice(+b.dataset.i, 1); },
       addLan: () => { const T = S.top.types[+b.dataset.t]; const l = T.lanterns[T.lanterns.length - 1]; T.lanterns.push({ x: +(Math.min(+S.top.L - 0.5, l.x + 2)).toFixed(2), y: l.y }); },
@@ -2587,18 +2077,9 @@ if (typeof module !== 'undefined') module.exports = KEO;
       addB2x: () => { const t = S.top.b2[+b.dataset.t]; const last = +t.xs[t.xs.length - 1] || 0; t.xs.push(+Math.min(+S.top.L - t.b / 2, last + Math.max(t.b + 1, 6)).toFixed(2)); },
       delB2x: () => { S.top.b2[+b.dataset.t].xs.splice(+b.dataset.i, 1); },
       genB2x: () => { const t = S.top.b2[+b.dataset.t], n = Math.max(1, Math.round(+S.top.spans || 1)), w = +S.top.L / n; t.xs = Array.from({ length: n }, (_, i) => +((i + 0.5) * w).toFixed(3)); },
-      clrExc: () => { const x = W.windows[+b.dataset.i], [mk, vk, bk] = OVR[b.dataset.c]; x[mk] = 'wall'; x[vk] = null; if (bk) x[bk] = ''; },
-      addRhoRow: () => { (S.rhoRows = S.rhoRows || []).push({ name: 'Поверхность ' + (S.rhoRows.length + 1), S: null, rho: null, src: '' }); },
-      delRhoRow: () => { S.rhoRows.splice(+b.dataset.i, 1); },
-      fillRhoRows: () => fillRhoRows()
+      applyRho: () => { const rc = S.rhoCalc.s, sw = rc.reduce((a2, x) => a2 + (+x[0] || 0), 0); if (sw) { S.rho = +(rc.reduce((a2, x) => a2 + (+x[0] || 0) * (+x[1] || 0), 0) / sw).toFixed(3); S.rhoCalc.on = true; } }
     };
     if (acts[a]) { acts[a](); renderForm(); update(); }
-  }
-
-  // ручная ведомость ρ: заполнить площадями по размерам помещения (ρ и источники — из режима «по размерам»)
-  function fillRhoRows() {
-    const r = KEO.rhoOf({ ...S, rhoMode: 'surf', rhoGeo: 'auto' });
-    S.rhoRows = (r.rows || []).map(x => ({ name: x.name, S: x.S.st === 'num' ? +x.S.v.toFixed(2) : null, rho: x.rho.st === 'num' ? x.rho.v : null, src: x.src }));
   }
 
   /* ---------- файлы ---------- */
@@ -2633,10 +2114,10 @@ if (typeof module !== 'undefined') module.exports = KEO;
   function saveJSON() { saveFile(safeName(`КЕО ${S.meta.room || 'расчёт'}.json`), JSON.stringify(S, null, 1), 'application/json'); }
   function openJSON(file) {
     const rd = new FileReader();
-    rd.onload = () => { try { const o = JSON.parse(rd.result); if (!o || o.v !== 1 || !o.side || !o.top) throw new Error('не тот формат'); const m = KEO.migrate(o); S = m.st; renderForm(); update(); toast(m.notes.length ? 'Расчёт загружен. ' + m.notes.join('; ') : 'Расчёт загружен'); } catch (e) { toast('Не удалось открыть файл: ' + e.message); } };
+    rd.onload = () => { try { const o = JSON.parse(rd.result); if (!o || o.v !== 1 || !o.side || !o.top) throw new Error('не тот формат'); S = fill(o); renderForm(); update(); toast('Расчёт загружен'); } catch (e) { toast('Не удалось открыть файл: ' + e.message); } };
     rd.readAsText(file);
   }
-  const fill = o => KEO.migrate(o).st;
+  function fill(o) { const d = KEO.defaultState(); return { ...d, ...o, meta: { ...d.meta, ...o.meta }, top: { ...d.top, ...o.top, b2: (o.top && o.top.b2) || d.top.b2, sys: (o.top && o.top.sys) || 'shaft' }, side: { ...d.side, ...o.side }, comb: { ...d.comb, ...o.comb }, rhoCalc: { ...d.rhoCalc, ...o.rhoCalc } }; }
   function save() { try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) { /* хранилище недоступно */ } }
   function load() { try { const s = localStorage.getItem(LS_KEY); if (s) { const o = JSON.parse(s); if (o && o.v === 1) return fill(o); } } catch (e) { /* нет */ } return null; }
   let tt = null; function toast(m) { const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => { t.hidden = true; }, 3500); }
@@ -2648,9 +2129,6 @@ if (typeof module !== 'undefined') module.exports = KEO;
     document.addEventListener('click', onClick);
     $('#ex-menu').addEventListener('change', e => { const v = e.target.value; e.target.value = ''; if (!v) return; $('#first-note').hidden = true; S = v === 'side' ? exampleSide() : v === 'top' ? exampleTop() : v === 'b2' ? exampleB2() : (() => { const s = exampleTop(); s.mode = 'comb'; return s; })(); if (v === 'new') { S = KEO.defaultState(); } renderForm(); update(); toast(v === 'new' ? 'Новый расчёт' : 'Загружен пример'); });
     $('#btn-save').addEventListener('click', saveJSON);
-    $('#breakdown').addEventListener('change', e => { const k = e.target.dataset && e.target.dataset.dan; if (k) danPick(k, +e.target.value); });
-    $('#breakdown').addEventListener('click', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr) danPick('sec', +tr.dataset.dsec); });
-    $('#breakdown').addEventListener('keydown', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); danPick('sec', +tr.dataset.dsec); } });
     $('#file-open').addEventListener('change', e => { if (e.target.files[0]) openJSON(e.target.files[0]); e.target.value = ''; });
     document.querySelectorAll('[data-pdf]').forEach(b => b.addEventListener('click', downloadPDF));
     renderForm(); update();

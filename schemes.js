@@ -170,110 +170,6 @@ const Schemes = (function () {
     return { box: [-0.7, -1.5, L + 1.5, B + 1.4], it };
   }
 
-  /* ---------- проверка по графикам Данилюка I и II (СП 367: п. 8.4.1, рис. 8.8–8.11; Б.2.10–Б.2.11, (Б.11), (Б.12)) ----------
-     Независимо от ядра: углы видимой области строятся заново по исходным размерам (рёбра проёма на внутренней и наружной
-     гранях стены, противостоящие здания), затем число лучей СЧИТЫВАЕТСЯ с графиков, построенных по их определению:
-     луч k графика I — угол возвышения θk, 50·(1 − cos θk) = k; луч k графика II — угол ψk от оси, (100/π)·(ψk + ½·sin 2ψk) = k.
-     Отсчёт у каждой границы — номер луча с десятыми по ближайшей пунктирной линии (n = отсчёт у верхней/правой − у нижней/левой).
-     Затеняющие элементы фасада (балкон, лоджия, козырёк, экран) лучи не обрезают — их влияние учтено K (п. 8.4.2).
-     Только для прямоугольных проёмов. */
-  const DAN = (() => {
-    const PI = Math.PI, N1 = th => 50 * (1 - Math.cos(th)), TH = k => Math.acos(1 - k / 50);
-    const N2 = p => (100 / PI) * (p + 0.5 * Math.sin(2 * p));
-    const PSI = (() => { const c = []; for (let k = 0; k <= 50; k++) { let a = 0, b = PI / 2; for (let i = 0; i < 60; i++) { const m = (a + b) / 2; if (N2(m) < k) a = m; else b = m; } c.push((a + b) / 2); } return k => c[k]; })();
-    const tenth = x => Math.round(x * 10) / 10;
-    // отсчёт по графику: ближайшая пунктирная линия десятых долей луча (пунктир графика — доли луча: k + j/10)
-    function read1(th) { return tenth(N1(th)); }
-    function read2(y, R) { return Math.sign(y) * tenth(N2(Math.atan(Math.abs(y) / R))); }
-    // видимые участки одного проёма: небо и фасады противостоящих зданий
-    function sectors(raw, win, blds) {
-      const lt = raw.lt, D = raw.lt + raw.dst, faces = [[lt, 'внутренняя грань'], [D, 'наружная грань']];
-      const zs = win.hpd - raw.hp, zt = win.hpd + win.ho - raw.hp, yl = win.s - win.bo / 2 - (raw.ds || 0), yr = win.s + win.bo / 2 - (raw.ds || 0);
-      const pick = (v, cmp) => faces.map(([x, n]) => ({ a: Math.atan2(v, x), n })).reduce((p, q) => cmp(q.a, p.a) ? q : p);
-      const lo = pick(zs, (a, b) => a > b), hi = pick(zt, (a, b) => a < b), L = pick(yl, (a, b) => a > b), Rr = pick(yr, (a, b) => a < b);
-      if (lo.a < 0) { lo.a = 0; lo.n = 'горизонт (уровень точки А)'; }
-      const edges = { lo, hi, L, R: Rr, D, zs, zt, yl, yr };
-      if (!(hi.a > lo.a + 1e-9 && Rr.a > L.a + 1e-9)) return { edges, list: [] };
-      const B = (blds || []).map((b, i) => { const Db = D + b.l; return { i, Db, pa: Math.atan2(b.off - b.a / 2, Db), pb: Math.atan2(b.off + b.a / 2, Db), top: Math.atan2(b.Hp - raw.hp, Db) }; });
-      const br = [L.a, Rr.a]; B.forEach(b => [b.pa, b.pb].forEach(p => { if (p > L.a && p < Rr.a) br.push(p); })); br.sort((a, b) => a - b);
-      const parts = [];
-      for (let i = 0; i < br.length - 1; i++) {
-        const pa = br[i], pb = br[i + 1]; if (pb - pa < 1e-12) continue; const pm = (pa + pb) / 2;
-        let tc = lo.a; B.filter(b => b.pa <= pm && b.pb >= pm).sort((a, b) => a.Db - b.Db).forEach(b => { const t = Math.min(b.top, hi.a); if (t > tc + 1e-12) { parts.push({ type: 'bld', bld: b.i, ta: tc, tb: t, pa, pb }); tc = t; } });
-        if (hi.a > tc + 1e-12) parts.push({ type: 'sky', ta: tc, tb: hi.a, pa, pb });
-      }
-      const list = [];
-      parts.forEach(s => { const m = list[list.length - 1]; if (m && m.type === s.type && m.bld === s.bld && Math.abs(m.ta - s.ta) < 1e-12 && Math.abs(m.tb - s.tb) < 1e-12 && Math.abs(m.pb - s.pa) < 1e-12) m.pb = s.pb; else list.push({ ...s }); });
-      list.forEach(s => {
-        const za = D * Math.tan(s.ta), zb = D * Math.tan(s.tb), zm = (za + zb) / 2;
-        s.ya = D * Math.tan(s.pa); s.yb = D * Math.tan(s.pb); s.za = za; s.zb = zb; s.R = Math.hypot(D, zm); s.gamma = Math.atan2(zm, D) * 180 / PI;
-        s.r1a = read1(s.ta); s.r1b = read1(s.tb); s.n1g = tenth(s.r1b - s.r1a); s.n1a = N1(s.tb) - N1(s.ta);
-        s.r2a = read2(s.ya, s.R); s.r2b = read2(s.yb, s.R); s.n2g = tenth(s.r2b - s.r2a); s.n2a = N2(Math.atan(s.yb / s.R)) - N2(Math.atan(s.ya / s.R));
-      });
-      return { edges, list };
-    }
-    return { N1, N2, TH, PSI, read1, read2, sectors };
-  })();
-
-  // совмещённая схема в одном масштабе: сверху — разрез с графиком I (полюс в А), снизу — план с графиком II
-  // (полюс на оси, проходящей через А перпендикулярно стене, на расстоянии R от наружной грани — горизонталь R совпадает с гранью)
-  function danScheme(raw, wi, dsec, sel) {
-    const it = [], win = raw.windows[wi], s0 = dsec.list[sel] || dsec.list[0], e = dsec.edges, dst = raw.dst, lt = raw.lt, D = e.D, ds = raw.ds || 0;
-    const R = s0 ? s0.R : D, Rg = Math.max(R, D) * 1.12, deg = a => (a * 180 / Math.PI);
-    const hp = raw.hp, H = Math.max(raw.H || 0, win.hpd + win.ho + 0.3);
-    // ---- разрез: x — глубина (внутренняя грань стены x = 0, А при x = lт), z — от пола
-    const A = { x: lt, z: hp }, pol = (r, th) => [A.x - r * Math.cos(th), A.z + r * Math.sin(th)];
-    // высота разреза ограничена: проём, точка C и запас 1,2 м; лучи графика I обрезаются по верхней границе
-    const zTop = Math.max(win.hpd + win.ho, s0 ? hp + (s0.za + s0.zb) / 2 : 0, hp + 1) + 1.2;
-    const clipR = th => Math.min(Rg, Math.sin(th) > 1e-9 ? (zTop - A.z) / Math.sin(th) : Rg);
-    const xL = Math.min(-dst - 0.6, A.x - Rg - 0.2);
-    it.push({ t: 'line', x1: xL, y1: 0, x2: raw.dp + 0.2, y2: 0, c: 'room' });
-    if (hp > 0) { it.push({ t: 'line', x1: 0, y1: hp, x2: raw.dp, y2: hp, c: 'axis' }); it.push({ t: 'text', x: raw.dp - 0.05, y: hp + 0.08, s: 'УРП', c: 'txt', a: 'end' }); }
-    it.push({ t: 'rect', x: -dst, y: 0, w: dst, h: win.hpd, c: 'wall' });
-    it.push({ t: 'rect', x: -dst, y: win.hpd + win.ho, w: dst, h: Math.max(0.2, H - win.hpd - win.ho), c: 'wall' });
-    it.push({ t: 'line', x1: -dst / 2, y1: win.hpd, x2: -dst / 2, y2: win.hpd + win.ho, c: 'glass' });
-    // видимые участки выбранного проёма (выделен выбранный)
-    dsec.list.forEach((s, k) => it.push({ t: 'poly', pts: [[A.x, A.z], pol(clipR(s.ta), s.ta), pol(clipR(s.tb), s.tb)], c: s.type === 'sky' ? (k === sel ? 'skysel' : 'skyf') : (k === sel ? 'bldsel' : 'bldf') }));
-    // лучи графика I (номер — у конца луча, каждый десятый; пятые — средней линией)
-    for (let k = 0; k <= 50; k++) { const th = DAN.TH(k), rr = clipR(th), p = pol(rr, th); it.push({ t: 'line', x1: A.x, y1: A.z, x2: p[0], y2: p[1], c: k % 10 === 0 ? 'gr10' : k % 5 === 0 ? 'gr5' : 'gr1' }); if (k % 10 === 0) { const q = pol(rr + 0.15, th); it.push({ t: 'text', x: q[0], y: q[1] - 0.04, s: String(k), c: 'grt', a: 'middle' }); } }
-    // ограничивающие рёбра и граничные лучи
-    if (s0) {
-      [s0.ta, s0.tb].forEach(th => { const p = pol(clipR(th), th); it.push({ t: 'line', x1: A.x, y1: A.z, x2: p[0], y2: p[1], c: 'lim' }); });
-      const C = { x: -dst, z: hp + (s0.za + s0.zb) / 2 };
-      const arc = []; for (let i = 0; i <= 90; i++) { const q = pol(s0.R, i * Math.PI / 180); if (q[1] > zTop) break; arc.push(q); }
-      it.push({ t: 'pline', pts: arc, c: 'arc' });
-      it.push({ t: 'circle', x: C.x, y: C.z, r: 0.05, c: 'cpt' }); it.push({ t: 'text', x: C.x - 0.08, y: C.z + 0.08, s: 'C', c: 'txtb', a: 'end' });
-      it.push({ t: 'line', x1: A.x, y1: A.z, x2: C.x, y2: C.z, c: 'ray' });
-    }
-    [[e.zs, e.lo], [e.zt, e.hi]].forEach(([z, g]) => { if (g.n.startsWith('горизонт')) return; const x = g.n === 'внутренняя грань' ? 0 : -dst; it.push({ t: 'circle', x, y: hp + z, r: 0.045, c: 'edge' }); });
-    it.push({ t: 'circle', x: A.x, y: A.z, r: 0.07, c: 'pt' }); it.push({ t: 'text', x: A.x + 0.1, y: A.z + 0.1, s: 'А', c: 'txtb' });
-    it.push({ t: 'dim', x1: -dst, y1: -0.35, x2: 0, y2: -0.35, s: 'Δст' });
-    it.push({ t: 'dim', x1: 0, y1: -0.35, x2: lt, y2: -0.35, s: 'lт = ' + r2(lt) });
-    const topZ = zTop + 0.45;
-    it.push({ t: 'text', x: xL + 0.05, y: topZ, s: 'Разрез · график I', c: 'cap' });
-    // ---- план: y — вдоль стены, ниже разреза; полюс графика II — P
-    const yr = [win.s - win.bo / 2, win.s + win.bo / 2, ds - 1, ds + 1, ...(s0 ? [ds + s0.ya, ds + s0.yb] : [])], half = Math.max(1.4, ...yr.map(y => Math.abs(y - ds))) + 0.5;
-    const off = -0.9 - half, Y = y => off + (y - ds); // ds — ось через А
-    const Px = -dst + R, P = { x: Px, y: Y(ds) };
-    it.push({ t: 'rect', x: -dst, y: Y(ds - half), w: dst, h: 2 * half, c: 'wall' });
-    raw.windows.forEach((w2, j) => { const a = w2.s - w2.bo / 2, b = w2.s + w2.bo / 2; if (b < ds - half || a > ds + half) return; it.push({ t: 'rect', x: -dst, y: Y(Math.max(a, ds - half)), w: dst, h: Math.min(b, ds + half) - Math.max(a, ds - half), c: j === wi ? 'opn' : 'opn2' }); });
-    it.push({ t: 'line', x1: -dst, y1: Y(ds - half), x2: -dst, y2: Y(ds + half), c: 'hz' });
-    it.push({ t: 'line', x1: xL, y1: Y(ds), x2: Math.max(Px, A.x) + 0.3, y2: Y(ds), c: 'axis' });
-    if (s0) {
-      dsec.list.forEach((s, k) => it.push({ t: 'poly', pts: [[P.x, P.y], [-dst, Y(ds + s.ya)], [-dst, Y(ds + s.yb)]], c: s.type === 'sky' ? (k === sel ? 'skysel' : 'skyf') : (k === sel ? 'bldsel' : 'bldf') }));
-      for (let k = 0; k <= 50; k++) [1, -1].forEach(sg => { if (k === 0 && sg < 0) return; const yy = sg * R * Math.tan(DAN.PSI(k)); if (Math.abs(yy) > half + 0.05) return; it.push({ t: 'line', x1: P.x, y1: P.y, x2: -dst - 0.25, y2: Y(ds + yy * (R + 0.25) / R), c: k % 10 === 0 ? 'gr10' : k % 5 === 0 ? 'gr5' : 'gr1' }); if (k % 5 === 0) it.push({ t: 'text', x: -dst - 0.3, y: Y(ds + yy * (R + 0.3) / R) - 0.05, s: String(k), c: 'grt', a: 'end' }); });
-      [s0.ya, s0.yb].forEach(y => it.push({ t: 'line', x1: P.x, y1: P.y, x2: -dst, y2: Y(ds + y), c: 'lim' }));
-      // истинные ограничивающие лучи из А (через рёбра откосов)
-      [s0.ya, s0.yb].forEach(y => it.push({ t: 'line', x1: A.x, y1: Y(ds), x2: -dst, y2: Y(ds + y), c: 'rayb' }));
-      it.push({ t: 'circle', x: P.x, y: P.y, r: 0.06, c: 'cpt' }); it.push({ t: 'text', x: P.x + 0.08, y: P.y - 0.3, s: 'P', c: 'txtb' });
-      it.push({ t: 'dim', x1: -dst, y1: Y(ds - half) - 0.3, x2: Px, y2: Y(ds - half) - 0.3, s: 'R = ' + r2(R) });
-    }
-    it.push({ t: 'circle', x: A.x, y: Y(ds), r: 0.07, c: 'pt' }); it.push({ t: 'text', x: A.x + 0.1, y: Y(ds) + 0.1, s: 'А', c: 'txtb' });
-    it.push({ t: 'text', x: xL + 0.05, y: Y(ds + half) + 0.25, s: 'План · график II (полюс P)', c: 'cap' });
-    const xR = Math.max(raw.dp + 0.3, Px + 0.6);
-    return { box: [xL - 0.2, Y(ds - half) - 0.75, xR, topZ + 0.3], it };
-  }
-
   /* ---------- рендер в SVG ---------- */
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
   function toSVG(sc, opt) {
@@ -288,7 +184,6 @@ const Schemes = (function () {
       else if (e.t === 'rect') o += `<rect x="${X(e.x)}" y="${Y(e.y + e.h)}" width="${e.w * s}" height="${e.h * s}" class="s-${e.c}"/>`;
       else if (e.t === 'circle') o += `<circle cx="${X(e.x)}" cy="${Y(e.y)}" r="${e.c === 'pt' ? Math.max(e.r * s, pr) : e.r * s}" class="s-${e.c}"/>`;
       else if (e.t === 'poly') o += `<polygon points="${e.pts.map(p => X(p[0]) + ',' + Y(p[1])).join(' ')}" class="s-${e.c}"/>`;
-      else if (e.t === 'pline') o += `<polyline points="${e.pts.map(p => X(p[0]) + ',' + Y(p[1])).join(' ')}" class="s-${e.c}"/>`;
       else if (e.t === 'text') o += `<text x="${X(e.x)}" y="${Y(e.y)}" text-anchor="${e.a || 'start'}" class="s-${e.c}">${esc(e.s)}</text>`;
       else if (e.t === 'dim' || e.t === 'dimv') {
         o += `<line x1="${X(e.x1)}" y1="${Y(e.y1)}" x2="${X(e.x2)}" y2="${Y(e.y2)}" class="s-dim" marker-start="url(#ar)" marker-end="url(#ar)"/>`;
@@ -306,11 +201,7 @@ const Schemes = (function () {
     ray: { stroke: '#c48a00', lw: 0.3, dash: [1.2, 0.8] }, rayb: { stroke: '#c48a00', lw: 0.2 }, skyf: { fill: '#fbefc9', stroke: '#c48a00', lw: 0.15 },
     bld: { fill: '#c9cfd4', stroke: '#2b3640', lw: 0.2 }, pt: { fill: '#b3261e', stroke: '#b3261e', lw: 0.2 },
     axis: { stroke: '#7a8691', lw: 0.2, dash: [2, 0.6, 0.4, 0.6] }, lan: { fill: '#e3eef8', stroke: '#1f6fb2', lw: 0.3 },
-    dim: { stroke: '#4c5a66', lw: 0.15 }, opq: { stroke: '#2b3640', lw: 0.45 },
-    skysel: { fill: '#f6d27a', stroke: '#c48a00', lw: 0.25 }, bldf: { fill: '#dfe3e6', stroke: '#6b7780', lw: 0.15 }, bldsel: { fill: '#b9c2c9', stroke: '#2b3640', lw: 0.25 },
-    gr1: { stroke: '#9fb4c7', lw: 0.06 }, gr5: { stroke: '#6f8fae', lw: 0.12 }, gr10: { stroke: '#2d5d8b', lw: 0.2 }, lim: { stroke: '#b3261e', lw: 0.35 },
-    arc: { stroke: '#2d5d8b', lw: 0.25, dash: [1, 0.6] }, cpt: { fill: '#2d5d8b', stroke: '#2d5d8b', lw: 0.2 }, edge: { fill: '#ffffff', stroke: '#b3261e', lw: 0.3 },
-    opn: { fill: '#cfe3f5', stroke: '#1f6fb2', lw: 0.3 }, opn2: { fill: '#eef3f7', stroke: '#7a8691', lw: 0.15 }, hz: { stroke: '#2d5d8b', lw: 0.3 }
+    dim: { stroke: '#4c5a66', lw: 0.15 }, opq: { stroke: '#2b3640', lw: 0.45 }
   };
   function toPDF(doc, sc, bx, by, bw, bh) {
     const [x0, y0, x1, y1] = sc.box, W = x1 - x0, H = y1 - y0;
@@ -321,10 +212,9 @@ const Schemes = (function () {
       const st = PST[e.c] || { stroke: '#1b2329', lw: 0.2 };
       if (e.t === 'line') doc.line(X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), { color: st.stroke, lw: st.lw, dash: st.dash });
       else if (e.t === 'rect') doc.rect(X(e.x), Y(e.y + e.h), e.w * k, e.h * k, { fill: st.fill, stroke: st.stroke, lw: st.lw });
-      else if (e.t === 'circle') doc.circle(X(e.x), Y(e.y), Math.max(e.r * k, e.c === 'pt' ? 0.7 : (e.c === 'cpt' || e.c === 'edge') ? 0.5 : 0), { fill: st.fill, stroke: st.stroke, lw: st.lw });
+      else if (e.t === 'circle') doc.circle(X(e.x), Y(e.y), Math.max(e.r * k, e.c === 'pt' ? 0.7 : 0), { fill: st.fill, stroke: st.stroke, lw: st.lw });
       else if (e.t === 'poly') doc.poly(e.pts.map(p => [X(p[0]), Y(p[1])]), { fill: st.fill, stroke: st.stroke, lw: st.lw, close: true });
-      else if (e.t === 'pline') doc.poly(e.pts.map(p => [X(p[0]), Y(p[1])]), { stroke: st.stroke, lw: st.lw, dash: st.dash, close: false });
-      else if (e.t === 'text') doc.text(e.s, X(e.x), Y(e.y), { size: e.c === 'cap' ? 7 : e.c === 'grt' ? 5 : fs, font: e.c === 'txtb' || e.c === 'cap' ? 'B' : 'R', align: e.a === 'middle' ? 'center' : (e.a === 'end' ? 'right' : 'left'), color: '#1b2329' });
+      else if (e.t === 'text') doc.text(e.s, X(e.x), Y(e.y), { size: e.c === 'cap' ? 7 : fs, font: e.c === 'txtb' || e.c === 'cap' ? 'B' : 'R', align: e.a === 'middle' ? 'center' : (e.a === 'end' ? 'right' : 'left'), color: '#1b2329' });
       else if (e.t === 'dim' || e.t === 'dimv') {
         doc.line(X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), { color: '#4c5a66', lw: 0.15 });
         [[e.x1, e.y1], [e.x2, e.y2]].forEach(([x, y]) => doc.line(X(x) - 0.6, Y(y) + 0.6, X(x) + 0.6, Y(y) - 0.6, { color: '#4c5a66', lw: 0.25 }));
@@ -333,6 +223,6 @@ const Schemes = (function () {
       }
     });
   }
-  return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF, DAN, danScheme };
+  return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF };
 })();
 if (typeof module !== 'undefined') module.exports = Schemes;

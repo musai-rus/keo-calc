@@ -10,8 +10,8 @@
     Object.assign(s, { region: 'Краснодарский край', roomId: 'A57' }); s.bType = DATA.rooms.find(r => r.id === 'A57').g;
     s.meta = { code: '1226-30-01-АР2', object: 'ДОУ на 240 мест (пример)', room: '1.004', author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
     const w = s.side.walls[0]; Object.assign(w, { orient: 'В', dp: 8, bp: 7.4, H: 3.3, dst: 0.72, t1: 0, t1c: 0.64, t2: 1, t4: 0, kType: 'none' });
-    w.windows = [-2.88, -1.12, 0.62, 2.38].map(x => ({ ...KEO.defaultWindow(x), hpd: 0.5, ho: 2.2, bo: 1.65, t2m: 'manual', t2o: 0.75 }));
-    w.windows[2].t2o = 0.70;
+    w.windows = [-2.88, -1.12, 0.62, 2.38].map(x => ({ hpd: 0.5, ho: 2.2, bo: 1.65, s: x, t2o: null, tau0o: null, Ko: null }));
+    w.windows[0].t2o = 0.75; w.windows[1].t2o = 0.75; w.windows[3].t2o = 0.75; w.windows[2].t2o = 0.70;
     return s;
   }
   function exampleTop() {
@@ -20,7 +20,7 @@
     s.meta = { code: '1226-30-01-АР3', object: 'ДОУ на 240 мест (пример)', room: '1.G.11.2', author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
     Object.assign(s.top, { L: 8, B: 7.41, H: 4.2, spans: 1, l1: null, y0: 3.71, nPts: 0 });
     s.top.types = [{ ...KEO.defaultType(), name: 'Шахта Ø 2,0', shape: 'round', dv: 2, dn: 2, hsf: 1, refl: 'diffuse', rhoW: 0.7, t1: 0.48, t2: 0.75, lanterns: [{ x: 4.0, y: 5.96 }, { x: 3.63, y: 3.29 }] }];
-    s.side.walls[0] = Object.assign(KEO.defaultWall('В'), { dst: 0.3, t1c: 0.64, t2: 0, windows: [-2.2, 0, 2.2].map(x => ({ ...KEO.defaultWindow(x), hpd: 0.5, ho: 2.6, bo: 1.65 })) });
+    s.side.walls[0] = Object.assign(KEO.defaultWall('В'), { dst: 0.3, t1c: 0.64, t2: 0, windows: [{ hpd: 0.5, ho: 2.6, bo: 1.65, s: -2.2 }, { hpd: 0.5, ho: 2.6, bo: 1.65, s: 0 }, { hpd: 0.5, ho: 2.6, bo: 1.65, s: 2.2 }].map(x => ({ ...x, t2o: null, tau0o: null, Ko: null })) });
     return s;
   }
 
@@ -43,7 +43,7 @@
   function inp(path, label, sym, unit, o = {}) {
     const v = getP(S, path); const id = 'f-' + path.replace(/\./g, '-');
     return `<label class="fld ${o.cls || ''}" for="${id}"><span class="lbl">${label}${sym ? ` <i class="sym">${Report.richHTML(sym)}</i>` : ''}</span>
-      <span class="inpw"><input id="${id}" data-k="${path}" data-t="${o.t || 'num'}" inputmode="decimal" autocomplete="off" value="${esc(fv(v))}" placeholder="${esc(o.ph || '')}">${unit ? `<span class="unit">${unit}</span>` : ''}</span>${o.hint ? `<span class="hint">${o.hint}</span>` : ''}</label>`;
+      <span class="inpw"><input id="${id}" data-k="${path}" data-t="num" inputmode="decimal" autocomplete="off" value="${esc(fv(v))}" placeholder="${esc(o.ph || '')}">${unit ? `<span class="unit">${unit}</span>` : ''}</span>${o.hint ? `<span class="hint">${o.hint}</span>` : ''}</label>`;
   }
   function tinp(path, label, o = {}) {
     const v = getP(S, path); const id = 'f-' + path.replace(/\./g, '-');
@@ -84,30 +84,13 @@
         <div class="row three">${rule === 'manual' ? inp(`side.walls.${wi}.lt`, 'До расчётной точки', 'l_{т}', 'м') : `<div class="fld"><span class="lbl">До расчётной точки <i class="sym">l<sub>т</sub></i></span><div class="calc">${out('lt' + wi)} м</div><span class="hint">${KEO.RT_TEXT[rule]}</span></div>`}
         ${inp(`side.walls.${wi}.ds`, 'Смещение точки от оси', 'Δs', 'м', { hint: 'вправо — плюс' })}
         <div class="fld"><span class="lbl">Высота точки <i class="sym">h<sub>р</sub></i></span><div class="calc">${out('hp')} м</div><span class="hint">${out('hpNote')}</span></div></div></div>`).join('')}
-      <div class="row two"><div class="fld"><span class="lbl">Двустороннее / угловое освещение</span><div class="btns">${walls.length < 2 ? `<button type="button" class="btn ghost" data-act="addWall">+ Вторая стена с окнами</button>` : `<button type="button" class="btn ghost" data-act="delWall">− Убрать вторую стену</button>`}</div><span class="hint">КЕО от проёмов разной ориентации суммируется (п. 8.4.1)</span></div><div></div></div>
-      ${rhoField()}
+      <div class="row two"><div class="fld"><span class="lbl">Двустороннее / угловое освещение</span><div class="btns">${walls.length < 2 ? `<button type="button" class="btn ghost" data-act="addWall">+ Вторая стена с окнами</button>` : `<button type="button" class="btn ghost" data-act="delWall">− Убрать вторую стену</button>`}</div><span class="hint">КЕО от проёмов разной ориентации суммируется (п. 8.4.1)</span></div>
+      ${rhoField()}</div>
     </section>`;
   }
   function rhoField() {
-    const m = KEO.rhoMode(S), top = S.mode === 'top', rs = S.rhoSurf;
-    const head = `<div class="fld"><span class="lbl">Средневзвешенный коэффициент отражения <i class="sym">ρ<sub>ср</sub></i></span>${seg('rhoMode', [['default', '0,55 — коэффициенты неизвестны'], ['surf', 'По поверхностям'], ['manual', 'Вручную']], { aria: 'Источник ρср' })}${m === 'legacy' ? '<span class="hint warn-t">Файл прежней версии: источник ρср не подтверждён — выберите режим.</span>' : ''}</div>`;
-    const val = `<div class="row two"><label class="fld" for="f-rho"><span class="lbl">ρ<sub>ср</sub> в расчёте${m === 'manual' ? '' : ' <span class="muted">(правка переключит на «Вручную»)</span>'}</span><span class="inpw"><input id="f-rho" data-k="rho" data-t="coef" inputmode="decimal" autocomplete="off" value="${esc(fv(m === 'manual' || m === 'legacy' ? S.rho : ''))}"></span></label>${m === 'manual' ? tinp('rhoBasis', 'Основание (обязательно укажите)', { ph: 'например: измерения отделки, паспорт материалов' }) : '<div></div>'}</div>
-      <p class="small">В расчёте: ρср = <b>${out('rhoV')}</b> — ${out('rhoSrc')}</p>`;
-    let body = '';
-    if (m === 'surf') {
-      const geo = S.rhoGeo === 'manual' ? 'manual' : 'auto';
-      body = `<div class="fld"><span class="lbl">Площади поверхностей</span>${seg('rhoGeo', [['auto', 'По размерам помещения'], ['manual', 'Ручная ведомость']], { aria: 'Площади' })}<span class="hint">${geo === 'auto' ? 'Прямоугольное помещение с плоским потолком: пол и потолок a×b, стены 2(a+b)H минус окна, окна — Σ bо×hо. Пустое поле площади — авто; введённое значение не пересчитывается.' : 'Сложный контур, наклонный потолок, ниши: площади каждой поверхности вводятся вручную; автоматический расчёт не применяется.'}</span></div>`;
-      if (geo === 'auto') {
-        const rows = top ? KEO.RHO_ROWS.slice(0, 3) : KEO.RHO_ROWS;
-        body += `<div class="tblw"><table class="grid-t rho-t"><thead><tr><th>Поверхность</th><th>S авто, м²</th><th>S вручную, м²</th><th>ρ</th><th>Источник ρ</th></tr></thead><tbody>${rows.map(([k, n]) => `<tr><td>${top && k === 'walls' ? 'Стены' : n}</td><td class="c">${out('rhoA-' + k)}</td><td><input aria-label="${n}: площадь вручную" data-k="rhoSurf.${k}.S" data-t="coef" inputmode="decimal" placeholder="авто" value="${esc(fv(rs[k].S))}"></td><td><input aria-label="${n}: ρ" data-k="rhoSurf.${k}.rho" data-t="coef" inputmode="decimal" value="${esc(fv(rs[k].rho))}"></td><td><input aria-label="${n}: источник ρ" data-k="rhoSurf.${k}.src" data-t="str" placeholder="измерения / паспорт / ориентир" value="${esc(rs[k].src)}"></td></tr>`).join('')}</tbody></table></div>
-        <p class="small">${top ? 'Для r2 верхнего света — пол, стены, потолок (табл. Б.21).' : 'Состав — пол, стены, потолок и окна (примечание 2 к табл. Б.6/Б.7). Площадь стен вручную вводится уже <b>без окон</b> — окна повторно не вычитаются. Окна — по наружному обмеру коробки (п. Б.2.7); площадь внутренней поверхности можно уточнить вручную.'}${S.mode === 'comb' ? ' В комбинированном режиме это же ρср применяется и к r2 (табл. Б.21).' : ''}</p>`;
-      } else {
-        body += `<div class="tblw"><table class="grid-t rho-t"><thead><tr><th>Поверхность</th><th>S, м²</th><th>ρ</th><th>Источник ρ</th><th></th></tr></thead><tbody>${(S.rhoRows || []).map((x, i) => `<tr><td><input aria-label="Поверхность ${i + 1}" data-k="rhoRows.${i}.name" data-t="str" value="${esc(x.name)}"></td><td><input aria-label="Поверхность ${i + 1}: площадь" data-k="rhoRows.${i}.S" data-t="coef" inputmode="decimal" value="${esc(fv(x.S))}"></td><td><input aria-label="Поверхность ${i + 1}: ρ" data-k="rhoRows.${i}.rho" data-t="coef" inputmode="decimal" value="${esc(fv(x.rho))}"></td><td><input aria-label="Поверхность ${i + 1}: источник ρ" data-k="rhoRows.${i}.src" data-t="str" value="${esc(x.src)}"></td><td><button type="button" class="icon" data-act="delRhoRow" data-i="${i}" aria-label="Удалить поверхность ${i + 1}">×</button></td></tr>`).join('')}</tbody></table></div>
-        <div class="btns"><button type="button" class="btn ghost" data-act="addRhoRow">+ Поверхность</button><button type="button" class="btn ghost" data-act="fillRhoRows">Заполнить по размерам помещения</button></div>`;
-      }
-      body += `<p class="small">Коэффициенты отражения — по данным измерений (примечание 2 к табл. Б.6/Б.7). Ориентиры по виду отделки (побелка 0,7–0,8; светлая окраска 0,55–0,6; паркет 0,25–0,3; светлый линолеум 0,3–0,4) не являются измеренными — укажите это в источнике. Значение 0,20 из п. Б.2.3 относится к окнам фасадов противостоящих зданий, а не к собственной внутренней поверхности.</p>`;
-    }
-    return `<div class="wallblock rho-b">${head}${val}${body}</div>`;
+    return `<div class="fld"><span class="lbl">Средневзвешенный коэфф. отражения <i class="sym">ρ<sub>ср</sub></i></span><span class="inpw"><input id="f-rho" data-k="rho" data-t="num" inputmode="decimal" value="${fv(S.rho)}"></span><span class="hint">0,55 — для жилых и общественных (п. 5.10 СП 52)</span>
+      ${more('Рассчитать ρср по отделке', `<p class="small">ρср = Σ ρi·Si / Σ Si, формула (3.6) СП 367.</p><div class="rhogrid"><span></span><span class="small">S, м²</span><span class="small">ρ</span>${['Пол', 'Стены', 'Потолок', 'Окна'].map((n, i) => `<span>${n}</span><input aria-label="${n}, площадь" data-k="rhoCalc.s.${i}.0" data-t="num" inputmode="decimal" value="${fv(S.rhoCalc.s[i][0])}"><input aria-label="${n}, коэффициент отражения" data-k="rhoCalc.s.${i}.1" data-t="num" inputmode="decimal" value="${fv(S.rhoCalc.s[i][1])}">`).join('')}</div><div class="btns"><button type="button" class="btn ghost" data-act="applyRho">Принять ρср = ${out('rhoCalc')}</button></div><p class="small">Ориентиры: побелка 0,7–0,8; светлая окраска 0,55–0,6; паркет 0,25–0,3; линолеум светлый 0,3–0,4; окна с переплётами 0,2.</p>`)}</div>`;
   }
 
   function cardRoomTop() {
@@ -118,42 +101,25 @@
       <div class="fld"><span class="lbl">Высота УРП <i class="sym">h<sub>урп</sub></i></span><div class="calc">${out('hp')} м</div><span class="hint">${out('hpNote')}</span></div></div>
       <div class="row three">${inp('top.spans', 'Число пролётов', '', '', { hint: '1, 2, 3 и более' })}${b2 ? inp('top.l1', 'Ширина пролёта', 'l_{1}', 'м', { ph: '= L / пролёты', hint: 'для табл. Б.21' }) : inp('top.l1', 'Ширина пролёта', 'l_{1}', 'м', { ph: '= B', hint: 'для однопролётного = ширине' })}
       ${b2 ? `<div class="fld"><span class="lbl">Высота низа остекления над УРП <i class="sym">h<sub>ф</sub></i></span><div class="calc">${out('hf')} м</div><span class="hint">hф = H + hст − hурп (для r2)</span></div>` : `<div class="fld"><span class="lbl">Расчётная высота <i class="sym">h<sub>р</sub></i></span><div class="calc">${out('hr')} м</div><span class="hint">hр = H − hурп</span></div>`}</div>
-      ${rhoField()}
+      <div class="row two">${rhoField()}<div></div></div>
     </section>`;
   }
 
-  // исключения проёма: τ2, τо, K — «по общим параметрам стены» или «вручную»; рядом — что применено в расчёте
-  function excEditor(pre, wi, x, i) {
-    const p = `${pre}.windows.${i}`, md = k => KEO.winMode(x, k), any = ['t2', 'tau0', 'K'].some(k => md(k) === 'manual');
-    const t0m = md('tau0') === 'manual';
-    const line = (k, lbl, vk, bk, note) => { const man = md(k) === 'manual', off = k === 't2' && t0m;
-      return `<div class="exc-row${off ? ' off' : ''}"><span class="exc-l">${lbl}</span>${seg(`${p}.${OVR[k][0]}`, [['wall', 'По общим'], ['manual', 'Вручную']], { aria: `Проём ${i + 1}: ${lbl}` })}
-        <input class="exc-v" aria-label="Проём ${i + 1}: ${lbl} вручную" data-k="${p}.${vk}" data-t="coef" inputmode="decimal" value="${esc(fv(x[vk]))}" ${man && !off ? '' : 'disabled'} placeholder="${man ? 'значение' : 'не задано'}">
-        ${bk ? `<input class="exc-b" aria-label="Проём ${i + 1}: основание ${lbl}" data-k="${p}.${bk}" data-t="str" value="${esc(x[bk] || '')}" ${man ? '' : 'disabled'} placeholder="основание">` : ''}
-        <button type="button" class="btn ghost sm" data-act="clrExc" data-w="${wi}" data-i="${i}" data-c="${k}" ${man || (x[vk] !== null && x[vk] !== '' && x[vk] !== undefined) ? '' : 'disabled'}>Очистить</button>${note ? `<span class="hint">${note}</span>` : ''}</div>`; };
-    return `<details class="excd" ${any ? 'open' : ''}><summary>Исключения проёма ${i + 1}: ${any ? ['t2', 'tau0', 'K'].filter(k => md(k) === 'manual').map(k => ({ t2: 'τ2', tau0: 'τо', K: 'K' })[k]).join(', ') + ' — вручную' : 'нет (по общим параметрам стены)'}</summary>
-      ${line('t2', 'τ2 переплёта', 't2o', null, t0m ? 'не используется: τо проёма задан вручную (значение сохранено)' : '')}
-      ${line('tau0', 'τо целиком', 'tau0o', 'tau0b', md('tau0') === 'manual' ? 'заменяет произведение τ1…τ5' : '')}
-      ${line('K', 'K', 'Ko', 'Kb', md('K') === 'manual' ? 'заменяет K стены (не умножается на него)' : '')}
-      <p class="small exc-res">${out(`wsrc-${wi}-${i}`)}</p></details>`;
-  }
-  const OVR = { t2: ['t2m', 't2o'], tau0: ['tau0m', 'tau0o', 'tau0b'], K: ['Km', 'Ko', 'Kb'] };
   function cardWindows(walls) {
     return walls.map((w, wi) => {
       const pre = `side.walls.${wi}`;
       return `<div class="wallblock">${walls.length > 1 ? `<h3>Стена ${wi + 1}</h3>` : ''}
       <div class="fld"><span class="lbl">Ориентация светопроёмов</span>${seg(pre + '.orient', KEO.ORIENTS.map(o => [o, o]), { cls: 'compass', aria: 'Ориентация' })}<span class="hint">C<sub>N</sub> = ${out('cn' + wi)} — табл. 5.1 СП 52</span></div>
       <div class="row three">${inp(pre + '.dst', 'Толщина наружной стены', 'Δ_{ст}', 'м')}
-      ${sel(pre + '.t1', 'Остекление', DATA.tau1.map((t, i) => [i, `${t.t} — τ1 ${t.r}`]), { t: 'num', sym: 'τ_{1}' })}${inp(pre + '.t1c', 'τ1 по паспорту изделия', 'τ_{1}', '', { ph: 'из таблицы', t: 'coef' })}</div>
+      ${sel(pre + '.t1', 'Остекление', DATA.tau1.map((t, i) => [i, `${t.t} — τ1 ${t.r}`]), { t: 'num', sym: 'τ_{1}' })}${inp(pre + '.t1c', 'τ1 по паспорту изделия', 'τ_{1}', '', { ph: 'из таблицы' })}</div>
       <div class="row three">${sel(pre + '.t2', 'Переплёт', DATA.tau2.map((t, i) => [i, `${t.t} — ${f(t.v)}`]), { t: 'num', sym: 'τ_{2}' })}${sel(pre + '.t4', 'Солнцезащита', DATA.tau4.map((t, i) => [i, `${t.t} — ${f(t.v)}`]), { t: 'num', sym: 'τ_{4}' })}
-      <div class="fld"><span class="lbl"><i class="sym">τ<sub>о</sub></i> по общим параметрам стены</span><div class="calc">${out('tau' + wi)}</div><span class="hint">τо = τ1·τ2·τ3·τ4·τ5, формула (Б.8) СП 367; только для чтения</span></div></div>
+      <div class="fld"><span class="lbl">Общий коэфф. пропускания <i class="sym">τ<sub>о</sub></i></span><div class="calc">${out('tau' + wi)}</div><span class="hint">τо = τ1·τ2·τ3·τ4·τ5 (Б.8)</span></div></div>
       <div class="row three">${sel(pre + '.kType', 'Затеняющий элемент фасада', Object.entries(KEO.K_TITLES), { rebuild: true, sym: 'K' })}
-      ${w.kType === 'manual' ? `<div class="fld">${inp(pre + '.kManual', 'K вручную', 'K', '', { t: 'coef' })}${tinp(pre + '.kBasis', 'Основание K', { ph: 'расчёт, моделирование, паспорт…' })}</div>` : w.kType !== 'none' ? inp(pre + '.kDepth', 'Вынос элемента', '', 'м') : '<div></div>'}<div class="fld"><span class="lbl"><i class="sym">K</i> по общим параметрам стены</span><div class="calc">${out('K' + wi)}</div><span class="hint">${out('Ksrc' + wi)}</span></div></div>
-      <div class="tblw"><table class="grid-t win-t"><thead><tr><th>№</th><th>Подоконник <i class="sym">h<sub>пд</sub></i>, м</th><th>Высота <i class="sym">h<sub>о</sub></i>, м</th><th>Ширина <i class="sym">b<sub>о</sub></i>, м</th><th>Смещение оси <i class="sym">s</i>, м</th><th>В расчёте <i class="sym">τ<sub>о</sub></i> / <i class="sym">K</i></th><th></th></tr></thead><tbody>
+      ${w.kType !== 'none' ? inp(pre + '.kDepth', 'Вынос элемента', '', 'м') : '<div></div>'}<div class="fld"><span class="lbl">Коэффициент <i class="sym">K</i></span><div class="calc">${out('K' + wi)}</div><span class="hint">табл. Б.17–Б.20</span></div></div>
+      <div class="tblw"><table class="grid-t"><thead><tr><th>№</th><th>Подоконник <i class="sym">h<sub>пд</sub></i>, м</th><th>Высота <i class="sym">h<sub>о</sub></i>, м</th><th>Ширина <i class="sym">b<sub>о</sub></i>, м</th><th>Смещение оси <i class="sym">s</i>, м</th><th title="Переопределить τ2, τо или K для отдельного проёма">Особые τ2 / τо / K</th><th></th></tr></thead><tbody>
       ${w.windows.map((x, i) => `<tr><td class="n">${i + 1}</td>${['hpd', 'ho', 'bo', 's'].map(k => `<td><input aria-label="Окно ${i + 1}: ${k}" data-k="${pre}.windows.${i}.${k}" data-t="num" inputmode="decimal" value="${fv(x[k])}"></td>`).join('')}
-        <td class="eff">${out(`we-${wi}-${i}`)}</td>
-        <td><button type="button" class="icon" data-act="delWin" data-w="${wi}" data-i="${i}" aria-label="Удалить окно ${i + 1}" ${w.windows.length < 2 ? 'disabled' : ''}>×</button></td></tr>
-        <tr class="exc"><td></td><td colspan="6">${excEditor(pre, wi, x, i)}</td></tr>`).join('')}
+        <td class="ovr">${['t2o', 'tau0o', 'Ko'].map((k, j) => `<input aria-label="Окно ${i + 1}: ${['τ2', 'τо', 'K'][j]} вручную" placeholder="${['τ2', 'τо', 'K'][j]}" data-k="${pre}.windows.${i}.${k}" data-t="num" inputmode="decimal" value="${fv(x[k])}">`).join('')}</td>
+        <td><button type="button" class="icon" data-act="delWin" data-w="${wi}" data-i="${i}" aria-label="Удалить окно ${i + 1}" ${w.windows.length < 2 ? 'disabled' : ''}>×</button></td></tr>`).join('')}
       </tbody></table></div>
       <div class="btns"><button type="button" class="btn ghost" data-act="addWin" data-w="${wi}">+ Окно</button></div>
       ${more('Расставить одинаковые окна', `<div class="row four"><label class="fld"><span class="lbl">Количество</span><span class="inpw"><input id="gen-n-${wi}" inputmode="numeric" value="${w.windows.length}"></span></label><label class="fld"><span class="lbl">Шаг осей, м</span><span class="inpw"><input id="gen-p-${wi}" inputmode="decimal" value="${fv(w.windows.length > 1 ? Math.abs(w.windows[1].s - w.windows[0].s).toFixed(2) : 2)}"></span></label><label class="fld"><span class="lbl">Смещение группы, м</span><span class="inpw"><input id="gen-o-${wi}" inputmode="decimal" value="0"></span></label><div class="fld"><span class="lbl">&nbsp;</span><button type="button" class="btn" data-act="genWin" data-w="${wi}">Расставить</button></div></div><p class="small">Размеры hпд, hо, bо берутся из первого окна; оси располагаются симметрично относительно оси помещения со смещением группы.</p>`)}
@@ -270,25 +236,16 @@
     setOut('facts', room ? `<span class="chip">Группа N = ${g}</span><span class="chip">Плоскость: ${room.h === 0 ? (room.water ? 'поверхность воды' : 'пол, 0,0 м') : 'УРП ' + f(room.h, 1) + ' м'}</span><span class="chip">${S.mode === 'side' ? 'Точка: ' + KEO.RT_TEXT[KEO.rtOf(S)] : 'Точки: по характерному разрезу, крайние — в 1 м от стен'}</span><span class="chip">Нормы ЕО: бок. ${room.eSideN ?? '—'} / верх. ${room.eTopN ?? '—'}; СО: ${room.eSideC ?? '—'} / ${room.eTopC ?? '—'}</span>`.replace(/(\d)\.(\d)/g, '$1,$2') : '');
     setOut('hp', f(hp)); setOut('hpNote', S.hpManual !== null && S.hpManual !== '' ? 'задано вручную' : (hp === 0 ? 'на полу (по норме)' : 'УРП по норме'));
     setOut('hr', f(+S.top.H - hp));
-    const rh = KEO.rhoOf(S);
-    setOut('rhoV', rh.err.length ? '<span class="bad-t">не определено</span>' : f(rh.v) + (rh.mode === 'surf' ? ` <span class="muted">(точно ${f(rh.exact, 4)})</span>` : ''));
-    setOut('rhoSrc', rh.err.length ? `<span class="bad-t">${esc(rh.err[0])}</span>` : esc(rh.label));
-    if (rh.rows) rh.rows.forEach(x => setOut('rhoA-' + x.key, x.Sauto === null ? '—' : f(x.Sauto) + (x.man ? ' <span class="muted">(не применено)</span>' : '')));
-    const rin = $('#f-rho'); if (rin && document.activeElement !== rin && rh.mode !== 'manual' && rh.mode !== 'legacy') rin.value = rh.err.length ? '' : fv(rh.v);
+    const rc = S.rhoCalc.s, sw = rc.reduce((a, x) => a + (+x[0] || 0), 0);
+    setOut('rhoCalc', sw ? f(rc.reduce((a, x) => a + (+x[0] || 0) * (+x[1] || 0), 0) / sw) : '—');
     setOut('mf', S.mode === 'side' ? `${f(KEO.mfOf(S, 3))} — вертикальное остекление окон (76°–90°)` : `${S.top.types.map(t => f(KEO.mfOf(S, +t.tilt || 0))).join(' / ')} — фонари${S.mode === 'comb' ? `; окна — ${f(KEO.mfOf(S, 3))}` : ''}`);
     const rule = KEO.rtOf(S);
     S.side.walls.forEach((w, wi) => {
       setOut('lt' + wi, f(rule === 'manual' ? w.lt : KEO.ltAuto(rule, +w.dp)));
       setOut('cn' + wi, f(Engine.CNwall(g, w.orient).v));
-      const gen = KEO.wallCoef(S, w, S.mode === 'side' ? +w.dp : +S.top.L);
-      setOut('tau' + wi, f(gen.tau0, 4));
-      setOut('K' + wi, isNaN(gen.K.v) ? '—' : f(gen.K.v)); setOut('Ksrc' + wi, gen.err.length ? `<span class="bad-t">${esc(gen.err.join('; '))}</span>` : esc(gen.K.src));
-      w.windows.forEach((x, i) => {
-        const c = KEO.winCoef(gen, x, i), mk = m => m === 'manual' ? ' · <b>вручную</b>' : '';
-        const val = (v, n) => v === undefined || isNaN(v) ? '<span class="bad-t">ошибка</span>' : f(v, n);
-        setOut(`we-${wi}-${i}`, `τо ${val(c.tau0.v, 4)}${mk(c.modes.tau0)}<br>K ${val(c.K.v)}${mk(c.modes.K)}`);
-        setOut(`wsrc-${wi}-${i}`, c.err.length ? `<span class="bad-t">${esc(c.err.join('; '))}</span>` : `В расчёте: τо = ${f(c.tau0.v, 4)} — ${esc(c.tau0.src)}; K = ${f(c.K.v)} — ${esc(c.K.src)}.`);
-      });
+      const t = KEO.tau1Wall(w) * DATA.tau2[w.t2].v * DATA.tau4[w.t4].v; setOut('tau' + wi, f(t, 4));
+      const Kv = w.kType === 'none' ? 1 : Engine.KLookup(w.kType, S.mode === 'side' ? +w.dp : +S.top.L, +w.kDepth, rule === 'center' ? 'center' : 'wall1').v;
+      setOut('K' + wi, f(Kv) + (w.kType === 'none' ? '' : ` <span class="muted">(${rule === 'center' ? 'точка в центре' : '1 м от стены'})</span>`));
     });
     if (S.top.sys === 'b2') {
       const bi = KEO.b2Input(S);
@@ -348,7 +305,6 @@
       if (b.type === 'h1' || b.type === 'verdict' || b.type === 'scheme') return;
       if (b.type === 'h2') { close(); h += `<details class="sec" data-sec="${esc(b.text)}"><summary><span>${esc(b.text)}</span></summary><div class="sec-b">`; open = true; return; }
       if (!open) { h += '<details class="sec"><summary><span>Раздел</span></summary><div class="sec-b">'; open = true; }
-      if (b.type === 'dan') { h += danHTML(b); return; }
       if (b.type === 'h3') h += `<h4>${esc(b.text)}</h4>`;
       else if (b.type === 'p') h += `<p class="${b.small ? 'small' : ''}">${esc(b.text)}</p>`;
       else if (b.type === 'formula') h += `<div class="formula">${b.lines.map(l => `<div>${Report.richHTML(l)}</div>`).join('')}${b.src ? `<p class="small">${esc(b.src)}</p>` : ''}</div>`;
@@ -356,58 +312,26 @@
       else if (b.type === 'table') h += `${b.title ? `<p class="cap">${Report.richHTML(b.title)}</p>` : ''}<div class="tblw"><table class="rep"><thead><tr>${b.cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${b.rows.map(r => `<tr>${(Array.isArray(r) ? r : r.cells).map((c, i) => `<td class="${b.cols[i].a === 'center' ? 'c num' : ''}">${Report.richHTML(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${b.note ? `<p class="small">${esc(b.note)}</p>` : ''}`;
     });
     close();
-    const openSecs = new Set([...el.querySelectorAll('details[data-sec][open]')].map(d => d.dataset.sec));
+    const openSecs = new Set([...el.querySelectorAll('details.sec[open]')].map(d => d.dataset.sec));
     el.innerHTML = h;
-    el.querySelectorAll('details[data-sec]').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
-  }
-
-  // проверка по графикам Данилюка: выбор стены, проёма и участка (строка таблицы подсвечивает область на схеме)
-  const tblHTML = (cols, rows, sel) => `<div class="tblw"><table class="rep"><thead><tr>${cols.map(c => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr data-dsec="${r.k}" aria-selected="${r.k === sel}" tabindex="0">${r.cells.map((c, i) => `<td class="${cols[i].a === 'center' ? 'c num' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-  function danHTML(b) {
-    const dc = b.dc, r = C.res, sel = dc.sel, B = b.blocks;
-    const opt = (n, cur, lbl) => Array.from({ length: n }, (_, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${lbl(i)}</option>`).join('');
-    const w = r.walls[sel.wall], x = w.wins[sel.win];
-    return `<details class="more dan" data-sec="dan"><summary>Проверка по графикам Данилюка I и II — ${esc(dc.title)}</summary><div class="more-b">
-      <div class="sel">${r.walls.length > 1 ? `<label class="fld"><span class="lbl">Стена</span><span class="inpw"><select data-dan="wall">${opt(r.walls.length, sel.wall, i => `Стена ${i + 1}`)}</select></span></label>` : ''}
-      <label class="fld"><span class="lbl">Проём</span><span class="inpw"><select data-dan="win">${opt(w.wins.length, sel.win, i => `Проём ${i + 1}`)}</select></span></label>
-      <label class="fld"><span class="lbl">Участок</span><span class="inpw"><select data-dan="sec">${x.sectors.length ? opt(x.sectors.length, sel.sec, i => x.sectors[i].type === 'sky' ? `небо ${i + 1}` : `здание ${x.sectors[i].bld + 1}`) : '<option>небо не видно</option>'}</select></span></label></div>
-      <p class="small">${esc(B[1].text)}</p>
-      <div class="svgw">${Schemes.toSVG(dc.scheme, { label: 'Графики Данилюка: разрез и план' })}</div><p class="small">${esc(B[2].caption)}</p>
-      <p class="cap">${esc(B[3].title)}</p>${tblHTML(KEO.DAN_GEO_COLS, dc.geo, sel.sec)}
-      <p class="cap">${esc(B[4].title)}</p>${tblHTML(KEO.DAN_VAL_COLS, dc.val, sel.sec)}<p class="small">${esc(B[4].note)}</p></div></details>`;
-  }
-  function danPick(k, v) {
-    S.dan = { ...(S.dan || {}), [k]: v }; if (k === 'wall') { S.dan.win = 0; S.dan.sec = 0; } if (k === 'win') S.dan.sec = 0;
-    save(); renderBreakdown();
+    el.querySelectorAll('details.sec').forEach(d => { if (openSecs.has(d.dataset.sec)) d.open = true; });
   }
 
   /* ---------- события ---------- */
   function onInput(e) {
     const t = e.target; const k = t.dataset.k; if (!k) return;
-    // data-t="coef": явное состояние — пусто → null, число (запятая или точка) → число, иное → исходная строка (ошибка в проверке)
-    let v = t.dataset.t === 'num' ? num(t.value) : t.dataset.t === 'coef' ? coefVal(t.value) : t.dataset.t === 'bool' ? t.checked : t.value;
-    if (k === 'rtManual' || k === 'normManual' || k === 'hpManual' || k.endsWith('KcManual') || k === 'top.l1' || k === 'top.y0') { if (v === '') v = null; }
+    let v = t.dataset.t === 'num' ? num(t.value) : t.dataset.t === 'bool' ? t.checked : t.value;
+    if (k === 'rtManual' || k === 'normManual' || k === 'hpManual' || k.endsWith('t1c') || k.endsWith('KcManual') || k.endsWith('o') && /windows\.\d+\.(t2o|tau0o|Ko)$/.test(k) || k === 'top.l1' || k === 'top.y0') { if (v === '') v = null; }
     setP(S, k, v);
-    // простая правка ρср переключает его источник на «вручную»
-    if (k === 'rho' && S.rhoMode !== 'manual') { S.rhoMode = 'manual'; S.rhoBasis = S.rhoBasis || ''; rebuildKeepFocus(); update(); return; }
     if (k === 'bType') { const r = DATA.rooms.find(x => x.g === v); if (r) S.roomId = r.id; }
     const mk = k.match(/^top\.b2\.(\d+)\.kind$/); if (mk) { const t = S.top.b2[+mk[1]]; t.CNrow = KEO.cnRowDefault(v); if (v === 'A' && (+t.beta >= 90 || !t.beta)) t.beta = 45; if (v === 'trap' && +t.ho / Math.tan(+t.beta * Math.PI / 180) >= t.b / 2) t.beta = 70; }
-    if (t.dataset.rebuild) { rebuildKeepFocus(); }
+    if (t.dataset.rebuild) { renderForm(); }
     update();
-  }
-  const coefVal = s => { const r = KEO.readNum(s); return r.st === 'empty' ? null : r.st === 'num' ? r.v : String(s); };
-  function rebuildKeepFocus() {
-    const a = document.activeElement, id = a && a.id, k = a && a.dataset && a.dataset.k, pos = a && a.selectionStart;
-    renderForm();
-    const b = id ? document.getElementById(id) : (k ? document.querySelector(`[data-k="${k}"]`) : null);
-    if (b) { b.focus(); try { if (pos !== null && pos !== undefined) b.setSelectionRange(pos, pos); } catch (e) { /* select */ } }
   }
   function onClick(e) {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.mode) { S.mode = b.dataset.mode; renderForm(); update(); return; }
-    if (b.dataset.seg) { let v = b.dataset.val; if (b.dataset.t === 'num') v = +v; if (b.dataset.seg === 'rhoMode') KEO.setRhoMode(S, v); else setP(S, b.dataset.seg, v);
-      if (b.dataset.seg === 'rhoGeo' && v === 'manual' && !(S.rhoRows || []).length) fillRhoRows();
-      const rebuild = /shape$|top\.sys$|\.face$|^rho(Mode|Geo)$|\.(t2m|tau0m|Km)$/.test(b.dataset.seg); if (rebuild) renderForm(); else b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x === b)); update(); return; }
+    if (b.dataset.seg) { let v = b.dataset.val; if (b.dataset.t === 'num') v = +v; setP(S, b.dataset.seg, v); const rebuild = /shape$|top\.sys$|\.face$/.test(b.dataset.seg); if (rebuild) renderForm(); else b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x === b)); update(); return; }
     if (b.dataset.stab !== undefined) { schemeTab = +b.dataset.stab; renderSchemes(); return; }
     const a = b.dataset.act; if (!a) return;
     const W = S.side.walls[+b.dataset.w || 0];
@@ -416,7 +340,7 @@
       delWall: () => { S.side.walls.splice(1); },
       addWin: () => { const last = W.windows[W.windows.length - 1]; W.windows.push({ ...last, s: +(last.s + (last.bo || 1.5) + 0.8).toFixed(2) }); },
       delWin: () => { W.windows.splice(+b.dataset.i, 1); },
-      genWin: () => { const wi = +b.dataset.w || 0; const n = Math.max(1, Math.min(20, parseInt($('#gen-n-' + wi).value) || 1)), p = num($('#gen-p-' + wi).value) || 0, o = num($('#gen-o-' + wi).value) || 0; const base = W.windows[0]; W.windows = Array.from({ length: n }, (_, i) => ({ ...base, ...KEO.defaultWindow(), hpd: base.hpd, ho: base.ho, bo: base.bo, s: +(o + (i - (n - 1) / 2) * p).toFixed(3) })); },
+      genWin: () => { const wi = +b.dataset.w || 0; const n = Math.max(1, Math.min(20, parseInt($('#gen-n-' + wi).value) || 1)), p = num($('#gen-p-' + wi).value) || 0, o = num($('#gen-o-' + wi).value) || 0; const base = W.windows[0]; W.windows = Array.from({ length: n }, (_, i) => ({ ...base, t2o: null, tau0o: null, Ko: null, s: +(o + (i - (n - 1) / 2) * p).toFixed(3) })); },
       addBld: () => { W.buildings.push({ l: 20, Hp: 15, a: 40, off: 0, rhoF: 0.4 }); },
       delBld: () => { W.buildings.splice(+b.dataset.i, 1); },
       addLan: () => { const T = S.top.types[+b.dataset.t]; const l = T.lanterns[T.lanterns.length - 1]; T.lanterns.push({ x: +(Math.min(+S.top.L - 0.5, l.x + 2)).toFixed(2), y: l.y }); },
@@ -429,18 +353,9 @@
       addB2x: () => { const t = S.top.b2[+b.dataset.t]; const last = +t.xs[t.xs.length - 1] || 0; t.xs.push(+Math.min(+S.top.L - t.b / 2, last + Math.max(t.b + 1, 6)).toFixed(2)); },
       delB2x: () => { S.top.b2[+b.dataset.t].xs.splice(+b.dataset.i, 1); },
       genB2x: () => { const t = S.top.b2[+b.dataset.t], n = Math.max(1, Math.round(+S.top.spans || 1)), w = +S.top.L / n; t.xs = Array.from({ length: n }, (_, i) => +((i + 0.5) * w).toFixed(3)); },
-      clrExc: () => { const x = W.windows[+b.dataset.i], [mk, vk, bk] = OVR[b.dataset.c]; x[mk] = 'wall'; x[vk] = null; if (bk) x[bk] = ''; },
-      addRhoRow: () => { (S.rhoRows = S.rhoRows || []).push({ name: 'Поверхность ' + (S.rhoRows.length + 1), S: null, rho: null, src: '' }); },
-      delRhoRow: () => { S.rhoRows.splice(+b.dataset.i, 1); },
-      fillRhoRows: () => fillRhoRows()
+      applyRho: () => { const rc = S.rhoCalc.s, sw = rc.reduce((a2, x) => a2 + (+x[0] || 0), 0); if (sw) { S.rho = +(rc.reduce((a2, x) => a2 + (+x[0] || 0) * (+x[1] || 0), 0) / sw).toFixed(3); S.rhoCalc.on = true; } }
     };
     if (acts[a]) { acts[a](); renderForm(); update(); }
-  }
-
-  // ручная ведомость ρ: заполнить площадями по размерам помещения (ρ и источники — из режима «по размерам»)
-  function fillRhoRows() {
-    const r = KEO.rhoOf({ ...S, rhoMode: 'surf', rhoGeo: 'auto' });
-    S.rhoRows = (r.rows || []).map(x => ({ name: x.name, S: x.S.st === 'num' ? +x.S.v.toFixed(2) : null, rho: x.rho.st === 'num' ? x.rho.v : null, src: x.src }));
   }
 
   /* ---------- файлы ---------- */
@@ -475,10 +390,10 @@
   function saveJSON() { saveFile(safeName(`КЕО ${S.meta.room || 'расчёт'}.json`), JSON.stringify(S, null, 1), 'application/json'); }
   function openJSON(file) {
     const rd = new FileReader();
-    rd.onload = () => { try { const o = JSON.parse(rd.result); if (!o || o.v !== 1 || !o.side || !o.top) throw new Error('не тот формат'); const m = KEO.migrate(o); S = m.st; renderForm(); update(); toast(m.notes.length ? 'Расчёт загружен. ' + m.notes.join('; ') : 'Расчёт загружен'); } catch (e) { toast('Не удалось открыть файл: ' + e.message); } };
+    rd.onload = () => { try { const o = JSON.parse(rd.result); if (!o || o.v !== 1 || !o.side || !o.top) throw new Error('не тот формат'); S = fill(o); renderForm(); update(); toast('Расчёт загружен'); } catch (e) { toast('Не удалось открыть файл: ' + e.message); } };
     rd.readAsText(file);
   }
-  const fill = o => KEO.migrate(o).st;
+  function fill(o) { const d = KEO.defaultState(); return { ...d, ...o, meta: { ...d.meta, ...o.meta }, top: { ...d.top, ...o.top, b2: (o.top && o.top.b2) || d.top.b2, sys: (o.top && o.top.sys) || 'shaft' }, side: { ...d.side, ...o.side }, comb: { ...d.comb, ...o.comb }, rhoCalc: { ...d.rhoCalc, ...o.rhoCalc } }; }
   function save() { try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) { /* хранилище недоступно */ } }
   function load() { try { const s = localStorage.getItem(LS_KEY); if (s) { const o = JSON.parse(s); if (o && o.v === 1) return fill(o); } } catch (e) { /* нет */ } return null; }
   let tt = null; function toast(m) { const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => { t.hidden = true; }, 3500); }
@@ -490,9 +405,6 @@
     document.addEventListener('click', onClick);
     $('#ex-menu').addEventListener('change', e => { const v = e.target.value; e.target.value = ''; if (!v) return; $('#first-note').hidden = true; S = v === 'side' ? exampleSide() : v === 'top' ? exampleTop() : v === 'b2' ? exampleB2() : (() => { const s = exampleTop(); s.mode = 'comb'; return s; })(); if (v === 'new') { S = KEO.defaultState(); } renderForm(); update(); toast(v === 'new' ? 'Новый расчёт' : 'Загружен пример'); });
     $('#btn-save').addEventListener('click', saveJSON);
-    $('#breakdown').addEventListener('change', e => { const k = e.target.dataset && e.target.dataset.dan; if (k) danPick(k, +e.target.value); });
-    $('#breakdown').addEventListener('click', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr) danPick('sec', +tr.dataset.dsec); });
-    $('#breakdown').addEventListener('keydown', e => { const tr = e.target.closest('tr[data-dsec]'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); danPick('sec', +tr.dataset.dsec); } });
     $('#file-open').addEventListener('change', e => { if (e.target.files[0]) openJSON(e.target.files[0]); e.target.value = ''; });
     document.querySelectorAll('[data-pdf]').forEach(b => b.addEventListener('click', downloadPDF));
     renderForm(); update();

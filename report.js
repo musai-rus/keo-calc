@@ -117,8 +117,7 @@ const Report = (function () {
       y += 2;
       if (blk.note) para(blk.note, { size: 7, color: GREY });
     };
-    const flat = []; model.forEach(b => { if (b.type === 'dan') b.blocks.forEach(x => flat.push(x)); else flat.push(b); });
-    for (const b of flat) {
+    for (const b of model) {
       if (b.type === 'pagebreak') { newPage(); continue; }
       if (b.type === 'h1') { ensure(14); y += 5; doc.text(b.text, C.x + C.w / 2, y, { size: 13, font: 'B', align: 'center' }); y += 2; if (b.sub) { y += 4; doc.text(b.sub, C.x + C.w / 2, y, { size: 9, align: 'center', color: GREY }); } y += 4; continue; }
       if (b.type === 'h2') { ensure(16); y += 3.5; doc.text(b.text, C.x, y, { size: 10, font: 'B' }); y += 2.5; continue; }
