@@ -164,6 +164,13 @@ const KEO = (function () {
     // число сохраняется, источник не подтверждён, пока пользователь не выберет режим
     return 'legacy';
   }
+  // переключение источника ρср; при переходе в «вручную» применённое значение прежнего режима переносится в поле
+  function setRhoMode(st, v) {
+    // значение берётся по режиму ДО переключения (иначе проверка видит уже «вручную» и переносить нечего)
+    if (v === 'manual' && st.rhoMode !== 'manual') { const rh = rhoOf(st); if (!rh.err.length && Number.isFinite(rh.v)) st.rho = rh.v; }
+    st.rhoMode = v;
+    return st;
+  }
   // оболочка комнаты (один раз на помещение) по подтверждённой геометрии прямоугольной комнаты с плоским потолком
   function roomShell(st) {
     const err = [], warn = [];
@@ -728,6 +735,6 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 if (typeof module !== 'undefined') module.exports = KEO;

@@ -405,7 +405,7 @@
   function onClick(e) {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.mode) { S.mode = b.dataset.mode; renderForm(); update(); return; }
-    if (b.dataset.seg) { let v = b.dataset.val; if (b.dataset.t === 'num') v = +v; setP(S, b.dataset.seg, v); if (b.dataset.seg === 'rhoMode' && v === 'manual' && S.rhoMode !== 'manual') { const rh = KEO.rhoOf(S); if (!rh.err.length) S.rho = rh.v; }
+    if (b.dataset.seg) { let v = b.dataset.val; if (b.dataset.t === 'num') v = +v; if (b.dataset.seg === 'rhoMode') KEO.setRhoMode(S, v); else setP(S, b.dataset.seg, v);
       if (b.dataset.seg === 'rhoGeo' && v === 'manual' && !(S.rhoRows || []).length) fillRhoRows();
       const rebuild = /shape$|top\.sys$|\.face$|^rho(Mode|Geo)$|\.(t2m|tau0m|Km)$/.test(b.dataset.seg); if (rebuild) renderForm(); else b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x === b)); update(); return; }
     if (b.dataset.stab !== undefined) { schemeTab = +b.dataset.stab; renderSchemes(); return; }

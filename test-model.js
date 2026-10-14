@@ -139,6 +139,12 @@ console.log('\n=== П.2. Площади и ρср ===');
   d.rhoMode = 'manual'; d.rho = '0,6'; d.rhoBasis = 'измерения'; ok('вручную: значение и основание, без «по формуле»', KEO.rhoOf(d).v === 0.6 && KEO.rhoOf(d).label === 'задано вручную: измерения');
   const top = base(); top.mode = 'top'; top.rhoMode = 'surf'; Object.assign(top.rhoSurf, clone(st.rhoSurf));
   r = KEO.rhoOf(top); ok('верхний свет: пол, стены, потолок (табл. Б.21), без окон', r.rows.length === 3 && /Б\.21/.test(r.label));
+  // «По поверхностям» → «Вручную»: в поле переносится применённое значение (здесь 0,42), а не прежнее число из состояния (0,55)
+  { const s8 = clone(st); s8.rho = 0.55; const was = KEO.rhoOf(s8).v; KEO.setRhoMode(s8, 'manual'); const r8 = KEO.rhoOf(s8);
+    ok('«По поверхностям» → «Вручную»: применённое ρср сохраняется', was === 0.42 && s8.rhoMode === 'manual' && s8.rho === was && r8.v === was && !r8.err.length, `было ${was}, стало ${s8.rho}`);
+    const s9 = clone(st); s9.rhoMode = 'default'; s9.rho = 0.3; KEO.setRhoMode(s9, 'manual'); ok('«0,55» → «Вручную»: в поле 0,55', s9.rho === 0.55);
+    const s10 = clone(st); s10.rhoMode = 'manual'; s10.rho = 0.47; KEO.setRhoMode(s10, 'manual'); ok('«Вручную» → «Вручную»: введённое значение не меняется', s10.rho === 0.47);
+    const s11 = clone(st); s11.rhoSurf.floor.rho = ''; s11.rho = 0.5; KEO.setRhoMode(s11, 'manual'); ok('«По поверхностям» с ошибкой → «Вручную»: поле не подменяется', s11.rho === 0.5); }
   // импорт старого файла
   const o1 = clone(base()); delete o1.rhoMode; o1.rho = 0.6; o1.rhoCalc = { on: false, s: [] };
   let m = KEO.migrate(o1); ok('старый файл, ρ 0,6 без помощника: «источник не подтверждён», значение сохранено', m.st.rhoMode === 'legacy' && KEO.rhoOf(m.st).v === 0.6 && /источник не подтверждён/.test(KEO.rhoOf(m.st).label));
