@@ -38,13 +38,33 @@ const BimGeom = (function () {
       });
       return out;
     });
+    const external = await new Promise(resolve => C.m.getExternalIdMapping(resolve, () => resolve({})));
+    const externalById = new Map(Object.entries(external).map(([uid,id])=>[id,uid]));
     return raw.map(o => {
       const A = BimSpaces.conv(...(o.u['Area'] || []), 'area'), P = BimSpaces.conv(...(o.u['Perimeter'] || []), 'len'), H = BimSpaces.conv(...(o.u['Unbounded Height'] || []), 'len');
       const warn = [A.ok ? null : 'площадь: ' + A.warn, P.ok ? null : 'периметр: ' + P.warn].filter(Boolean);
-      return { id: o.id, key: o.eid || ('db' + o.id), eid: o.eid, level: o.level, name: o.name || '', num: o.num || '', dep: o.dep, occ: o.occ,
+      return { id: o.id, key: externalById.get(o.id) || o.eid || ('db' + o.id), externalId: externalById.get(o.id), eid: o.eid, level: o.level, name: o.name || '', num: o.num || '', dep: o.dep, occ: o.occ,
         area: A.v, areaRaw: o.u['Area'] && o.u['Area'][0], areaUnit: A.unit, areaSrc: A.ok ? 'Revit, свойство Area' : null,
         per: P.v, h: H.v, warn };
     }).filter(r => r.area > 0 || r.warn.length);
+  }
+
+  // Выпуклая оболочка проекции стекла. Четыре равноудалённых угла — прямоугольник, не круг.
+  function apertureShape(points) {
+    const unique=new Map(points.map(p=>[p.slice(0,2).map(v=>Math.round(v*1e5)).join(','),p.slice(0,2)]));
+    const p=[...unique.values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+    if(p.length<3)return {shape:'unknown'};
+    const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+    const half=seq=>{const h=[];for(const q of seq){while(h.length>1&&cross(h[h.length-2],h[h.length-1],q)<=1e-8)h.pop();h.push(q);}return h;};
+    const a=half(p),b=half(p.slice().reverse()),h=a.slice(0,-1).concat(b.slice(0,-1));
+    if(h.length===4){
+      const edges=h.map((q,i)=>[h[(i+1)%4][0]-q[0],h[(i+1)%4][1]-q[1]]);
+      if(edges.every((e,i)=>Math.abs(e[0]*edges[(i+1)%4][0]+e[1]*edges[(i+1)%4][1])<.01*Math.hypot(...e)*Math.hypot(...edges[(i+1)%4])))
+        { const av=Math.hypot(...edges[0]),bv=Math.hypot(...edges[1]),t=edges[0].map(x=>x/av); return {shape:'rect',footprint:h,av,bv,t,n:[-t[1],t[0]],c:[(h[0][0]+h[2][0])/2,(h[0][1]+h[2][1])/2]}; }
+    }
+    const c=[h.reduce((s,q)=>s+q[0],0)/h.length,h.reduce((s,q)=>s+q[1],0)/h.length],r=h.map(q=>Math.hypot(q[0]-c[0],q[1]-c[1]));
+    if(h.length>=12&&(Math.max(...r)-Math.min(...r))/Math.max(...r)<.05)return {shape:'round',d:2*Math.max(...r),footprint:h};
+    return {shape:'other',footprint:h};
   }
 
   // Viewer может хранить half-float позиции внутри Float32Array: vbstride не означает xyz Float32.
@@ -206,7 +226,10 @@ const BimGeom = (function () {
         rec.auto = glassOk && rec.tilt <= 15 && LANTERN_ZENITH.test([inf.type, inf.fam, inf.name].join(' '));
         if (!glassOk) rec.note = 'стекло в семействе не выделено материалом — размеры по габариту элемента';
         // круглое остекление: точки стекла на одном расстоянии от центра (разброс < 5 %) — фонарь круглый, d — по стеклу
-        if (glassOk) { const rr = P.map(p => Math.hypot(p[0] - bb.c[0], p[1] - bb.c[1])), r1 = Math.max(...rr), r0 = Math.min(...rr.filter(r => r > 0.3 * r1)); if (r1 > 0.1 && (r1 - r0) / r1 < 0.05) { rec.round = true; rec.d = 2 * r1; } }
+        const shape = glassOk ? apertureShape(P) : {shape:'unknown'};
+        Object.assign(rec,shape); rec.round=shape.shape==='round';
+        rec.auto=rec.auto && ['round','rect'].includes(rec.shape);
+        if(!['round','rect'].includes(rec.shape))rec.note=(rec.note?rec.note+'; ':'')+'форма не поддерживается методом шахтных фонарей: требуется отдельная расчётная схема';
         out.push(rec); diag.push(rec); return;
       }
       if (!glassOk) { if (named) diag.push({ id, cat: c, label, named, reason: 'нет прозрачных фрагментов (стекло не выделено материалом) и геометрия не обращена вверх' }); return; }
@@ -339,6 +362,6 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { ctx, catalog, rooms, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
+  return { ctx, catalog, rooms, apertureShape, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
 })();
 

@@ -131,7 +131,9 @@ const BimCalc = (function () {
       const ori = oriOf(azimuth([-f.nin[0], -f.nin[1]], env.north ?? env.T));
       if (a[0] < 0.3) { notes.push(`стена ${ori}: расчётная точка за плоскостью остекления или вплотную к нему — стена не учтена`); return; }
       // ширина помещения bп и его ось — по свободному сечению через точку параллельно стене (перегородка внутри пространства — граница сечения)
-      const sw = env.Rp ? BimSpaces.sectionWidth(env.Rp, A, f.t, f.nin) : null, useS = sw && sw[0] + sw[1] > 0.5;
+      const physical = env.Rp ? BimSpaces.sectionWidth(env.Rp, A, f.t, f.nin) : null;
+      const own = env.roomSection ? env.roomSection(A,f.t) : null;
+      const sw = own ? (physical ? own.map((d,i)=>Math.min(d,physical[i])) : own) : physical, useS = sw && sw[0] + sw[1] > 0.5;
       const ax = useS ? a[1] + (sw[0] - sw[1]) / 2 : vmid, bp = useS ? sw[0] + sw[1] : vmax - vmin;
       const wins = [];
       f.cls.forEach(c => {
@@ -222,10 +224,11 @@ const BimCalc = (function () {
     lanterns.forEach(l => {
       const q = fr.toLocal(l.c), av = r2(l.av), bv = r2(l.bv);
       // круглый фонарь (Б.3, формула (8.3)): dv — верхнее отверстие шахты (D1), dn — нижнее (D2); без параметров — по стеклу
-      const round = !!(l.round || l.dTop), dv = r2(l.dTop || l.d || av), dn = r2(l.dBot || l.dTop || l.d || av);
+      const round = !!l.round, dv = r2(l.dTop || l.d || av), dn = r2(l.dBot || l.dTop || l.d || av);
       if (!(l.hsf > 0)) notes.push(`фонарь ${round ? '⌀' + fc(dv) : fc(av) + '×' + fc(bv)} м: высота шахты не определена по модели — принята 0,1 м (допущение, уточните)`);
       const hsf = r2(Math.max(0.1, l.hsf || 0.1));
-      let T = types.find(t => round ? (t.shape === 'round' && t.dv === dv && t.dn === dn && t.hsf === hsf) : (t.shape === 'rect' && t.av === av && t.bv === bv && t.hsf === hsf));
+      const tilt = l.tilt <= 15 ? 0 : l.tilt <= 45 ? 1 : l.tilt <= 75 ? 2 : 3;
+      let T = types.find(t => t.tilt === tilt && (round ? (t.shape === 'round' && t.dv === dv && t.dn === dn && t.hsf === hsf) : (t.shape === 'rect' && t.av === av && t.bv === bv && t.hsf === hsf)));
       if (!T) { T = { name: round ? `Фонарь ⌀${dv}${dn !== dv ? '/' + dn : ''}` : `Фонарь ${av}×${bv}`, shape: round ? 'round' : 'rect', av, bv, an: av, bn: bv, dv: round ? dv : 1, dn: round ? dn : 1, hsf, refl: 'diffuse', rhoW: S.lrho ?? 0.7, t1: env.DATA.tau1[S.lt1 ?? S.t1].v, t2: env.DATA.tau2[S.lt2 ?? S.t2].v, t3: 1, t4: 1, net: false, tilt: l.tilt <= 15 ? 0 : l.tilt <= 45 ? 1 : l.tilt <= 75 ? 2 : 3, lanterns: [] }; types.push(T); typeIds.push([]); }
       T.lanterns.push({ x: r2(q[0]), y: r2(q[1]) }); typeIds[types.indexOf(T)].push(l.id);
     });
@@ -245,6 +248,7 @@ const BimCalc = (function () {
       });
     });
     const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
+    if(sp.roomGeometry && P.some(p=>!inside(pts,p,0.15)))return {err:'Характерный разрез выходит за границы Room: требуется отдельная схема расчётных точек для сложной формы',notes};
     P.forEach((p, j) => { if (!inside(pts, p, 0.3)) notes.push(`РТ${j + 1} вне контура пространства (сложная форма в плане) — результат в ней ориентировочный`); });
     if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes, lanContrib };
 
@@ -288,3 +292,4 @@ const BimCalc = (function () {
 
   return { mapNorm, guessGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();
+
