@@ -160,8 +160,9 @@ const KEO = (function () {
   const RHO_ROWS = [['floor', 'Пол'], ['walls', 'Стены (непрозрачные, без окон)'], ['ceil', 'Потолок'], ['win', 'Окна']];
   function rhoMode(st) {
     if (['default', 'surf', 'manual', 'legacy'].includes(st.rhoMode)) return st.rhoMode;
-    // прежний формат (нет rhoMode): 0,55 без помощника — то же значение по умолчанию; иначе источник не подтверждён
-    return !(st.rhoCalc && st.rhoCalc.on) && Math.abs(+st.rho - 0.55) < 1e-9 ? 'default' : 'legacy';
+    // прежний формат (нет rhoMode): происхождение числа неизвестно (0,55 могло быть введено вручную или получено расчётом) —
+    // число сохраняется, источник не подтверждён, пока пользователь не выберет режим
+    return 'legacy';
   }
   // оболочка комнаты (один раз на помещение) по подтверждённой геометрии прямоугольной комнаты с плоским потолком
   function roomShell(st) {
@@ -245,7 +246,11 @@ const KEO = (function () {
     const d = defaultState();
     const st = { ...d, ...o, meta: { ...d.meta, ...o.meta }, top: { ...d.top, ...o.top, b2: (o.top && o.top.b2) || d.top.b2, sys: (o.top && o.top.sys) || 'shaft' }, side: { ...d.side, ...o.side }, comb: { ...d.comb, ...o.comb }, rhoCalc: { ...d.rhoCalc, ...o.rhoCalc }, rhoSurf: { ...d.rhoSurf, ...(o.rhoSurf || {}) }, dan: { ...d.dan, ...(o.dan || {}) } };
     const notes = [];
-    if (!o.rhoMode) { st.rhoMode = rhoMode(o); if (st.rhoMode === 'legacy') notes.push(`ρср = ${f(+o.rho, 3)} из файла прежней версии — источник не подтверждён; значение сохранено`); }
+    if (!o.rhoMode) {
+      st.rhoMode = rhoMode(o);
+      if (o.rho === undefined || o.rho === null || o.rho === '') { st.rho = null; notes.push('ρср: в файле прежней версии значения нет — выберите режим'); }
+      else notes.push(`ρср = ${f(+o.rho, 3)} из файла прежней версии — источник не подтверждён; значение сохранено`);
+    }
     st.side.walls.forEach(w => { if (w.kManual === undefined) w.kManual = null; if (w.kBasis === undefined) w.kBasis = ''; w.windows.forEach(x => { if (x.tau0b === undefined) x.tau0b = ''; if (x.Kb === undefined) x.Kb = ''; }); });
     migrateWindows(st).forEach(n => notes.push(n));
     return { st, notes };

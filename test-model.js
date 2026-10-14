@@ -143,7 +143,12 @@ console.log('\n=== П.2. Площади и ρср ===');
   const o1 = clone(base()); delete o1.rhoMode; o1.rho = 0.6; o1.rhoCalc = { on: false, s: [] };
   let m = KEO.migrate(o1); ok('старый файл, ρ 0,6 без помощника: «источник не подтверждён», значение сохранено', m.st.rhoMode === 'legacy' && KEO.rhoOf(m.st).v === 0.6 && /источник не подтверждён/.test(KEO.rhoOf(m.st).label));
   const o2 = clone(base()); delete o2.rhoMode; o2.rho = 0.55; o2.rhoCalc = { on: false, s: [[30, 0.3]] };
-  ok('старый файл, 0,55 без помощника → «0,55»', KEO.migrate(o2).st.rhoMode === 'default');
+  // 0,55 в старом файле могло быть введено вручную или получено расчётом — по числу режим не определяется (решение 14.10.2026)
+  m = KEO.migrate(o2); r = KEO.rhoOf(m.st);
+  ok('старый файл, 0,55 без помощника: «источник не подтверждён», 0,55 сохранено', m.st.rhoMode === 'legacy' && r.v === 0.55 && !r.err.length && /источник не подтверждён/.test(r.label) && m.notes.some(n => /источник не подтверждён/.test(n)));
+  const o4 = clone(o2); delete o4.rho; m = KEO.migrate(o4);
+  ok('старый файл без ρ: «источник не подтверждён», значение не выдумывается — ошибка до выбора режима', m.st.rhoMode === 'legacy' && KEO.rhoOf(m.st).err.length > 0);
+  ok('новый расчёт (без файла) — по-прежнему «0,55»', KEO.defaultState().rhoMode === 'default');
   const o3 = clone(base()); delete o3.rhoMode; o3.rho = 0.414; o3.rhoCalc = { on: true, s: [[17.7, 0.25], [60, 0.4], [17.7, 0.7], [6, 0.2]] };
   m = KEO.migrate(o3); r = KEO.rhoOf(m.st);
   ok('старый файл с принятым помощником: 0,414 сохранено, площади не подменены', r.v === 0.414 && /совпадает с помощником/.test(r.label) && m.st.rhoCalc.s[0][0] === 17.7);
