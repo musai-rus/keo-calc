@@ -198,12 +198,18 @@ const KEO = (function () {
         S += (o.y1 - o.y0) * (o.z1 - o.z0);
         if (o.y0 < -w.len / 2 - 0.005 || o.y1 > w.len / 2 + 0.005 || o.z0 < -0.005 || o.z1 > w.H + 0.005) err.push(`ρср по поверхностям: ${pre}проём ${o.i + 1} выходит за пределы стены ${f(w.len)} × ${f(w.H)} м — площадь стен определить нельзя`);
       });
-      for (let p = 0; p < box.length; p++) for (let q = p + 1; q < box.length; q++) {
-        const A = box[p], B = box[q];
-        if (Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.005 && Math.min(A.z1, B.z1) - Math.max(A.z0, B.z0) > 0.005) err.push(`ρср по поверхностям: ${pre}проёмы ${A.i + 1} и ${B.i + 1} перекрываются — площадь окон была бы учтена дважды`);
-      }
     });
     return { S, err };
+  }
+  // перекрытие проёмов на развёртке стены — ошибка исходных данных при любом источнике ρср:
+  // свет через общий участок (и его площадь в ρср) был бы учтён дважды
+  function windowOverlaps(windows) {
+    const box = windows.map((x, i) => ({ i, y0: +x.s - +x.bo / 2, y1: +x.s + +x.bo / 2, z0: +x.hpd, z1: +x.hpd + +x.ho })), out = [];
+    for (let p = 0; p < box.length; p++) for (let q = p + 1; q < box.length; q++) {
+      const A = box[p], B = box[q];
+      if (Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.005 && Math.min(A.z1, B.z1) - Math.max(A.z0, B.z0) > 0.005) out.push(`Проёмы ${A.i + 1} и ${B.i + 1} перекрываются — свет и площадь окон были бы учтены дважды; проверьте s, bо, hпд, hо`);
+    }
+    return out;
   }
   function rhoOf(st) {
     const mode = rhoMode(st), top = st.mode === 'top', err = [], warn = [];
@@ -343,6 +349,7 @@ const KEO = (function () {
       walls.forEach((w, wi) => {
         const pre = walls.length > 1 ? `Стена ${wi + 1}. ` : '';
         if (st.mode === 'side') { pos(w.dp, pre + 'Глубина помещения dп'); pos(w.bp, pre + 'Ширина помещения bп'); }
+        windowOverlaps(w.windows).forEach(e => err.push(pre + e));
         if (!(+w.dst >= 0)) err.push(pre + 'Толщина стены Δст должна быть ≥ 0');
         if (!w.windows.length) err.push(pre + 'Добавьте хотя бы один световой проём');
         w.windows.forEach((x, i) => { if (!(+x.ho > 0 && +x.bo > 0 && +x.hpd >= 0)) err.push(`${pre}Окно ${i + 1}: проверьте hпд, hо, bо`); });
@@ -738,6 +745,6 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 if (typeof module !== 'undefined') module.exports = KEO;

@@ -127,7 +127,7 @@ console.log('\n=== П.2. Площади и ρср ===');
   r = KEO.rhoOf(s2);
   ok('две стены: пол/потолок не удвоены, окна обеих стен', r.rows[0].S.v === 20.4 && Math.abs(r.rows[3].S.v - 10.8) < 1e-9 && Math.abs(r.sumS - 102.84) < 1e-9);
   s2.side.walls[1].dp = 5; ok('несогласованные габариты стен — ошибка, а не молчаливый выбор', KEO.rhoOf(s2).err.some(e => /не согласуются/.test(e)));
-  const s3 = clone(st); s3.side.walls[0].windows[1].s = -0.5; ok('перекрывающиеся проёмы — ошибка', KEO.rhoOf(s3).err.some(e => /перекрываются/.test(e)));
+  const s3 = clone(st); s3.side.walls[0].windows[1].s = -0.5; ok('перекрывающиеся проёмы — ошибка', !KEO.compute(s3).ok && KEO.compute(s3).err.some(e => /перекрываются/.test(e)));
   const s4 = clone(st); s4.side.walls[0].windows[1].s = 1.2; ok('проём за пределами стены — ошибка', KEO.rhoOf(s4).err.some(e => /выходит за пределы стены/.test(e)));
   const s5 = clone(st); s5.rhoSurf.win.S = 70; ok('отрицательная площадь стен — ошибка', KEO.rhoOf(s5).err.some(e => /отрицательная площадь/.test(e)) && !KEO.compute(s5).ok);
   const s6 = clone(st); s6.rhoSurf.walls.S = 50; r = KEO.rhoOf(s6);
@@ -151,6 +151,15 @@ console.log('\n=== П.2. Площади и ρср ===');
     const s9 = clone(st); s9.rhoMode = 'default'; s9.rho = 0.3; KEO.setRhoMode(s9, 'manual'); ok('«0,55» → «Вручную»: в поле 0,55', s9.rho === 0.55);
     const s10 = clone(st); s10.rhoMode = 'manual'; s10.rho = 0.47; KEO.setRhoMode(s10, 'manual'); ok('«Вручную» → «Вручную»: введённое значение не меняется', s10.rho === 0.47);
     const s11 = clone(st); s11.rhoSurf.floor.rho = ''; s11.rho = 0.5; KEO.setRhoMode(s11, 'manual'); ok('«По поверхностям» с ошибкой → «Вручную»: поле не подменяется', s11.rho === 0.5); }
+  // перекрытие проёмов — ошибка исходных данных при любом источнике ρср (иначе свет и площадь окна учитываются дважды)
+  [['default'], ['manual', 0.5], ['legacy', 0.55], ['surf', null, 'auto'], ['surf', null, 'manual']].forEach(([mode, rho, geo]) => {
+    const so = clone(st); so.rhoMode = mode; if (rho !== null && rho !== undefined) so.rho = rho; if (geo) so.rhoGeo = geo;
+    if (geo === 'manual') so.rhoRows = [[17.7, 0.25], [60, 0.4], [17.7, 0.7], [6, 0.2]].map(([S, rho], i) => ({ name: 'п' + i, S, rho, src: 'контроль' }));
+    const okBefore = KEO.compute(so).ok; so.side.walls[0].windows[1].s = -0.5; const C = KEO.compute(so);
+    ok(`ρср «${mode}${geo ? '/' + geo : ''}»: перекрывающиеся проёмы — ошибка, результат не выдаётся`, okBefore && !C.ok && C.err.filter(e => /перекрываются/.test(e)).length === 1, C.ok ? 'расчёт выполнен' : C.err.join('; '));
+  });
+  { const sc = clone(st); sc.mode = 'comb'; sc.rhoMode = 'default'; sc.side.walls[0].windows[1].s = -0.5; ok('комбинированный режим: перекрытие проёмов — ошибка (расчёт)', !KEO.compute(sc).ok && KEO.compute(sc).err.some(e => /перекрываются/.test(e))); }
+  { const sa = clone(st); sa.rhoMode = 'default'; const w0 = sa.side.walls[0].windows; w0[1].s = 0.9; w0[1].hpd = 2.6; w0[1].ho = 0.5; ok('проёмы друг над другом без перекрытия — не ошибка', KEO.compute(sa).ok); }
   // импорт старого файла
   const o1 = clone(base()); delete o1.rhoMode; o1.rho = 0.6; o1.rhoCalc = { on: false, s: [] };
   let m = KEO.migrate(o1); ok('старый файл, ρ 0,6 без помощника: «источник не подтверждён», значение сохранено', m.st.rhoMode === 'legacy' && KEO.rhoOf(m.st).v === 0.6 && /источник не подтверждён/.test(KEO.rhoOf(m.st).label));
