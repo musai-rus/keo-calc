@@ -108,8 +108,16 @@ const Engine = (function () {
     if (!type || type === 'none') return { v: 1, notes: [], tab: null };
     const T = D.K[type], key = pos === 'wall1' ? 'wall1' : 'center';
     const byDepth = D.K.depths.map((_, di) => interp(T.el, T[key][di], depthEl, 'extrap').v);
-    const v = interp(D.K.depths, byDepth, depthRoom, 'extrap').v;
-    return { v: Math.min(1, Math.max(0, v)), notes: [], tab: T.tab, title: T.title };
+    const r = interp(D.K.depths, byDepth, depthRoom, 'extrap'), v = r.v;
+    // способ получения (только описание — на значение не влияет): узел таблицы / интерполяция / экстраполяция по выносу и глубине
+    const node = (xs, x) => xs.some(a => Math.abs(a - x) < 1e-9);
+    const elLo = Math.min(...T.el), elHi = Math.max(...T.el), dLo = Math.min(...D.K.depths), dHi = Math.max(...D.K.depths);
+    const how = {
+      el: depthEl < elLo - 1e-9 || depthEl > elHi + 1e-9 ? 'extrap' : node(T.el, depthEl) ? 'node' : 'interp',
+      depth: depthRoom < dLo - 1e-9 || depthRoom > dHi + 1e-9 ? 'extrap' : node(D.K.depths, depthRoom) ? 'node' : 'interp',
+      elRange: [elLo, elHi], depthRange: [dLo, dHi], clamped: v > 1 || v < 0, raw: v
+    };
+    return { v: Math.min(1, Math.max(0, v)), notes: [], tab: T.tab, title: T.title, how, pos: key };
   }
 
   // r2 — табл. Б.21
@@ -216,7 +224,8 @@ const Engine = (function () {
     const wins = inp.windows.map((w, wi) => {
       const sec = sideSectors(P, inp.dst, w, blds);
       const tau0 = w.tau0 !== undefined ? w.tau0 : (w.t1 * w.t2 * (w.t3 || 1) * (w.t4 || 1) * (w.t5 || 1));
-      const K = w.K !== undefined ? { v: w.K, tab: null, title: 'задан вручную' } : KLookup(w.kType, inp.dp, w.kDepth || 0, inp.kPos);
+      // явные τо и K (с источником) передаёт модель (KEO.winCoef); иначе — произведение τ и табличный K
+      const K = w.K !== undefined ? { v: w.K, tab: null, title: w.Ksrc || 'задан вручную', src: w.Ksrc } : KLookup(w.kType, inp.dp, w.kDepth || 0, inp.kPos);
       return { idx: wi, w, ...sec, tau0, K: K.v, Kinfo: K };
     });
     const sumEb = wins.reduce((s, w) => s + w.sectors.filter(x => x.type === 'sky').reduce((a, x) => a + x.eps, 0), 0);
