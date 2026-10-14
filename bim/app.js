@@ -12,6 +12,7 @@ const KeoBim = (function () {
   };
   let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false, dec: { merge: [], split: [], assign: [], lanterns: {} }, normOv: {} };
   let C, cat, ui, overlay = 'keo-bim', labelsEl, HM, VOPS = [], LANS = [];
+  let roomFile = null;
   const exRe = () => S.exclude ? new RegExp(S.exclude, 'i') : null;
   const isExcluded = rm => { const re = exRe(); return !!(re && re.test(rm.name || '')); };
 
@@ -31,6 +32,7 @@ const KeoBim = (function () {
     progress('Каталог элементов…');
     cat = await G.catalog(C);
     const rooms = await G.rooms(C);
+    const imported = roomFile ? BimRooms.importData(roomFile, modelKey(), rooms) : new Map();
     const d = loadDec(); if (d) { st.dec = { merge: d.merge || [], split: d.split || [], assign: d.assign || [], lanterns: d.lanterns || {} }; st.normOv = d.normOv || {}; }
     const aec = await Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null);
     const T = aec && aec.refPointTransformation;
@@ -53,16 +55,22 @@ const KeoBim = (function () {
       progress(`Уровень ${L.name}: срез и контуры…`); await tick();
       const z = L.floor + S.cut;
       const segsP = G.slice(C, cat, bcats, z), segsL = G.slice(C, cat, ['Revit <Room Separation>'], z, [L.floor, 0.6]), segsD = G.doorBoxes(C, cat, z);
-      const bx = G.bounds(segsP.concat(segsL));
+      L.rooms.forEach(rm => {
+        rm.geometry = imported.get(rm.key);
+        if (!rm.geometry) {
+          const segments = G.slice(C, {byCat:{Room:[rm.id]}}, ['Room'], z);
+          if (BimRooms.closed(segments)) rm.geometry = {segments, source:'геометрия Room во Viewer'};
+        }
+      });
+      const bx = G.bounds(segsP.concat(segsL, L.rooms.flatMap(r=>r.geometry ? r.geometry.segments : [])));
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
       L.Rp = G.raster(segsP.concat(segsD), S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
-      SP.matchRooms(L.R, L.rooms);
       G.markExterior(C, L.Rp, z);
       compose(L);
     }
     progress('Фонари: привязка к помещениям, шахты, затенение…'); await tick();
     const LP = await G.lanternParams(C, LANS.map(l => l.id));
-    LANS.forEach(l => { const q = LP[l.id]; if (q) { l.dTop = q.dIn || null; l.dBot = q.dBot || null; } });
+    LANS.forEach(l => { const q = LP[l.id]; if (q && l.round) { l.dTop = q.dIn || null; l.dBot = q.dBot || null; } });
     lanterns(levels);
     st.levels = levels; st.res = [];
     for (const L of levels) { progress(`Уровень ${L.name}: расчёт…`); await tick(); st.res.push(...calcLevel(L)); }
@@ -72,9 +80,10 @@ const KeoBim = (function () {
 
   // состав пространств уровня (по текущим решениям) → разметка клеток → привязка вертикальных проёмов
   function compose(L) {
-    const { spaces, unplaced, unknown } = SP.compose(L.R, L.Rp, L.rooms, isExcluded, st.dec, { aux: rm => !normRow(rm) });
+    const { R, lab, spaces, unplaced, unknown } = BimRooms.raster(L.Rp, L.rooms, isExcluded);
+    L.R = R;
     L.spaces = spaces; L.unplaced = unplaced; L.unknown = unknown;
-    L.lab = SP.spaceLabel(L.R, L.Rp, spaces);
+    L.lab = lab;
     VOPS.forEach(o => { if (o.lvl === L.name) { delete o.space; delete o.lvl; delete o.floor; } });
     L.assign = G.assign(L.Rp, L.lab, VOPS, L.floor, L.top);
     VOPS.forEach(o => { if (o.lvl === undefined && o.space !== undefined && o.floor === L.floor) o.lvl = L.name; });
@@ -83,16 +92,20 @@ const KeoBim = (function () {
     // через открытые проходы (полоса «Кладовка игрушек» вдоль витража 94 не отнимает окна у групповой 70); видимость — по Rp
     L.spRegs = spaces.map(() => new Set()); for (let p = 0; p < L.lab.length; p++) if (L.lab[p] >= 0 && L.Rp.lab[p] > 0) L.spRegs[L.lab[p]].add(L.Rp.lab[p]);
     L.cnt = new Float64Array(spaces.length); for (let p = 0; p < L.lab.length; p++) if (L.lab[p] >= 0) L.cnt[L.lab[p]]++;
-    LANS.forEach(l => { if (l.lvl === L.name) { l.space = spaceAt(L, l.c); l.why = l.space < 0 ? lanWhy(L, l) : null; } });
+    LANS.forEach(l => { if (l.lvl === L.name) { l.space = lanternSpace(L, l); l.why = l.space < 0 ? lanWhy(L, l) : null; } });
   }
   function spaceAt(L, c) {
-    const R = L.R;
-    for (let rad = 0; rad <= 0.6; rad += 0.1) for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const i = Math.floor((c[0] + dx * rad - R.minx) / R.cell), j = Math.floor((c[1] + dy * rad - R.miny) / R.cell);
-      if (i >= 0 && j >= 0 && i < R.W && j < R.H && L.lab[j * R.W + i] >= 0) return L.lab[j * R.W + i];
-    }
-    return -1;
+    const R=L.R,i=Math.floor((c[0]-R.minx)/R.cell),j=Math.floor((c[1]-R.miny)/R.cell);
+    return i>=0&&j>=0&&i<R.W&&j<R.H ? L.lab[j*R.W+i] : -1;
   }
+  function lanternSpace(L,l) {
+    const owner=spaceAt(L,l.c);
+    const polygon=l.round ? Array.from({length:96},(_,i)=>[l.c[0]+Math.cos(i*Math.PI/48)*(l.dBot||l.dTop||l.d)/2,l.c[1]+Math.sin(i*Math.PI/48)*(l.dBot||l.dTop||l.d)/2]) : l.footprint;
+    if(!polygon){l.affectedSpaces=owner>=0?[owner]:[];return -1;}
+    const result=BimRooms.footprint(L.R,L.lab,polygon);
+    l.affectedSpaces=result.owners;return result.space;
+  }
+
   // фонарь → уровень (верхний уровень, над полом которого нет непрозрачной конструкции до стекла), высота помещения и шахты, затенение
   function lanterns(levels) {
     const down = levels.slice().sort((a, b) => b.floor - a.floor);
@@ -118,7 +131,7 @@ const KeoBim = (function () {
         if (hh && hh.z < l.z0 - 0.3 && l.zb !== undefined && hh.z >= l.zb - 0.2 && /Floors|Roofs/.test((cat.info[hh.id] || {}).c || '')) {
           l.hostSlab = hh.id; l.note = (l.note ? l.note + '; ' : '') + `проём в перекрытии под фонарём в модели не вырезан (элемент ${hh.id}) — принят открытым по габариту фонаря`;
         } else if (hh && hh.z < l.z0 - 0.3) continue; // между полом и фонарём — перекрытие
-        l.lvl = L.name; l.floor = L.floor; l.space = spaceAt(L, l.c); l.why = l.space < 0 ? lanWhy(L, l) : null; break;
+        l.lvl = L.name; l.floor = L.floor; l.space = lanternSpace(L, l); l.why = l.space < 0 ? lanWhy(L, l) : null; break;
       }
       if (!l.lvl) { l.why = 'нет уровня, на пол которого фонарь светит без перекрытия (луч вверх упирается в конструкцию ниже стекла)'; return; }
       const v = [-l.t[1], l.t[0]], cz = [];
@@ -138,13 +151,13 @@ const KeoBim = (function () {
   // тип фонаря: «b3» — зенитный/шахтный по Б.3 (подтверждён автоматически: горизонтальное стекло в семействе с именем фонаря,
   // или пользователем для всего типа), «skip» — не фонарь, null — требует подтверждения
   const lanKey = l => l.cat + '|' + (l.label || l.type || '');
-  const lanConf = l => { const d = (st.dec.lanterns || {})[lanKey(l)]; return d || (l.auto ? 'b3' : null); };
+  const lanConf = l => { const d = (st.dec.lanterns || {})[lanKey(l)]; if(d==='skip')return d; if(!['round','rect'].includes(l.shape))return null; return d || (l.auto ? 'b3' : null); };
   // где под фонарём нет рассчитываемого пространства — почему
   function lanWhy(L, l) {
     const R = L.R, i = Math.floor((l.c[0] - R.minx) / R.cell), j = Math.floor((l.c[1] - R.miny) / R.cell), id = (i >= 0 && j >= 0 && i < R.W && j < R.H) ? R.lab[j * R.W + i] : 0, rg = R.regs[id];
     const rm = rg && (rg.room || (rg.rooms && rg.rooms[0]));
     if (rm) return isExcluded(rm) ? `под фонарём помещение ${rm.num} «${rm.name}» — исключено из расчёта (настройка)` : `под фонарём помещение ${rm.num} «${rm.name}» не входит в рассчитываемое пространство`;
-    return id > 0 ? 'под фонарём часть без помещения Revit (контур не опознан)' : 'точка под фонарём попадает в стену или перегородку на высоте среза';
+    return 'нижнее отверстие фонаря не принадлежит целиком одному подтверждённому Room (нет границ, пересечение границ или отверстие в контуре)';
   }
   // север: ручная поправка (настройка) или поворот из refPointTransformation (внутренние координаты Revit → общие, истинный север)
   function northOf(T) {
@@ -167,11 +180,12 @@ const KeoBim = (function () {
       const dA = areaRevit > 0 ? Math.min(Math.abs(areaRevit - areaC), Math.abs(areaRevit - areaV)) / areaRevit : null;
       const base = { sp, key: sp.key, level: L.name, floor: L.floor, rooms: sp.rooms, title: Cc.title(sp), nums: sp.rooms.map(r => r.num).join('+'), runs: L.cells.runs[i],
         area: { revit: areaRevit, model: areaC, modelV: areaV, dA, warn: dA !== null && dA > 0.05 } };
-      const o = VOPS.filter(x => x.lvl === L.name && (x.space === i || (x.reg && L.spRegs[i] && L.spRegs[i].has(x.reg)))), ls = LANS.filter(x => x.lvl === L.name && x.space === i);
-      ls.forEach(l => { l.conf = lanConf(l); });
+      const o = VOPS.filter(x => x.lvl === L.name && (x.space === i || (x.reg && L.spRegs[i] && L.spRegs[i].has(x.reg)))), ls = LANS.filter(x => x.lvl === L.name && (x.space === i || (x.affectedSpaces || []).includes(i)));
+      ls.forEach(l => { l.conf = lanConf(l)==='skip' ? 'skip' : l.space<0 ? null : lanConf(l); });
       const lsCalc = ls.filter(l => l.conf === 'b3'), lanPending = ls.filter(l => !l.conf).length;
       if (!o.length && !lsCalc.length) { out.push({ ...base, kind: 'dark', lans: ls, lanPending }); return; }
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
+        roomSection: (A,t) => BimRooms.section(sp.rooms[0].geometry.segments,A,t),
         rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
       if (lanPending) (r.notes = r.notes || []).unshift(`фонарей с неподтверждённым типом: ${lanPending} — в расчёте не учтены, подтвердите тип в разделе «Фонари»`);
@@ -182,7 +196,7 @@ const KeoBim = (function () {
     // помещения без расчётного контура: не опознаны по срезу и не закрыты балансом площадей
     const placed = new Set(L.spaces.flatMap(s => s.rooms.map(r => r.key)));
     L.rooms.filter(rm => !isExcluded(rm) && !placed.has(rm.key)).forEach(rm => out.push({ key: rm.key, level: L.name, floor: L.floor, rooms: [rm], title: `${rm.num} ${rm.name}`, nums: rm.num, kind: 'nogeo',
-      why: !(rm.area > 0) ? (rm.warn.join('; ') || 'нет площади') : rm.reg ? 'контур в наружной области или вне здания' : 'контур не выделен по срезу' }));
+      why: rm.geometryError || (!(rm.area > 0) ? (rm.warn.join('; ') || 'нет площади') : 'Viewer не передал замкнутую геометрию Room. Загрузите границы помещений; подбор по площади отключён.') }));
     return out;
   }
   // клетки собственных контуров помещений (для расчётной точки в помещении, определяющем норму)
@@ -214,16 +228,20 @@ const KeoBim = (function () {
     draw(); renderList();
   }
   // kind: 'merge' | 'split' | 'assign' (помещения в неопознанный контур at) | null — вернуть автоматический состав
-  function decide(kind, keys, levelName, at) {
-    const D = st.dec, hit = g => g.some(k => keys.includes(k));
-    D.merge = D.merge.filter(g => !hit(g)); D.split = D.split.filter(g => !hit(g));
-    D.assign = (D.assign || []).filter(a => !hit(a.keys) && !(at && a.at[0] === at[0] && a.at[1] === at[1]));
-    if (kind === 'assign') D.assign.push({ at, keys }); else if (kind) D[kind].push(keys);
-    saveDec(); rebuild(levelName);
+  function decide() {
+    throw new Error('Расчёт ведётся отдельно по Room; объединение и назначение по площади отключены');
+  }
+  function importRooms() {
+    const inp=document.createElement('input');inp.type='file';inp.accept='.json';
+    inp.onchange=async()=>{try{const file=inp.files[0];if(!file)return;const data=JSON.parse(await file.text());BimRooms.importData(data,modelKey(),st.rooms);roomFile=data;await run();}catch(e){statusLine('Границы не загружены: '+e.message);}};inp.click();
+  }
+  function roomTemplate() {
+    download('Room_manifest.json',JSON.stringify({version:1,model:modelKey(),coordinates:'viewer-metres',unitScale:C.S,globalOffset:C.m.getData().globalOffset,rooms:st.rooms.map(r=>({externalId:r.externalId,eid:r.eid,level:r.level,num:r.num,loops:[]}))},null,2),'application/json');
   }
 
   /* ---------- статус пространства ---------- */
   function status(r) {
+    if (r.lanPending) return { k: 'err', t: 'уточните геометрию и привязку фонаря' };
     if (r.kind === 'dark') return { k: 'none', t: 'нет световых проёмов' };
     if (r.kind === 'nogeo') return { k: 'none', t: 'контур не найден' };
     if (r.kind === 'unknown') return { k: 'err', t: 'уточните состав' };
@@ -435,8 +453,8 @@ const KeoBim = (function () {
       ${lanOverview()}
       <p class="muted" style="font-size:11px">${esc(PRELIM)} Север: ${esc(st.north ? st.north.src : '—')}.</p>
       <details class="kb-set"><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
-      <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button><button class="kb-btn" data-a="dexp">Решения по составу (JSON)</button><button class="kb-btn" data-a="dimp">Загрузить решения</button>${st.dec.merge.length || st.dec.split.length || (st.dec.assign || []).length || Object.keys(st.dec.lanterns || {}).length || Object.keys(st.normOv).length ? '<button class="kb-btn" data-a="dclr">Сбросить решения</button>' : ''}</div>
-      <p class="muted" style="font-size:11px">Контуры восстановлены по срезу модели на высоте ${f2(S.cut, 1)} м над полом: помещения Revit опознаются по контуру с линиями разделения, состав расчётного пространства и затенение — по физическим стенам, перегородкам и витражам (линии разделения не считаются стенами). Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б: Б.1 — боковое, Б.3 — верхнее, Б.4 — комбинированное). Экспериментальная версия: нормативная точность на модели не подтверждена.</p>`;
+      <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button><button class="kb-btn" data-a="dexp">Решения по составу (JSON)</button><button class="kb-btn" data-a="dimp">Загрузить решения</button><button class="kb-btn" data-a="rooms">Загрузить границы Room</button><button class="kb-btn" data-a="room-template">Задание на выгрузку Room</button>${st.dec.merge.length || st.dec.split.length || (st.dec.assign || []).length || Object.keys(st.dec.lanterns || {}).length || Object.keys(st.normOv).length ? '<button class="kb-btn" data-a="dclr">Сбросить решения</button>' : ''}</div>
+      <p class="muted" style="font-size:11px">Каждый Room рассчитывается отдельно в собственной геометрии. Источник — геометрия Room во Viewer или файл границ для этой модели. Подбор по площади, объединение и рост контуров отключены. Физические стены используются для видимости света. Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б: Б.1 — боковое, Б.3 — верхнее, Б.4 — комбинированное). Экспериментальная версия: нормативная точность на модели не подтверждена.</p>`;
     main.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => planView(b.dataset.lv));
     main.querySelector('[data-a="3d"]').onclick = () => { st.level = null; view3d(); renderList(); labels(); };
     main.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderList(); labels(); });
@@ -444,6 +462,7 @@ const KeoBim = (function () {
     main.querySelector('[data-a=csv]').onclick = exportCSV; main.querySelector('[data-a=json]').onclick = exportJSON;
     main.querySelector('[data-a=dexp]').onclick = () => download('КЕО_решения_по_составу.json', JSON.stringify({ model: modelKey(), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv, names: Object.fromEntries((st.rooms || []).map(r => [r.key, `${r.level} · ${r.num} ${r.name}`])) }, null, 1), 'application/json');
     main.querySelector('[data-a=dimp]').onclick = importDec;
+    main.querySelector('[data-a=rooms]').onclick=importRooms;main.querySelector('[data-a=room-template]').onclick=roomTemplate;
     main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); st.levels.forEach(l => rebuild(l.name)); });
     main.querySelectorAll('[data-lid]').forEach(b => b.onclick = () => { const id = +b.dataset.lid; C.v.clearThemingColors(C.m); C.v.setThemingColor(id, new THREE.Vector4(0.85, 0.27, 0.23, 1), C.m); C.v.fitToView([id], C.m); });
     const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; saveDec(); st.levels.forEach(l => rebuild(l.name)); };
@@ -481,7 +500,7 @@ const KeoBim = (function () {
       <label>Не рассчитывать и не объединять автоматически (имя содержит) <input type="text" data-s="exclude" value="${esc(S.exclude)}"></label>
       <label>Высота среза для контуров, м <input type="number" step="0.1" data-s="cut" value="${S.cut}"></label>
       <label>Поправка на север, ° по часовой (пусто — из модели) <input type="text" data-s="northDeg" value="${esc(S.northDeg)}"></label>
-      <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по истинному северу из модели. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
+      <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Норма определяется отдельно для каждого Room. Ориентация — по истинному северу из модели. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
       <div class="kb-row"><button class="kb-btn pri" data-a="rerun">Пересчитать</button></div>`;
   }
   function bindSettings(root) {
@@ -493,12 +512,13 @@ const KeoBim = (function () {
     if (!r.rooms.length) return '';
     const A = r.area, rows = r.rooms.map(rm => `<tr><td>${esc(rm.num)}</td><td>${esc(rm.name)}${rm.byBalance !== undefined ? ' <span class="bdg w">по балансу площадей</span>' : rm.byUser ? ' <span class="bdg">назначено вручную</span>' : ''}</td><td class="num">${rm.area > 0 ? f2(rm.area) : '—'}</td><td class="muted">${rm.areaRaw !== undefined ? esc(`${f2(+rm.areaRaw, 3)} ${UNIT[rm.areaUnit] || rm.areaUnit || ''}`) : '—'}</td><td class="muted">${esc(rm.eid || rm.key)}</td></tr>`).join('');
     let h = `<h3>Помещения Revit и площадь</h3><table class="kb-t"><tr><th>№</th><th>Помещение</th><th class="num">S, м²</th><th>в модели</th><th>ElementId</th></tr>${rows}</table>`;
-    if (A) h += `<p class="muted" style="font-size:12px">Площадь Revit (свойство Area${r.rooms.length > 1 ? ', сумма без повторов' : ''}): <b>${f2(A.revit)}</b> м². По контуру среза: ${f2(A.model, 1)} м² в чистоте, ${f2(A.modelV, 1)} м² до осей стен${A.dA !== null ? `, расхождение ${f2(A.dA * 100, 1)} %` : ''}. Для расчёта используется контур среза (L, B, dп), площадь Revit — для сверки.</p>`;
+    if (A) h += `<p class="muted" style="font-size:12px">Площадь Revit (свойство Area${r.rooms.length > 1 ? ', сумма без повторов' : ''}): <b>${f2(A.revit)}</b> м². По геометрии Room (растр): ${f2(A.model, 1)} м²${A.dA !== null ? `, расхождение ${f2(A.dA * 100, 1)} %` : ''}. Для расчёта используется геометрия Room, площадь Revit — для сверки.</p>`;
     if (A && A.warn) h += `<div class="kb-warn">Площадь Revit и площадь контура расходятся больше чем на 5 % — проверьте состав пространства (объединение, линии разделения) и границы помещения в модели.</div>`;
     r.rooms.filter(rm => rm.warn && rm.warn.length).forEach(rm => h += `<div class="kb-warn">${esc(rm.num)}: ${esc(rm.warn.join('; '))}</div>`);
     return h;
   }
   function compHTML(r) {
+    if(r.sp && r.sp.roomGeometry)return `<p>Один Room — один расчёт. Источник контура: ${esc(r.rooms[0].geometry.source)}. Присоединение соседних площадей отключено.</p>`;
     const sp = r.sp, U = sp ? sp.unknown : r.unk ? [r.unk] : [];
     let h = '';
     U.forEach((u, i) => h += `<div class="kb-warn">${sp ? `В объёме есть часть ${f2(u.area, 1)} м² без помещения Revit` : 'Часть здания без помещения Revit'} (не выделена линиями разделения). ${u.cands.length ? 'Подходят по площади (в чистоте ' + f2(u.area, 1) + ' м², до осей ' + f2(u.areaV, 1) + ' м²):' : 'По площади однозначно не подбирается — посчитайте вручную.'}${u.cands.map((c, j) => `<br>${esc(c.label)} (${f2(c.sum)} м²) <button class="kb-btn" data-asg="${i}:${j}">Это они</button>`).join('')}</div>`);
@@ -625,4 +645,5 @@ const KeoBim = (function () {
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
-window.KeoBimLib = { BimGeom, BimCalc, BimSpaces };
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimRooms };
+
