@@ -77,6 +77,12 @@ console.log('\n=== П.3/5/6. Приоритет ручных τо и K ===');
   Object.assign(x, { tau0m: 'manual', tau0o: 0.33, t2m: 'manual', t2o: 0.5 }); w = wins(st);
   ok('при ручном τо τ2 окна не меняет τо', w[0].tau0 === 0.33);
   x.t2o = 0.6; ok('… и после правки τ2', wins(st)[0].tau0 === 0.33);
+  // τ2 проёма не используется при ручном τо — ошибка в нём не блокирует расчёт (видна как предупреждение)
+  { const s5 = clone(st), y = s5.side.walls[0].windows[0];
+    ['abc', 0, 1.5, null].forEach(bad => { y.t2o = bad; const C = KEO.compute(s5);
+      ok(`ручной τо, τ2 проёма = ${JSON.stringify(bad)} (не используется): расчёт выполняется`, C.ok && C.res.walls[0].wins[0].tau0 === 0.33, C.ok ? '' : C.err.join('; '));
+      ok(`… и об ошибке τ2 = ${JSON.stringify(bad)} предупреждено`, C.ok && C.warn.some(e => /τ2 проёма/.test(e) && /не используется/.test(e))); });
+    y.tau0m = 'wall'; y.t2o = 'abc'; ok('τо по общим, τ2 проёма «abc» (используется) — ошибка, расчёт не выдаётся', !KEO.compute(s5).ok); }
   x.tau0m = 'wall'; w = wins(st);
   near('после возврата к авто τ2 окна снова участвует: 0,6·0,6', w[0].tau0, 0.36, 1e-12);
   ok('ручной τ2 окна заменяет общий только для окна 1', Math.abs(w[1].tau0 - 0.45) < 1e-12);

@@ -137,19 +137,22 @@ const KEO = (function () {
   }
   // эффективные коэффициенты проёма — единственный источник для ядра, формы и отчёта
   function winCoef(gen, x, i) {
-    const err = [], n = i + 1;
+    const err = [], warn = [], n = i + 1;
     const m = { t2: winMode(x, 't2'), tau0: winMode(x, 'tau0'), K: winMode(x, 'K') };
-    const man = key => { const c = coefCheck(x[OVR[key][1]], key); if (c.st !== 'ok') err.push(`Проём ${n}: ${c.st === 'empty' ? `${COEF_RULES[key].name} — режим «вручную», значение не введено` : c.msg}`); return c.v; };
+    const msg = (key, c) => `Проём ${n}: ${c.st === 'empty' ? `${COEF_RULES[key].name} — режим «вручную», значение не введено` : c.msg}`;
+    const man = key => { const c = coefCheck(x[OVR[key][1]], key); if (c.st !== 'ok') err.push(msg(key, c)); return c.v; };
     const basis = key => { const b = OVR[key][2] && x[OVR[key][2]]; return b ? String(b) : 'основание не указано'; };
     let t2 = { v: gen.t2.v, src: 'общий для стены', mode: 'wall' };
-    if (m.t2 === 'manual') { const v = man('t2'); t2 = { v, src: 'задан для проёма', mode: 'manual' }; }
+    // при ручном τо τ2 проёма не участвует в расчёте: его ошибка не блокирует результат, а выводится предупреждением
+    if (m.t2 === 'manual' && m.tau0 === 'manual') { const c = coefCheck(x[OVR.t2[1]], 't2'); if (c.st !== 'ok') warn.push(`${msg('t2', c)} — не используется (τо задано вручную), в расчёт не входит`); t2 = { v: c.st === 'ok' ? c.v : NaN, src: 'задан для проёма', mode: 'manual' }; }
+    else if (m.t2 === 'manual') { const v = man('t2'); t2 = { v, src: 'задан для проёма', mode: 'manual' }; }
     let tau0;
     if (m.tau0 === 'manual') { const v = man('tau0'); tau0 = { v, mode: 'manual', src: `задано вручную для проёма ${n}: ${basis('tau0')}; τ1…τ5 не используются` }; t2.used = false; }
     else { const v = gen.t1.v * t2.v * 1 * gen.t4.v * gen.t5.v; tau0 = { v, mode: 'wall', src: `τо = τ1·τ2·τ3·τ4·τ5 = ${f(gen.t1.v)}·${f(t2.v)}·1,00·${f(gen.t4.v)}·${f(gen.t5.v)} (формула (Б.8) СП 367)${m.t2 === 'manual' ? `; τ2 — заданный для проёма ${n}` : ''}` }; t2.used = true; }
     let K;
     if (m.K === 'manual') { const v = man('K'); K = { v, mode: 'manual', src: `задано вручную для проёма ${n}: ${basis('K')}` }; }
     else K = { v: gen.K.v, mode: gen.K.mode, src: gen.K.src, tab: gen.K.tab };
-    return { t1: gen.t1.v, t2, t4: gen.t4.v, t5: gen.t5.v, tau0, K, modes: m, err };
+    return { t1: gen.t1.v, t2, t4: gen.t4.v, t5: gen.t5.v, tau0, K, modes: m, err, warn };
   }
   /* ---------- средневзвешенный коэффициент отражения ρср ----------
      Режимы: default — 0,55 (примечание 2 к табл. Б.6/Б.7: коэффициенты отражения неизвестны);
@@ -283,14 +286,14 @@ const KEO = (function () {
     return { group: g, rho: rhoOf(st).v, hp, MF: mfOf(st, 3), walls };
   }
   // ошибки ручных коэффициентов (до выдачи результата)
-  function coefErrors(st) {
+  function coefErrors(st, warn) {
     const walls = st.mode === 'comb' ? st.side.walls.slice(0, 1) : st.side.walls, err = [];
     const dp = w => st.mode === 'comb' ? +st.top.L : +w.dp;
     walls.forEach((w, wi) => {
       const pre = walls.length > 1 ? `Стена ${wi + 1}. ` : '';
       const gen = wallCoef(st, w, dp(w));
       gen.err.forEach(e => err.push(pre + e));
-      w.windows.forEach((x, i) => winCoef(gen, x, i).err.forEach(e => err.push(pre + e)));
+      w.windows.forEach((x, i) => { const c = winCoef(gen, x, i); c.err.forEach(e => err.push(pre + e)); if (warn) c.warn.forEach(e => warn.push(pre + e)); });
     });
     return err;
   }
@@ -334,7 +337,7 @@ const KEO = (function () {
     const pos = (v, n) => { if (!(+v > 0)) err.push(`${n}: нужно положительное число`); };
     const rh = rhoOf(st); rh.err.forEach(e => err.push(e)); rh.warn.forEach(e => warn.push(e));
     if (rh.mode === 'legacy') warn.push('ρср: источник не подтверждён (файл прежней версии) — выберите режим «0,55», «По поверхностям» или «Вручную».');
-    if (st.mode !== 'top') { coefErrors(st).forEach(e => err.push(e)); migrateWindows(JSON.parse(JSON.stringify({ side: st.side }))).forEach(n => warn.push(n)); }
+    if (st.mode !== 'top') { coefErrors(st, warn).forEach(e => err.push(e)); migrateWindows(JSON.parse(JSON.stringify({ side: st.side }))).forEach(n => warn.push(n)); }
     if (st.mode !== 'top') {
       const walls = st.mode === 'comb' ? st.side.walls.slice(0, 1) : st.side.walls;
       walls.forEach((w, wi) => {
