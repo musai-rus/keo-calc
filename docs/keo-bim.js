@@ -160,7 +160,6 @@ const Report = (function () {
   }
   return { parseRich, richHTML, toPDF, f };
 })();
-
 /* КЕО — расчётное ядро. СП 367.1325800.2025, СП 52.13330.2016.
    Чистые функции: на вход — исходные данные, на выход — результат + журнал шагов (для отчёта). */
 const Engine = (function () {
@@ -606,7 +605,6 @@ const Engine = (function () {
 
   return { lanternsB2, b2Exact, b2Section, lanternProfile, kfOf, tiltIdx, KIND_NAME, qGamma, n1Rays, Gp, interp, r0Lookup, kzd0Lookup, bfLookup, KLookup, r2Lookup, kcLookup, CNwall, CNzenith, MF, sideSectors, sideWall, side, lanternIndex, top, combined, avgB10, r2f, deg, rad };
 })();
-
 /* Схемы (план/разрез) как набор примитивов в метрах → SVG (экран) и PDF (отчёт). */
 const Schemes = (function () {
   const r2 = (x, n = 2) => Number(x).toFixed(n).replace('.', ',');
@@ -684,6 +682,8 @@ const Schemes = (function () {
   function topPlan(inp, pts) {
     const it = []; const L = inp.L, B = inp.B;
     it.push({ t: 'rect', x: 0, y: 0, w: L, h: B, c: 'roomf' });
+    const ox = inp.coordOrigin === 'center' ? L / 2 : 0, oy = inp.coordOrigin === 'center' ? B / 2 : 0;
+    const a = Math.min(L, B) * 0.18;
     it.push({ t: 'line', x1: -0.3, y1: inp.y0, x2: L + 0.3, y2: inp.y0, c: 'axis' });
     inp.types.forEach((T, ti) => T.lanterns.forEach((l, li) => {
       if (T.shape === 'round') it.push({ t: 'circle', x: l.x, y: l.y, r: T.dv / 2, c: 'lan' });
@@ -698,6 +698,13 @@ const Schemes = (function () {
       const x = inp.sideWall === 'xL' ? L : 0;
       it.push({ t: 'rect', x: x === 0 ? -0.25 : L, y: 0, w: 0.25, h: B, c: 'wallw' });
     }
+    // Оси поверх заливки фонарей: начало может находиться внутри проёма.
+    it.push({ t: 'circle', x: ox, y: oy, r: 0.06, c: 'pt' });
+    it.push({ t: 'text', x: ox - 0.12, y: oy + 0.2, s: 'O', c: 'txtb', a: 'end' });
+    it.push({ t: 'line', x1: ox, y1: oy, x2: ox + a, y2: oy, c: 'axis' });
+    it.push({ t: 'line', x1: ox, y1: oy, x2: ox, y2: oy + a, c: 'axis' });
+    it.push({ t: 'text', x: ox + a, y: oy + 0.2, s: '+x', c: 'txtb' });
+    it.push({ t: 'text', x: ox + 0.12, y: oy + a, s: '+y', c: 'txtb' });
     it.push({ t: 'dim', x1: 0, y1: -0.45, x2: L, y2: -0.45, s: 'L = ' + r2(L) });
     it.push({ t: 'dimv', x1: L + 0.4, y1: 0, x2: L + 0.4, y2: B, s: 'B = ' + r2(B) });
     it.push({ t: 'text', x: 0, y: B + 0.35, s: 'План', c: 'cap' });
@@ -726,7 +733,7 @@ const Schemes = (function () {
     const mid = pts[Math.floor(pts.length / 2)];
     if (mid) holes.forEach(([a, b]) => it.push({ t: 'line', x1: mid.x, y1: inp.hurp, x2: (a + b) / 2, y2: H, c: 'ray' }));
     it.push({ t: 'dimv', x1: L + 0.4, y1: inp.hurp, x2: L + 0.4, y2: H, s: 'hр = ' + r2(H - inp.hurp) });
-    it.push({ t: 'text', x: 0, y: H + hs + 0.45, s: 'Разрез по линии расчётных точек (фонари спроецированы)', c: 'cap' });
+    it.push({ t: 'text', x: 0, y: H + hs + 0.45, s: 'Разрез (проекция фонарей)', c: 'cap' });
     return { box: [-0.5, -0.8, L + 1.1, H + hs + 0.75], it };
   }
 
@@ -944,7 +951,6 @@ const Schemes = (function () {
   }
   return { sideSection, sidePlan, topPlan, topSection, b2Sect, b2Plan, toSVG, toPDF, DAN, danScheme };
 })();
-
 /* Состояние → входные данные расчёта → результат → модель отчёта. Без DOM. */
 const KEO = (function () {
   const f = Report.f, R = Engine;
@@ -983,7 +989,7 @@ const KEO = (function () {
       rhoCalc: { on: false, s: [] },
       dan: { wall: 0, win: 0, sec: 0 },
       side: { walls: [defaultWall('Ю')] },
-      top: { sys: 'shaft', L: 8, B: 6, H: 4.2, spans: 1, l1: null, y0: null, nPts: 0, types: [defaultType()], b2: [defaultB2Type()] },
+      top: { sys: 'shaft', L: 8, B: 6, H: 4.2, spans: 1, l1: null, y0: null, nPts: 0, nPtsBasis: '', coordOrigin: 'corner', types: [defaultType()], b2: [defaultB2Type()] },
       comb: { wallSide: 'x0' }
     };
   }
@@ -1209,6 +1215,9 @@ const KEO = (function () {
     const d = defaultState();
     const st = { ...d, ...o, meta: { ...d.meta, ...o.meta }, top: { ...d.top, ...o.top, b2: (o.top && o.top.b2) || d.top.b2, sys: (o.top && o.top.sys) || 'shaft' }, side: { ...d.side, ...o.side }, comb: { ...d.comb, ...o.comb }, rhoCalc: { ...d.rhoCalc, ...o.rhoCalc }, rhoSurf: { ...d.rhoSurf, ...(o.rhoSurf || {}) }, dan: { ...d.dan, ...(o.dan || {}) } };
     const notes = [];
+    // coordOrigin changes the input display only. JSON always stores corner coordinates.
+    st.top.coordOrigin = o.top?.coordOrigin === 'center' ? 'center' : 'corner';
+    if (st.mode !== 'side' && +st.top.L <= 4 && !st.top.nPtsBasis) notes.push('Число точек для L ≤ 4 м требует явного выбора и обоснования; исходные координаты сохранены.');
     if (!o.rhoMode) {
       st.rhoMode = rhoMode(o);
       if (o.rho === undefined || o.rho === null || o.rho === '') { st.rho = null; notes.push('ρср: в файле прежней версии значения нет — выберите режим'); }
@@ -1250,21 +1259,40 @@ const KEO = (function () {
     });
     return err;
   }
+  function lanternCoord(st, value, axis, toStored = false) {
+    const n = readNum(value);
+    if (n.st !== 'num') return value; // Empty/invalid input must not become a coordinate of zero.
+    if (st.top.coordOrigin !== 'center') return n.v;
+    const dim = readNum(axis === 'x' ? st.top.L : st.top.B);
+    if (dim.st !== 'num' || dim.v <= 0) return null;
+    return n.v + (toStored ? 1 : -1) * dim.v / 2;
+  }
+  function topPointPolicy(st) {
+    const T = st.top, L = +T.L, raw = readNum(T.nPts), err = [];
+    const auto = raw.st === 'num' && raw.v === 0;
+    const N = auto ? (L > 4 ? 5 : 0) : raw.v;
+    if (!(Number.isFinite(L) && L > 2)) err.push('Для точек с отступом 1 м от обеих стен длина L должна быть больше 2 м; для меньшего помещения нужна отдельная схема расчёта.');
+    else if (auto && L <= 4) err.push('При L ≤ 4 м выберите число точек и укажите обоснование: п. 8.5.2 СП 367 не задаёт правило «3 точки».');
+    else if (!Number.isInteger(N) || N < 3 || N > 101) err.push('Число расчётных точек: укажите целое число от 3 до 101.');
+    else if (L > 4 && N < 5) err.push('При L > 4 м требуется не менее пяти расчётных точек (п. 8.5.2 СП 367).');
+    if (L > 2 && L <= 4 && !auto && !String(T.nPtsBasis || '').trim()) err.push('Укажите обоснование выбранного числа точек для L ≤ 4 м.');
+    const note = L > 4 ? `${auto ? 'Авто: 5 точек' : 'Число точек задано вручную'}; минимум 5 при L > 4 м (п. 8.5.2 СП 367).` : `Число точек задано пользователем для L ≤ 4 м, не является правилом «3 точки по СП». Обоснование: ${T.nPtsBasis || 'не указано'}.`;
+    return { N, err, note };
+  }
   function topPoints(st) {
-    const T = st.top, L = +T.L, B = +T.B, y0 = T.y0 !== null && T.y0 !== '' ? +T.y0 : B / 2;
-    let N = +T.nPts || (L > 4 ? 5 : 3);
-    const x1 = Math.min(1, L / 2), x2 = Math.max(L - 1, L / 2);
-    return Array.from({ length: N }, (_, j) => ({ x: N === 1 ? L / 2 : x1 + (x2 - x1) * j / (N - 1), y: y0 }));
+    const T = st.top, L = +T.L, B = +T.B, y = readNum(T.y0), y0 = y.st === 'empty' ? B / 2 : y.v;
+    const policy = topPointPolicy(st); if (policy.err.length) return [];
+    return Array.from({ length: policy.N }, (_, j) => ({ x: 1 + (L - 2) * j / (policy.N - 1), y: y0 }));
   }
   function topInput(st) {
     const T = st.top, g = groupOf(st);
     return {
       group: g, rho: rhoOf(st).v, H: +T.H, hurp: hpOf(st), spans: +T.spans || 1, l1: T.l1 ? +T.l1 : +T.B,
-      points: topPoints(st),
+      points: topPoints(st), coordOrigin: T.coordOrigin || 'corner',
       types: T.types.map(t => ({
         name: t.name, shape: t.shape, av: +t.av, bv: +t.bv, an: +t.an, bn: +t.bn, dv: +t.dv, dn: +t.dn, hsf: +t.hsf, refl: t.refl, rhoW: +t.rhoW,
         t1: +t.t1, t2: +t.t2, t3: +t.t3, t4: +t.t4, t5: t.net ? 0.9 : 1, MF: mfOf(st, +t.tilt || 0), Kc: t.KcManual ? +t.KcManual : undefined,
-        lanterns: t.lanterns.map(l => ({ x: +l.x, y: +l.y }))
+        lanterns: t.lanterns.map(l => ({ x: readNum(l.x).v, y: readNum(l.y).v }))
       }))
     };
   }
@@ -1273,7 +1301,7 @@ const KEO = (function () {
     const T = st.top, g = groupOf(st), B = +T.B, L = +T.L, spans = +T.spans || 1;
     return {
       group: g, rho: rhoOf(st).v, L, W: B, Hk: +T.H, hurp: hpOf(st), spans, l1: T.l1 ? +T.l1 : L / spans,
-      y0: T.y0 !== null && T.y0 !== '' ? +T.y0 : B / 2, points: topPoints(st),
+      y0: readNum(T.y0).st === 'empty' ? B / 2 : readNum(T.y0).v, points: topPoints(st),
       types: (T.b2 || []).map(t => {
         const tt = { name: t.name, kind: t.kind, b: +t.b, hst: +t.hst || 0, ho: t.kind === 'A' ? (+t.b / 2) * Math.tan(+t.beta * Math.PI / 180) : +t.ho, beta: +t.beta, face: t.face || 'R',
           ystart: +t.ystart || 0, ylen: t.ylen ? +t.ylen : B - (+t.ystart || 0), pieces: Math.max(1, Math.round(+t.pieces || 1)), pitch: +t.pitch || 0,
@@ -1285,6 +1313,35 @@ const KEO = (function () {
   const isB2 = st => st.mode !== 'side' && st.top.sys === 'b2';
 
   /* ---------- проверки ---------- */
+  function lanternOverlaps(types) {
+    // Проверяем реальные контуры отверстий на плане, а не их габаритные прямоугольники.
+    // Касание допустимо для этой проверки; конструктивные зазоры она не назначает.
+    const eps = 1e-9, all = [], errors = [];
+    const opening = (t, upper) => {
+      const round = t.shape === 'round';
+      const hx = +(round ? (upper ? t.dv : t.dn) : (upper ? t.av : t.an)) / 2;
+      const hy = round ? hx : +(upper ? t.bv : t.bn) / 2;
+      return Number.isFinite(hx) && Number.isFinite(hy) && hx > 0 && hy > 0 ? { round, hx, hy } : null;
+    };
+    types.forEach((t, ti) => t.lanterns.forEach((l, li) => {
+      const x = readNum(l.x), y = readNum(l.y);
+      if (x.st === 'num' && y.st === 'num') all.push({ x: x.v, y: y.v, id: `${ti + 1}.${li + 1}`, upper: opening(t, true), lower: opening(t, false) });
+    }));
+    const intersects = (a, b, dx, dy) => {
+      if (!a || !b) return false; // Ошибки размеров сообщаются отдельно.
+      if (a.round && b.round) return Math.hypot(dx, dy) < a.hx + b.hx - eps;
+      if (!a.round && !b.round) return dx < a.hx + b.hx - eps && dy < a.hy + b.hy - eps;
+      const circle = a.round ? a : b, rect = a.round ? b : a;
+      return Math.hypot(Math.max(0, dx - rect.hx), Math.max(0, dy - rect.hy)) < circle.hx - eps;
+    };
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+      const a = all[i], b = all[j], dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y), levels = [];
+      if (intersects(a.upper, b.upper, dx, dy)) levels.push('верхние');
+      if (intersects(a.lower, b.lower, dx, dy)) levels.push('нижние');
+      if (levels.length) errors.push(`Фонари ${a.id} и ${b.id} (тип.номер): перекрываются ${levels.join(' и ')} отверстия на плане — проверьте координаты и размеры; расчёт отдельных фонарей для такой схемы недопустим.`);
+    }
+    return errors;
+  }
   function validate(st) {
     const err = [], warn = [];
     const pos = (v, n) => { if (!(+v > 0)) err.push(`${n}: нужно положительное число`); };
@@ -1310,6 +1367,10 @@ const KEO = (function () {
     }
     if (st.mode !== 'side') {
       const T = st.top; pos(T.L, 'Длина помещения L'); pos(T.B, 'Ширина помещения B'); pos(T.H, 'Высота помещения H');
+      const policy = topPointPolicy(st); err.push(...policy.err);
+      if (+T.L <= 4 && !policy.err.length) warn.push(policy.note);
+      const y = readNum(T.y0), y0 = y.st === 'empty' ? +T.B / 2 : y.v;
+      if (!Number.isFinite(+T.B) || !Number.isFinite(y0) || y0 < 0 || y0 > +T.B) err.push('Линия характерного разреза y0 должна находиться внутри помещения (0…B).');
       if (+T.H <= hpOf(st)) err.push('Высота помещения H должна быть больше высоты рабочей поверхности');
       if (T.sys === 'b2') {
         (T.b2 || []).forEach((t, i) => {
@@ -1329,11 +1390,12 @@ const KEO = (function () {
         all.sort((a, b) => a[0] - b[0]); for (let i = 1; i < all.length; i++) if (all[i][0] < all[i - 1][1] - 1e-6) { err.push('Фонари перекрываются на разрезе — проверьте координаты осей'); break; }
       } else T.types.forEach((t, i) => {
         if (!t.lanterns.length) err.push(`Тип фонаря ${i + 1}: добавьте хотя бы один фонарь`);
+        t.lanterns.forEach((l, j) => ['x', 'y'].forEach(axis => { if (readNum(l[axis]).st !== 'num') err.push(`Тип ${i + 1}, фонарь ${j + 1}: укажите числовую координату ${axis}`); }));
         pos(t.hsf, `Тип ${i + 1}: высота шахты hс.ф`);
         if (t.shape === 'round') { pos(t.dv, `Тип ${i + 1}: диаметр верхнего отверстия`); pos(t.dn, `Тип ${i + 1}: диаметр нижнего отверстия`); }
         else { ['av', 'bv', 'an', 'bn'].forEach(k => pos(t[k], `Тип ${i + 1}: размеры отверстий`)); }
       });
-      if (+T.L > 4 && T.nPts && +T.nPts < 5) warn.push('При размере помещения по характерному разрезу более 4 м число расчётных точек должно быть не менее пяти (п. 8.5.2 СП 367).');
+      if (T.sys !== 'b2') err.push(...lanternOverlaps(T.types));
     }
     return { err: [...new Set(err)], warn };
   }
@@ -1400,7 +1462,7 @@ const KEO = (function () {
       ['Система освещения', '', st.lightSys === 'ЕО' ? 'естественное' : 'совмещённое', modeName],
       ['Нормируемое значение КЕО', 'e_{н}', n.v === null ? 'не нормир.' : f(n.v) + ' %', n.manual ? 'задано вручную' : `${n.src}; графа «${n.colName}»`],
       ['Высота расчётной поверхности', 'hр', f(hpOf(st)) + ' м', st.hpManual !== null && st.hpManual !== '' ? 'задано вручную' : 'плоскость нормирования по табл. А.1'],
-      ...(st.mode === 'side' ? [['Положение расчётной точки', '', '', `${RT_TEXT[rt]} (${RT_REF[rt]})`]] : [['Расчётные точки', 'N', String(r.e ? r.e.length : ''), 'на пересечении характерного разреза и УРП, первая и последняя — в 1 м от стен (п. 5.5 СП 52.13330.2016, п. 8.5.2 СП 367)']]),
+      ...(st.mode === 'side' ? [['Положение расчётной точки', '', '', `${RT_TEXT[rt]} (${RT_REF[rt]})`]] : [['Расчётные точки', 'N', String(r.e ? r.e.length : ''), 'на пересечении характерного разреза и УРП, первая и последняя — в 1 м от стен (п. 5.5 СП 52.13330.2016). ' + topPointPolicy(st).note]]),
       ['Средневзвешенный коэффициент отражения', 'ρ_{ср}', f(rh.v), rh.label + (st.mode === 'comb' ? '. В комбинированном режиме одно ρср применено и к r0 (табл. Б.6/Б.7: пол, стены, потолок, окна), и к r2 (табл. Б.21: пол, стены, потолок)' : '')]
     ] });
     if (rh.mode === 'surf') rhoTable(M, st, rh);
@@ -1547,6 +1609,10 @@ const KEO = (function () {
         ['Коэффициент эксплуатации', 'MF', f(T.MF), `СП 367, табл. 5.1: ${st.env === 'normal' ? 'нормальные условия' : 'пыльные, жаркие, сырые'}, наклон остекления ${DATA.MF.angles[+st.top.types[ti].tilt || 0]}`]
       ] });
       const rows = [];
+      M.push({ type: 'table', title: `Координаты центров фонарей${nm} — ${st.top.coordOrigin === 'center' ? 'от центра помещения' : 'от угла помещения'}`, size: 8,
+        cols: [{ h: '№ фонаря', w: 1 }, { h: 'x, м', w: 1 }, { h: 'y, м', w: 1 }],
+        rows: t.lanterns.map((l, i) => [i + 1, f(lanternCoord(st, l.x, 'x'), 3), f(lanternCoord(st, l.y, 'y'), 3)]),
+        note: `Прямоугольное помещение: x вправо вдоль L, y вверх вдоль B на плане. ${st.top.coordOrigin === 'center' ? 'Начало — центр; x от угла = x от центра + L/2, y от угла = y от центра + B/2.' : 'Начало — нижний левый угол на плане.'} Линия характерного разреза y0 = ${f(topPoints(st)[0].y, 3)} м от стены y = 0.` });
       T.pts.forEach((p, j) => p.rows.forEach((x, k) => rows.push({ cells: [k === 0 ? `РТ${j + 1}` : '', x.li + 1, f(x.lf), f(x.lfh), f(x.a), f(x.q, 3), f(x.cm, 4), f(x.qc, 4), k === 0 ? f(p.S, 4) : '', k === 0 ? f(p.eps) : '', k === 0 ? f(p.sPr) : '', k === 0 ? f(p.e) : ''], fill: j % 2 ? '#f7f8f9' : null })));
       M.push({ type: 'table', title: `Параметры и КЕО в расчётных точках${nm}`, size: 6.8, cols: [{ h: 'РТ', w: 9, a: 'center' }, { h: '№ ф.', w: 7, a: 'center' }, { h: 'lф, м', w: 10, a: 'center' }, { h: 'lф/hр', w: 10, a: 'center' }, { h: 'α, °', w: 10, a: 'center' }, { h: 'q(α)', w: 10, a: 'center' }, { h: 'cos^m α', w: 11, a: 'center' }, { h: 'q·cos^m α', w: 12, a: 'center' }, { h: 'Σ', w: 11, a: 'center' }, { h: 'ε, %', w: 10, a: 'center' }, { h: 'σпр, %', w: 11, a: 'center' }, { h: 'eв, %', w: 11, a: 'center' }], rows,
         note: `α = arctg(lф / hр); q(α) = q(γ = 90° − α) по (3.2); εj = 100·Aф.в·Σ q(α)·cos^m α / (π·hр²) (8.4) = ${f(T.coef, 3)}·Σ; εср = ${f(T.epsAvg, 3)} (8.5); σпр = εj·τо·MF·CN (8.6); σотр = εср·(r2 − 1)·τо·MF·CN = ${f(T.epsAvg, 3)}·(${f(r.r2, 3)} − 1)·${f(T.tau0, 4)}·${f(T.MF)}·${f(r.CN)} = ${f(T.sOtr, 3)} % (8.7); eв = σпр + σотр (8.8).` });
@@ -1692,9 +1758,8 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { lanternCoord, topPointPolicy, danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
-
 /* КЕО по модели — расчётные пространства (чистые функции, без Viewer; проверяются bim/test-bim.js).
    R  — растр с линиями разделения помещений (для опознания помещений Revit);
    Rp — растр только физических преград: стены, витражи, двери, окна, колонны (для света и состава пространства). */
@@ -1916,7 +1981,6 @@ const BimSpaces = (function () {
 
   return { conv, unitOf, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
 })();
-
 /* КЕО по модели Autodesk Viewer — геометрия: срезы, растр помещений, проёмы, карта высот.
    Работает внутри страницы с уже загруженной моделью (NOP_VIEWER). Единицы — метры, координаты — мировые координаты Viewer × масштаб единиц. */
 const BimGeom = (function () {
@@ -2551,7 +2615,6 @@ const BimCalc = (function () {
 
   return { mapNorm, guessGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();
-
 /* КЕО по модели — запуск в окне Autodesk Viewer: анализ, подсветка помещений на плане, метки, таблица и разбор. */
 const KeoBim = (function () {
   const G = BimGeom, Cc = BimCalc, SP = BimSpaces, LIB = { DATA, Engine, Report, Schemes, KEO };
@@ -3180,5 +3243,4 @@ const KeoBim = (function () {
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
 window.KeoBimLib = { BimGeom, BimCalc, BimSpaces };
-
 })();

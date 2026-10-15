@@ -75,6 +75,8 @@ const Schemes = (function () {
   function topPlan(inp, pts) {
     const it = []; const L = inp.L, B = inp.B;
     it.push({ t: 'rect', x: 0, y: 0, w: L, h: B, c: 'roomf' });
+    const ox = inp.coordOrigin === 'center' ? L / 2 : 0, oy = inp.coordOrigin === 'center' ? B / 2 : 0;
+    const a = Math.min(L, B) * 0.18;
     it.push({ t: 'line', x1: -0.3, y1: inp.y0, x2: L + 0.3, y2: inp.y0, c: 'axis' });
     inp.types.forEach((T, ti) => T.lanterns.forEach((l, li) => {
       if (T.shape === 'round') it.push({ t: 'circle', x: l.x, y: l.y, r: T.dv / 2, c: 'lan' });
@@ -89,6 +91,13 @@ const Schemes = (function () {
       const x = inp.sideWall === 'xL' ? L : 0;
       it.push({ t: 'rect', x: x === 0 ? -0.25 : L, y: 0, w: 0.25, h: B, c: 'wallw' });
     }
+    // Оси поверх заливки фонарей: начало может находиться внутри проёма.
+    it.push({ t: 'circle', x: ox, y: oy, r: 0.06, c: 'pt' });
+    it.push({ t: 'text', x: ox - 0.12, y: oy + 0.2, s: 'O', c: 'txtb', a: 'end' });
+    it.push({ t: 'line', x1: ox, y1: oy, x2: ox + a, y2: oy, c: 'axis' });
+    it.push({ t: 'line', x1: ox, y1: oy, x2: ox, y2: oy + a, c: 'axis' });
+    it.push({ t: 'text', x: ox + a, y: oy + 0.2, s: '+x', c: 'txtb' });
+    it.push({ t: 'text', x: ox + 0.12, y: oy + a, s: '+y', c: 'txtb' });
     it.push({ t: 'dim', x1: 0, y1: -0.45, x2: L, y2: -0.45, s: 'L = ' + r2(L) });
     it.push({ t: 'dimv', x1: L + 0.4, y1: 0, x2: L + 0.4, y2: B, s: 'B = ' + r2(B) });
     it.push({ t: 'text', x: 0, y: B + 0.35, s: 'План', c: 'cap' });
@@ -117,7 +126,7 @@ const Schemes = (function () {
     const mid = pts[Math.floor(pts.length / 2)];
     if (mid) holes.forEach(([a, b]) => it.push({ t: 'line', x1: mid.x, y1: inp.hurp, x2: (a + b) / 2, y2: H, c: 'ray' }));
     it.push({ t: 'dimv', x1: L + 0.4, y1: inp.hurp, x2: L + 0.4, y2: H, s: 'hр = ' + r2(H - inp.hurp) });
-    it.push({ t: 'text', x: 0, y: H + hs + 0.45, s: 'Разрез по линии расчётных точек (фонари спроецированы)', c: 'cap' });
+    it.push({ t: 'text', x: 0, y: H + hs + 0.45, s: 'Разрез (проекция фонарей)', c: 'cap' });
     return { box: [-0.5, -0.8, L + 1.1, H + hs + 0.75], it };
   }
 
