@@ -312,7 +312,7 @@
   function renderResult() {
     const box = $('#result');
     if (!C.ok) {
-      box.innerHTML = `<div class="stamp bad-in"><div class="st-h">Не хватает данных</div><ul class="errs">${C.err.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
+      box.innerHTML = `<div class="stamp bad-in"><div class="st-h">Проверьте исходные данные</div><ul class="errs">${C.err.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
       $('#schemes').innerHTML = ''; return;
     }
     const r = C.res, n = C.norm, isSide = S.mode === 'side';
@@ -470,7 +470,7 @@
   }
   const safeName = s => String(s || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim();
   async function downloadPDF() {
-    if (!C || !C.ok) { toast('Сначала заполните исходные данные'); return; }
+    if (!C || !C.ok) { toast('Сначала исправьте ошибки в исходных данных'); return; }
     const btns = document.querySelectorAll('[data-pdf]'); btns.forEach(b => { b.disabled = true; b.dataset.l = b.textContent; b.textContent = 'Формирую PDF…'; });
     try {
       const n = C.norm; const roomName = n.room ? n.room.name : '';

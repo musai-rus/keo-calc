@@ -84,4 +84,56 @@ test('Линия разреза вне помещения или нечисло�
   const s = sample(); s.top.y0 = '1,5'; assert(KEO.compute(s).ok);
   assert(KEO.topPoints(s).every(p => p.y === 1.5)); assert.equal(KEO.b2Input(s).y0, 1.5);
 });
+function withLanterns(types) {
+  const s = KEO.defaultState(); s.mode = 'top'; s.top.types = types; return s;
+}
+const round = (x, y, d = 1.5) => ({ ...KEO.defaultType(), dv: d, dn: d, lanterns: [{ x, y }] });
+const rect = (x, y, a = 2, b = 2) => ({ ...KEO.defaultType(), shape: 'rect', av: a, an: a, bv: b, bn: b, lanterns: [{ x, y }] });
+const overlapErrors = s => KEO.compute(s).err?.filter(e => e.includes('перекрываются') && e.includes('отверстия')) || [];
+test('Ошибочный PDF: круги Ø1,5 с шагом 1 м блокируют верхний/комбинированный расчёт', () => {
+  for (const mode of ['top', 'comb']) for (const coordOrigin of ['corner', 'center']) {
+    const s = withLanterns([{ ...round(1.5, 3), lanterns: [{ x: 1.5, y: 3 }, { x: 2.5, y: 3 }] }]);
+    s.mode = mode; s.top.coordOrigin = coordOrigin;
+    const c = KEO.compute(s); assert.equal(c.ok, false); assert.equal(c.res, undefined);
+    assert(overlapErrors(s)[0].includes('1.1 и 1.2')); assert(overlapErrors(s)[0].includes('верхние и нижние'));
+  }
+});
+test('Круги: диагональный зазор и касание разрешены, малое пересечение и вложение блокируются', () => {
+  assert(KEO.compute(withLanterns([round(2, 2, 2), round(3.5, 3.5, 2)])).ok); // Габаритные прямоугольники пересекаются.
+  assert(KEO.compute(withLanterns([round(2, 2, 2), round(4, 2, 2)])).ok);
+  assert.equal(overlapErrors(withLanterns([round(2, 2, 2), round(3.99999, 2, 2)])).length, 1);
+  assert.equal(overlapErrors(withLanterns([round(3, 3, 3), round(3, 3, 1)])).length, 1);
+});
+test('Прямоугольники: нужны пересечения по обеим осям; ребро/угол и зазор разрешены', () => {
+  for (const xy of [[5, 3], [5, 5], [3.5, 5.1]]) assert(KEO.compute(withLanterns([rect(3, 3), rect(...xy)])).ok);
+  assert.equal(overlapErrors(withLanterns([rect(3, 3), rect(4.9, 4.9)])).length, 1);
+  assert.equal(overlapErrors(withLanterns([rect(3, 3, 4, 4), rect(3, 3, 1, 1)])).length, 1);
+});
+test('Круг/прямоугольник: точный контур у угла, касание, пересечение и вложение; любой порядок типов', () => {
+  for (const reverse of [false, true]) for (const [x, y, overlaps] of [[4.9, 4.9, false], [4.6, 4.8, false], [4.59, 4.79, true], [3, 3, true]]) {
+    const types = [rect(3, 3), round(x, y, 2)]; if (reverse) types.reverse();
+    const s = withLanterns(types); assert.equal(overlapErrors(s).length, overlaps ? 1 : 0);
+    assert.equal(KEO.compute(s).ok, !overlaps);
+  }
+});
+test('Проверяются отдельно верхние и нижние отверстия шахт', () => {
+  for (const level of ['upper', 'lower']) {
+    const types = [round(2, 3, 1), round(4, 3, 1)];
+    types.forEach(t => { t[level === 'upper' ? 'dv' : 'dn'] = 3; });
+    const message = overlapErrors(withLanterns(types))[0];
+    assert(message.includes(level === 'upper' ? 'верхние отверстия' : 'нижние отверстия'));
+  }
+  const types = [rect(2, 3, 1, 1), rect(4, 3, 1, 1)];
+  types.forEach(t => { t.an = 3; }); assert(overlapErrors(withLanterns(types))[0].includes('нижние отверстия'));
+});
+test('Старый JSON с дублирующим фонарём другого типа не выдаёт результат', () => {
+  const s = withLanterns([round(3, 3), rect(3, 3)]); delete s.top.coordOrigin;
+  const loaded = KEO.migrate(copy(s)).st;
+  assert(overlapErrors(loaded)[0].includes('1.1 и 2.1')); assert.equal(KEO.compute(loaded).ok, false);
+});
+test('Исправленный короткий пример: два Ø1,5 с шагом 2 м, отчёт формируется', () => {
+  const s = withLanterns([round(1, 3), round(3, 3)]);
+  Object.assign(s.top, { L: 4, nPts: 3, nPtsBasis: 'Тестовый пример: принято проектировщиком', coordOrigin: 'center' });
+  const c = KEO.compute(s); assert(c.ok); assert(KEO.buildModel(s, c).length > 0);
+});
 console.log(`${count}/${count} групп проверок пройдено`);

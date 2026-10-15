@@ -1774,6 +1774,35 @@ const KEO = (function () {
   const isB2 = st => st.mode !== 'side' && st.top.sys === 'b2';
 
   /* ---------- проверки ---------- */
+  function lanternOverlaps(types) {
+    // Проверяем реальные контуры отверстий на плане, а не их габаритные прямоугольники.
+    // Касание допустимо для этой проверки; конструктивные зазоры она не назначает.
+    const eps = 1e-9, all = [], errors = [];
+    const opening = (t, upper) => {
+      const round = t.shape === 'round';
+      const hx = +(round ? (upper ? t.dv : t.dn) : (upper ? t.av : t.an)) / 2;
+      const hy = round ? hx : +(upper ? t.bv : t.bn) / 2;
+      return Number.isFinite(hx) && Number.isFinite(hy) && hx > 0 && hy > 0 ? { round, hx, hy } : null;
+    };
+    types.forEach((t, ti) => t.lanterns.forEach((l, li) => {
+      const x = readNum(l.x), y = readNum(l.y);
+      if (x.st === 'num' && y.st === 'num') all.push({ x: x.v, y: y.v, id: `${ti + 1}.${li + 1}`, upper: opening(t, true), lower: opening(t, false) });
+    }));
+    const intersects = (a, b, dx, dy) => {
+      if (!a || !b) return false; // Ошибки размеров сообщаются отдельно.
+      if (a.round && b.round) return Math.hypot(dx, dy) < a.hx + b.hx - eps;
+      if (!a.round && !b.round) return dx < a.hx + b.hx - eps && dy < a.hy + b.hy - eps;
+      const circle = a.round ? a : b, rect = a.round ? b : a;
+      return Math.hypot(Math.max(0, dx - rect.hx), Math.max(0, dy - rect.hy)) < circle.hx - eps;
+    };
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+      const a = all[i], b = all[j], dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y), levels = [];
+      if (intersects(a.upper, b.upper, dx, dy)) levels.push('верхние');
+      if (intersects(a.lower, b.lower, dx, dy)) levels.push('нижние');
+      if (levels.length) errors.push(`Фонари ${a.id} и ${b.id} (тип.номер): перекрываются ${levels.join(' и ')} отверстия на плане — проверьте координаты и размеры; расчёт отдельных фонарей для такой схемы недопустим.`);
+    }
+    return errors;
+  }
   function validate(st) {
     const err = [], warn = [];
     const pos = (v, n) => { if (!(+v > 0)) err.push(`${n}: нужно положительное число`); };
@@ -1827,6 +1856,7 @@ const KEO = (function () {
         if (t.shape === 'round') { pos(t.dv, `Тип ${i + 1}: диаметр верхнего отверстия`); pos(t.dn, `Тип ${i + 1}: диаметр нижнего отверстия`); }
         else { ['av', 'bv', 'an', 'bn'].forEach(k => pos(t[k], `Тип ${i + 1}: размеры отверстий`)); }
       });
+      if (T.sys !== 'b2') err.push(...lanternOverlaps(T.types));
     }
     return { err: [...new Set(err)], warn };
   }
@@ -2509,7 +2539,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
   function renderResult() {
     const box = $('#result');
     if (!C.ok) {
-      box.innerHTML = `<div class="stamp bad-in"><div class="st-h">Не хватает данных</div><ul class="errs">${C.err.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
+      box.innerHTML = `<div class="stamp bad-in"><div class="st-h">Проверьте исходные данные</div><ul class="errs">${C.err.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
       $('#schemes').innerHTML = ''; return;
     }
     const r = C.res, n = C.norm, isSide = S.mode === 'side';
@@ -2667,7 +2697,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
   }
   const safeName = s => String(s || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim();
   async function downloadPDF() {
-    if (!C || !C.ok) { toast('Сначала заполните исходные данные'); return; }
+    if (!C || !C.ok) { toast('Сначала исправьте ошибки в исходных данных'); return; }
     const btns = document.querySelectorAll('[data-pdf]'); btns.forEach(b => { b.disabled = true; b.dataset.l = b.textContent; b.textContent = 'Формирую PDF…'; });
     try {
       const n = C.norm; const roomName = n.room ? n.room.name : '';
