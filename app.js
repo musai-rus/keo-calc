@@ -38,6 +38,7 @@
   function setP(o, p, v) { const ks = p.split('.'); const last = ks.pop(); const t = ks.reduce((a, k) => a[k], o); t[last] = v; }
   const num = v => { if (v === '' || v === null || v === undefined) return ''; const x = parseFloat(String(v).replace(',', '.').replace(/\s/g, '')); return isNaN(x) ? '' : x; };
   const fv = v => (v === '' || v === null || v === undefined) ? '' : String(v).replace('.', ',');
+  const fc = v => fv(Number.isFinite(v) ? +v.toFixed(12) : v); // Только отображение; сохранённые координаты не округляем.
 
   /* ---------- элементы формы ---------- */
   function inp(path, label, sym, unit, o = {}) {
@@ -114,8 +115,9 @@
     const T = S.top, b2 = T.sys === 'b2';
     return `<section class="card" id="c-room"><header class="card-h"><span class="step">2</span><div><h2>Помещение и расчётные точки</h2><p>${b2 ? 'Характерный разрез — поперёк фонарей (поперёк пролётов). Точки ставятся вдоль L: первая и последняя — в 1 м от стен.' : 'Точки ставятся по характерному разрезу вдоль длины L: первая и последняя — в 1 м от стен.'}</p></div></header>
       <div class="row three">${b2 ? inp('top.L', 'Длина по разрезу (поперёк фонарей)', 'L', 'м') + inp('top.B', 'Длина вдоль фонарей', 'B', 'м') + inp('top.H', 'Высота до низа проёмов в покрытии', 'H', 'м', { hint: 'от пола до плоскости проёма' }) : inp('top.L', 'Длина по разрезу', 'L', 'м') + inp('top.B', 'Ширина', 'B', 'м') + inp('top.H', 'Высота в свету', 'H', 'м', { hint: 'до низа шахт (потолка)' })}</div>
-      <div class="row three">${inp('top.y0', 'Линия разреза от стены y = 0', 'y_{0}', 'м', { ph: 'B/2' })}${sel('top.nPts', 'Число расчётных точек', [[0, 'Авто (5 при L > 4 м, иначе 3)'], [3, '3'], [5, '5'], [7, '7'], [9, '9'], [11, '11']], { t: 'num', rebuild: true })}
+      <div class="row three">${inp('top.y0', 'Линия разреза от стены y = 0', 'y_{0}', 'м', { ph: 'B/2' })}${sel('top.nPts', 'Число расчётных точек', [[0, 'Авто: 5 при L > 4 м'], [3, '3 — только при L ≤ 4 м с обоснованием'], [5, '5'], [7, '7'], [9, '9'], [11, '11'], ...(![0, 3, 5, 7, 9, 11].includes(+T.nPts) ? [[T.nPts, String(T.nPts)]] : [])], { t: 'num', rebuild: true, hint: 'При L ≤ 4 м выберите число вручную и укажите обоснование ниже. При L ≤ 2 м нужна отдельная схема.' })}
       <div class="fld"><span class="lbl">Высота УРП <i class="sym">h<sub>урп</sub></i></span><div class="calc">${out('hp')} м</div><span class="hint">${out('hpNote')}</span></div></div>
+      <div ${+T.L <= 4 ? '' : 'hidden'} data-short-points>${tinp('top.nPtsBasis', 'Обоснование числа точек для L ≤ 4 м', { ph: 'Источник или принятое проектное решение' })}<p class="small">Пункт 8.5.2 не устанавливает для этих помещений правило «3 точки». Обоснование сохраняется в отчёте.</p></div>
       <div class="row three">${inp('top.spans', 'Число пролётов', '', '', { hint: '1, 2, 3 и более' })}${b2 ? inp('top.l1', 'Ширина пролёта', 'l_{1}', 'м', { ph: '= L / пролёты', hint: 'для табл. Б.21' }) : inp('top.l1', 'Ширина пролёта', 'l_{1}', 'м', { ph: '= B', hint: 'для однопролётного = ширине' })}
       ${b2 ? `<div class="fld"><span class="lbl">Высота низа остекления над УРП <i class="sym">h<sub>ф</sub></i></span><div class="calc">${out('hf')} м</div><span class="hint">hф = H + hст − hурп (для r2)</span></div>` : `<div class="fld"><span class="lbl">Расчётная высота <i class="sym">h<sub>р</sub></i></span><div class="calc">${out('hr')} м</div><span class="hint">hр = H − hурп</span></div>`}</div>
       ${rhoField()}
@@ -214,8 +216,9 @@
   function cardLanterns() {
     const T = S.top;
     if (T.sys === 'b2') return cardB2();
-    return `<section class="card" id="c-open"><header class="card-h"><span class="step">3</span><div><h2>Зенитные и шахтные фонари</h2><p>Координаты центров фонарей — на плане от угла помещения: x вдоль разреза, y поперёк. Углы α программа находит сама.</p></div></header>
+    return `<section class="card" id="c-open"><header class="card-h"><span class="step">3</span><div><h2>Зенитные и шахтные фонари</h2><p>Координаты центров фонарей на плане: x вдоль разреза, y поперёк. Углы α программа находит сама.</p></div></header>
       ${sysSwitch()}
+      <div class="fld"><span class="lbl">Начало координат фонарей</span>${seg('top.coordOrigin', [['corner', 'От угла'], ['center', 'От центра']], { aria: 'Начало координат фонарей' })}<span class="hint">${T.coordOrigin === 'center' ? 'Ноль — центр прямоугольного помещения. Отрицательные x — левее центра, y — ниже центра на плане.' : 'Ноль — нижний левый угол помещения на плане.'} Ось x направлена вправо, y — вверх. Переключение сохраняет положение фонарей. Линия разреза y0 задаётся от стены.</span></div>
       ${T.types.map((t, ti) => { const pre = `top.types.${ti}`; return `<div class="wallblock">
         <div class="row two">${tinp(pre + '.name', 'Название типа')}<div class="fld"><span class="lbl">Форма в плане</span>${seg(pre + '.shape', [['round', 'Круглый'], ['rect', 'Прямоугольный']])}</div></div>
         <div class="row four">${t.shape === 'round' ? inp(pre + '.dv', 'Ø верхнего отверстия', 'd_{ф.в}', 'м') + inp(pre + '.dn', 'Ø нижнего отверстия', 'd_{ф.н}', 'м') : inp(pre + '.av', 'Верх: длина', 'a_{ф.в}', 'м') + inp(pre + '.bv', 'Верх: ширина', 'b_{ф.в}', 'м') + inp(pre + '.an', 'Низ: длина', 'a_{ф.н}', 'м') + inp(pre + '.bn', 'Низ: ширина', 'b_{ф.н}', 'м')}
@@ -226,10 +229,10 @@
         ${sel(pre + '.t3', 'Несущие конструкции', DATA.tau3.map(x => [x.v, `${x.t} — ${f(x.v)}`]), { t: 'num', sym: 'τ_{3}' })}${sel(pre + '.tilt', 'Наклон остекления', DATA.MF.angles.map((a, i) => [i, a]), { t: 'num', hint: 'для MF' })}</div>
         <label class="chk"><input type="checkbox" data-k="${pre}.net" data-t="bool" ${t.net ? 'checked' : ''}> защитная сетка под фонарём (τ5 = 0,9)</label>
         <div class="tblw"><table class="grid-t"><thead><tr><th>№</th><th>x, м</th><th>y, м</th><th></th></tr></thead><tbody>
-        ${t.lanterns.map((l, li) => `<tr><td class="n">${li + 1}</td><td><input aria-label="Фонарь ${li + 1}: x" data-k="${pre}.lanterns.${li}.x" data-t="num" inputmode="decimal" value="${fv(l.x)}"></td><td><input aria-label="Фонарь ${li + 1}: y" data-k="${pre}.lanterns.${li}.y" data-t="num" inputmode="decimal" value="${fv(l.y)}"></td><td><button type="button" class="icon" data-act="delLan" data-t="${ti}" data-i="${li}" aria-label="Удалить фонарь ${li + 1}" ${t.lanterns.length < 2 ? 'disabled' : ''}>×</button></td></tr>`).join('')}
+        ${t.lanterns.map((l, li) => `<tr><td class="n">${li + 1}</td>${['x', 'y'].map(axis => `<td><input aria-label="Фонарь ${li + 1}: ${axis}" data-k="${pre}.lanterns.${li}.${axis}" data-coord="${axis}" data-t="coef" inputmode="decimal" value="${esc(fc(KEO.lanternCoord(S, l[axis], axis)))}"></td>`).join('')}<td><button type="button" class="icon" data-act="delLan" data-t="${ti}" data-i="${li}" aria-label="Удалить фонарь ${li + 1}" ${t.lanterns.length < 2 ? 'disabled' : ''}>×</button></td></tr>`).join('')}
         </tbody></table></div>
         <div class="btns"><button type="button" class="btn ghost" data-act="addLan" data-t="${ti}">+ Фонарь</button>${T.types.length > 1 ? `<button type="button" class="btn ghost" data-act="delType" data-t="${ti}">Удалить тип</button>` : ''}</div>
-        ${more('Расставить сеткой', `<div class="row four"><label class="fld"><span class="lbl">Рядов × в ряду</span><span class="inpw"><input id="g-r-${ti}" value="1" inputmode="numeric"><span class="unit">×</span><input id="g-c-${ti}" value="2" inputmode="numeric"></span></label><label class="fld"><span class="lbl">Первый: x; y, м</span><span class="inpw"><input id="g-x-${ti}" value="2" inputmode="decimal"><span class="unit">;</span><input id="g-y-${ti}" value="${fv(+(S.top.B / 2).toFixed(2))}" inputmode="decimal"></span></label><label class="fld"><span class="lbl">Шаг по x; y, м</span><span class="inpw"><input id="g-dx-${ti}" value="4" inputmode="decimal"><span class="unit">;</span><input id="g-dy-${ti}" value="3" inputmode="decimal"></span></label><div class="fld"><span class="lbl">&nbsp;</span><button type="button" class="btn" data-act="genLan" data-t="${ti}">Расставить</button></div></div>`)}
+        ${more('Расставить сеткой', `<div class="row four"><label class="fld"><span class="lbl">Рядов × в ряду</span><span class="inpw"><input id="g-r-${ti}" value="1" inputmode="numeric"><span class="unit">×</span><input id="g-c-${ti}" value="2" inputmode="numeric"></span></label><label class="fld"><span class="lbl">Первый: x; y, м (${T.coordOrigin === 'center' ? 'от центра' : 'от угла'})</span><span class="inpw"><input id="g-x-${ti}" value="${fc(KEO.lanternCoord(S, 2, 'x'))}" inputmode="decimal"><span class="unit">;</span><input id="g-y-${ti}" value="${fc(KEO.lanternCoord(S, +S.top.B / 2, 'y'))}" inputmode="decimal"></span></label><label class="fld"><span class="lbl">Шаг по x; y, м</span><span class="inpw"><input id="g-dx-${ti}" value="4" inputmode="decimal"><span class="unit">;</span><input id="g-dy-${ti}" value="3" inputmode="decimal"></span></label><div class="fld"><span class="lbl">&nbsp;</span><button type="button" class="btn" data-act="genLan" data-t="${ti}">Расставить</button></div></div>`)}
       </div>`; }).join('')}
       <div class="btns"><button type="button" class="btn ghost" data-act="addType">+ Другой тип фонаря</button></div>
       ${more('Как считается верхний свет', `<p>По п. 8.5.1 и формуле (Б.3) СП 367. Для каждой точки: α = arctg(lф / hр) — угол между лучом в центр нижнего отверстия и вертикалью; q(α) — по формуле (3.2) для угла возвышения 90° − α; геометрический КЕО εj = 100·Aф.в·Σ q(α)·cos^m α / (π·hр²), m = 2 + 2/Kс. Затем σпр = εj·τо·MF·CN, отражённая составляющая σотр = εср·(r2 − 1)·τо·MF·CN одинакова для всех точек, eв = σпр + σотр. Среднее — по (Б.10), равномерность — emin : eср, не хуже 1 : 3.</p><p>Индекс шахты: прямоугольной — (8.2) iф = 4(Aв + Aн) / (√π·hс.ф·(Pв + Pн)); круглой — (8.3) iф = (rв + rн) / (2hс.ф). Kс — по оцифрованным графикам рис. Б.2 / Б.3 с интерполяцией по iф и ρ стенок.</p>`)}
@@ -387,7 +390,12 @@
     // data-t="coef": явное состояние — пусто → null, число (запятая или точка) → число, иное → исходная строка (ошибка в проверке)
     let v = t.dataset.t === 'num' ? num(t.value) : t.dataset.t === 'coef' ? coefVal(t.value) : t.dataset.t === 'bool' ? t.checked : t.value;
     if (k === 'rtManual' || k === 'normManual' || k === 'hpManual' || k.endsWith('KcManual') || k === 'top.l1' || k === 'top.y0') { if (v === '') v = null; }
+    if (t.dataset.coord) v = KEO.lanternCoord(S, v, t.dataset.coord, true);
     setP(S, k, v);
+    if (k === 'top.L' || k === 'top.B') {
+      const short = $('[data-short-points]'); if (short) short.hidden = !(+S.top.L <= 4);
+      document.querySelectorAll('[data-coord]').forEach(el => { el.value = fc(KEO.lanternCoord(S, getP(S, el.dataset.k), el.dataset.coord)); });
+    }
     // простая правка ρср переключает его источник на «вручную»
     if (k === 'rho' && S.rhoMode !== 'manual') { S.rhoMode = 'manual'; S.rhoBasis = S.rhoBasis || ''; rebuildKeepFocus(); update(); return; }
     if (k === 'bType') { const r = DATA.rooms.find(x => x.g === v); if (r) S.roomId = r.id; }
@@ -407,7 +415,7 @@
     if (b.dataset.mode) { S.mode = b.dataset.mode; renderForm(); update(); return; }
     if (b.dataset.seg) { let v = b.dataset.val; if (b.dataset.t === 'num') v = +v; if (b.dataset.seg === 'rhoMode') KEO.setRhoMode(S, v); else setP(S, b.dataset.seg, v);
       if (b.dataset.seg === 'rhoGeo' && v === 'manual' && !(S.rhoRows || []).length) fillRhoRows();
-      const rebuild = /shape$|top\.sys$|\.face$|^rho(Mode|Geo)$|\.(t2m|tau0m|Km)$/.test(b.dataset.seg); if (rebuild) renderForm(); else b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x === b)); update(); return; }
+      const rebuild = /shape$|top\.(sys|coordOrigin)$|\.face$|^rho(Mode|Geo)$|\.(t2m|tau0m|Km)$/.test(b.dataset.seg); if (rebuild) renderForm(); else b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x === b)); update(); return; }
     if (b.dataset.stab !== undefined) { schemeTab = +b.dataset.stab; renderSchemes(); return; }
     const a = b.dataset.act; if (!a) return;
     const W = S.side.walls[+b.dataset.w || 0];
@@ -423,7 +431,7 @@
       delLan: () => { S.top.types[+b.dataset.t].lanterns.splice(+b.dataset.i, 1); },
       addType: () => { const t = KEO.defaultType(); t.name = 'Фонарь ' + (S.top.types.length + 1); t.lanterns = [{ x: +S.top.L / 2, y: +S.top.B / 2 }]; S.top.types.push(t); },
       delType: () => { S.top.types.splice(+b.dataset.t, 1); },
-      genLan: () => { const ti = +b.dataset.t; const g = id => num($(`#g-${id}-${ti}`).value) || 0; const rr = Math.max(1, Math.round(g('r'))), cc = Math.max(1, Math.round(g('c'))); const L = []; for (let i = 0; i < rr; i++) for (let j = 0; j < cc; j++) L.push({ x: +(g('x') + j * g('dx')).toFixed(3), y: +(g('y') + i * g('dy')).toFixed(3) }); S.top.types[ti].lanterns = L; },
+      genLan: () => { const ti = +b.dataset.t; const g = id => num($(`#g-${id}-${ti}`).value) || 0; const rr = Math.max(1, Math.round(g('r'))), cc = Math.max(1, Math.round(g('c'))); const L = []; for (let i = 0; i < rr; i++) for (let j = 0; j < cc; j++) L.push({ x: KEO.lanternCoord(S, +(g('x') + j * g('dx')).toFixed(3), 'x', true), y: KEO.lanternCoord(S, +(g('y') + i * g('dy')).toFixed(3), 'y', true) }); S.top.types[ti].lanterns = L; },
       addB2Type: () => { const t = KEO.defaultB2Type(); t.name = 'Фонарь ' + (S.top.b2.length + 1); t.xs = [+(+S.top.L / 2).toFixed(2)]; S.top.b2.push(t); },
       delB2Type: () => { S.top.b2.splice(+b.dataset.t, 1); },
       addB2x: () => { const t = S.top.b2[+b.dataset.t]; const last = +t.xs[t.xs.length - 1] || 0; t.xs.push(+Math.min(+S.top.L - t.b / 2, last + Math.max(t.b + 1, 6)).toFixed(2)); },
