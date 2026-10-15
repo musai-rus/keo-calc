@@ -22,6 +22,7 @@ const BimCalc = (function () {
     [/кабинет|методист|заведующ|канцеляр|приемн|бухгалтер|офис|переговор|тренерск/i, 'A1']
   ];
   const DOO = /Дошкольные/;
+  const knownUnnormed = (name, group) => DOO.test(group || '') && RULES[0][0].test(name || '');
   function mapNorm(name, rows, group) {
     if (DOO.test(group || '')) for (const [re, id] of RULES) if (re.test(name || '')) return id ? rows.find(r => r.id === id) || null : null;
     const ws = words(name); if (!ws.length) return null;
@@ -34,14 +35,65 @@ const BimCalc = (function () {
     });
     return best && best.sc >= 0.5 ? best.r : null;
   }
-  // тип здания — группа табл. А.1, по которой назначения совпадают чаще всего
-  function guessGroup(names, rows) {
-    const n = re => names.filter(x => re.test(x || '')).length;
-    if (n(/групп/i) >= 2 && n(/спальн|раздевал/i) >= 2) return rows.find(r => DOO.test(r.g)).g;
-    const cnt = {};
-    names.forEach(n => { const ws = words(n); rows.forEach(r => { const rw = new Set(words(r.name)); if (ws.some(w => rw.has(w))) cnt[r.g] = (cnt[r.g] || 0) + 1; }); });
-    return Object.entries(cnt).sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || null;
+  // Предварительное назначение здания по всему набору помещений, не нормативное заключение.
+  // Общие слова не голосуют за тип здания; одинаковые названия имеют ограниченный вес.
+  const COMMON_GROUP = /Прочие помещения|Вспомогательные/;
+  const GROUP_STOP = new Set(['кабин', 'рабоч', 'персо', 'дежур', 'обслу', 'хране', 'подго', 'детей', 'детск', 'отдел', 'обраб', 'готов']);
+  const SERVICE = /коридор|холл|вестибюл|санузел|туалет|уборн|душев|кладов|склад|тамбур|лестни|венткам|электрощит|технич|насосн|гардероб|кухн|цех|моечн|столов|буфет|раздевал/i;
+  // Признаки дополняют словарь таблицы (например, «переговорная» не написана в строке A1).
+  // ID указывает только группу из существующей БД; значения норм здесь не назначаются.
+  const GROUP_HINTS = [
+    ['A57', /группов/i, 6], ['A57', /игров|заняти.*дет/i, 2],
+    ['A57', /спальн|раздевал|музыкальн|физкультур/i, 1],
+    ['A29', /класс(?:ная|ные|ов|\s|$)|учебн|аудитор|лекцион|учительск|информатик/i, 6],
+    ['A1', /офис|переговор|бухгалтер|конференц|опен.?спейс|open.?space/i, 5],
+    ['A108', /палат|процедур|смотров|перевяз|операционная|стоматолог|рентген|кабинет.*(?:хирург|гинеколог|терапевт)/i, 5],
+    ['A191', /жил[а-я]* комнат|квартир|кухн[а-я]*[- ]гостин/i, 6],
+    ['A191', /спальн|гостин/i, 1],
+    ['A106', /номер(?:а|ов)?(?:\s|$)|гостинич|ресепш|reception/i, 5],
+    ['A68', /спортзал|спортивн.*зал|тренажер|бассейн|аэробик|борьб/i, 4],
+    ['A75', /горяч.*цех|холодн.*цех|заготов.*цех|кондитер.*цех/i, 2],
+    ['A19', /депозитар|кредитн|пересчет.*денег|банкомат/i, 6],
+    ['A90', /торгов.*зал|примерочн|выкладк.*товар/i, 5],
+    ['A93', /парикмахер|косметич|маникюр|педикюр|пошивоч|закройн/i, 5],
+    ['A158', /фармацевт|ассистентск|асептич/i, 5],
+    ['A175', /вивари|животн|ветеринар/i, 5],
+    ['A186', /пассажир|зал.*ожидани|билетн/i, 5]
+  ];
+  function inferGroup(names, rows) {
+    const groups = [...new Set(rows.map(r => r.g))].filter(g => !COMMON_GROUP.test(g)).sort();
+    const dict = new Map(groups.map(g => [g, new Set(rows.filter(r => r.g === g).flatMap(r => words(r.name)))]));
+    const frequency = new Map();
+    dict.forEach(ws => ws.forEach(w => frequency.set(w, (frequency.get(w) || 0) + 1)));
+    const hints = GROUP_HINTS.map(([id, re, weight]) => ({ group: (rows.find(r => r.id === id) || {}).g, re, weight }));
+    const samples = new Map();
+    names.forEach(value => {
+      const name = String(value || '').trim(), key = name.toLowerCase().replace(/ё/g, 'е').replace(/[\d\s.,_№\-]+/g, ' ').trim();
+      if (!key) return;
+      const s = samples.get(key); if (s) s.count++; else samples.set(key, { name, count: 1 });
+    });
+    const scores = new Map(groups.map(group => [group, { group, score: 0, evidence: [] }]));
+    samples.forEach(s => {
+      const ws = [...new Set(words(s.name))].filter(w => !GROUP_STOP.has(w));
+      groups.forEach(group => {
+        const matched = ws.filter(w => dict.get(group).has(w));
+        const lexical = SERVICE.test(s.name) ? 0 : matched.reduce((n, w) => n + 1 / frequency.get(w), 0);
+        const hint = Math.max(0, ...hints.filter(h => h.group === group && h.re.test(s.name)).map(h => h.weight));
+        const weight = Math.max(hint, Math.min(3, lexical));
+        if (weight < 0.5) return;
+        const c = scores.get(group), score = weight * Math.min(2, Math.sqrt(s.count));
+        c.score += score; c.evidence.push({ name: s.name, count: s.count, score, strong: weight >= 4 });
+      });
+    });
+    const candidates = [...scores.values()].filter(c => c.score > 0).sort((a, b) => b.score - a.score || a.group.localeCompare(b.group, 'ru'));
+    candidates.forEach(c => c.evidence.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru')));
+    const best = candidates[0], second = candidates[1];
+    const usable = best && (best.evidence.some(e => e.strong) || best.evidence.length >= 2 && best.score >= 3);
+    const competing = !!(usable && second && second.score >= best.score * 0.5 && second.evidence.some(e => e.strong));
+    const status = !usable ? 'unknown' : competing ? 'ambiguous' : best.evidence.length >= 2 && best.score >= 8 ? 'supported' : 'tentative';
+    return { group: usable ? best.group : null, status, total: names.length, named: [...samples.values()].reduce((n, s) => n + s.count, 0), candidates };
   }
+  const guessGroup = (names, rows) => inferGroup(names, rows).group;
 
   /* ---------- ориентация по сторонам света ---------- */
   const ORI = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
@@ -286,5 +338,5 @@ const BimCalc = (function () {
     }).filter(b => b.Hp > 0.5 && b.l > 0);
   }
 
-  return { mapNorm, guessGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
+  return { mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();

@@ -2349,6 +2349,7 @@ const BimCalc = (function () {
     [/кабинет|методист|заведующ|канцеляр|приемн|бухгалтер|офис|переговор|тренерск/i, 'A1']
   ];
   const DOO = /Дошкольные/;
+  const knownUnnormed = (name, group) => DOO.test(group || '') && RULES[0][0].test(name || '');
   function mapNorm(name, rows, group) {
     if (DOO.test(group || '')) for (const [re, id] of RULES) if (re.test(name || '')) return id ? rows.find(r => r.id === id) || null : null;
     const ws = words(name); if (!ws.length) return null;
@@ -2361,14 +2362,65 @@ const BimCalc = (function () {
     });
     return best && best.sc >= 0.5 ? best.r : null;
   }
-  // тип здания — группа табл. А.1, по которой назначения совпадают чаще всего
-  function guessGroup(names, rows) {
-    const n = re => names.filter(x => re.test(x || '')).length;
-    if (n(/групп/i) >= 2 && n(/спальн|раздевал/i) >= 2) return rows.find(r => DOO.test(r.g)).g;
-    const cnt = {};
-    names.forEach(n => { const ws = words(n); rows.forEach(r => { const rw = new Set(words(r.name)); if (ws.some(w => rw.has(w))) cnt[r.g] = (cnt[r.g] || 0) + 1; }); });
-    return Object.entries(cnt).sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || null;
+  // Предварительное назначение здания по всему набору помещений, не нормативное заключение.
+  // Общие слова не голосуют за тип здания; одинаковые названия имеют ограниченный вес.
+  const COMMON_GROUP = /Прочие помещения|Вспомогательные/;
+  const GROUP_STOP = new Set(['кабин', 'рабоч', 'персо', 'дежур', 'обслу', 'хране', 'подго', 'детей', 'детск', 'отдел', 'обраб', 'готов']);
+  const SERVICE = /коридор|холл|вестибюл|санузел|туалет|уборн|душев|кладов|склад|тамбур|лестни|венткам|электрощит|технич|насосн|гардероб|кухн|цех|моечн|столов|буфет|раздевал/i;
+  // Признаки дополняют словарь таблицы (например, «переговорная» не написана в строке A1).
+  // ID указывает только группу из существующей БД; значения норм здесь не назначаются.
+  const GROUP_HINTS = [
+    ['A57', /группов/i, 6], ['A57', /игров|заняти.*дет/i, 2],
+    ['A57', /спальн|раздевал|музыкальн|физкультур/i, 1],
+    ['A29', /класс(?:ная|ные|ов|\s|$)|учебн|аудитор|лекцион|учительск|информатик/i, 6],
+    ['A1', /офис|переговор|бухгалтер|конференц|опен.?спейс|open.?space/i, 5],
+    ['A108', /палат|процедур|смотров|перевяз|операционная|стоматолог|рентген|кабинет.*(?:хирург|гинеколог|терапевт)/i, 5],
+    ['A191', /жил[а-я]* комнат|квартир|кухн[а-я]*[- ]гостин/i, 6],
+    ['A191', /спальн|гостин/i, 1],
+    ['A106', /номер(?:а|ов)?(?:\s|$)|гостинич|ресепш|reception/i, 5],
+    ['A68', /спортзал|спортивн.*зал|тренажер|бассейн|аэробик|борьб/i, 4],
+    ['A75', /горяч.*цех|холодн.*цех|заготов.*цех|кондитер.*цех/i, 2],
+    ['A19', /депозитар|кредитн|пересчет.*денег|банкомат/i, 6],
+    ['A90', /торгов.*зал|примерочн|выкладк.*товар/i, 5],
+    ['A93', /парикмахер|косметич|маникюр|педикюр|пошивоч|закройн/i, 5],
+    ['A158', /фармацевт|ассистентск|асептич/i, 5],
+    ['A175', /вивари|животн|ветеринар/i, 5],
+    ['A186', /пассажир|зал.*ожидани|билетн/i, 5]
+  ];
+  function inferGroup(names, rows) {
+    const groups = [...new Set(rows.map(r => r.g))].filter(g => !COMMON_GROUP.test(g)).sort();
+    const dict = new Map(groups.map(g => [g, new Set(rows.filter(r => r.g === g).flatMap(r => words(r.name)))]));
+    const frequency = new Map();
+    dict.forEach(ws => ws.forEach(w => frequency.set(w, (frequency.get(w) || 0) + 1)));
+    const hints = GROUP_HINTS.map(([id, re, weight]) => ({ group: (rows.find(r => r.id === id) || {}).g, re, weight }));
+    const samples = new Map();
+    names.forEach(value => {
+      const name = String(value || '').trim(), key = name.toLowerCase().replace(/ё/g, 'е').replace(/[\d\s.,_№\-]+/g, ' ').trim();
+      if (!key) return;
+      const s = samples.get(key); if (s) s.count++; else samples.set(key, { name, count: 1 });
+    });
+    const scores = new Map(groups.map(group => [group, { group, score: 0, evidence: [] }]));
+    samples.forEach(s => {
+      const ws = [...new Set(words(s.name))].filter(w => !GROUP_STOP.has(w));
+      groups.forEach(group => {
+        const matched = ws.filter(w => dict.get(group).has(w));
+        const lexical = SERVICE.test(s.name) ? 0 : matched.reduce((n, w) => n + 1 / frequency.get(w), 0);
+        const hint = Math.max(0, ...hints.filter(h => h.group === group && h.re.test(s.name)).map(h => h.weight));
+        const weight = Math.max(hint, Math.min(3, lexical));
+        if (weight < 0.5) return;
+        const c = scores.get(group), score = weight * Math.min(2, Math.sqrt(s.count));
+        c.score += score; c.evidence.push({ name: s.name, count: s.count, score, strong: weight >= 4 });
+      });
+    });
+    const candidates = [...scores.values()].filter(c => c.score > 0).sort((a, b) => b.score - a.score || a.group.localeCompare(b.group, 'ru'));
+    candidates.forEach(c => c.evidence.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru')));
+    const best = candidates[0], second = candidates[1];
+    const usable = best && (best.evidence.some(e => e.strong) || best.evidence.length >= 2 && best.score >= 3);
+    const competing = !!(usable && second && second.score >= best.score * 0.5 && second.evidence.some(e => e.strong));
+    const status = !usable ? 'unknown' : competing ? 'ambiguous' : best.evidence.length >= 2 && best.score >= 8 ? 'supported' : 'tentative';
+    return { group: usable ? best.group : null, status, total: names.length, named: [...samples.values()].reduce((n, s) => n + s.count, 0), candidates };
   }
+  const guessGroup = (names, rows) => inferGroup(names, rows).group;
 
   /* ---------- ориентация по сторонам света ---------- */
   const ORI = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
@@ -2613,7 +2665,7 @@ const BimCalc = (function () {
     }).filter(b => b.Hp > 0.5 && b.l > 0);
   }
 
-  return { mapNorm, guessGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
+  return { mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();
 /* КЕО по модели — запуск в окне Autodesk Viewer: анализ, подсветка помещений на плане, метки, таблица и разбор. */
 const KeoBim = (function () {
@@ -2633,22 +2685,44 @@ const KeoBim = (function () {
   const isExcluded = rm => { const re = exRe(); return !!(re && re.test(rm.name || '')); };
 
   /* ---------- ручные решения по составу пространств: хранятся в браузере по URN модели ---------- */
-  function modelKey() { try { return C.m.getData().urn || C.m.getDocumentNode().getRootNode().urn(); } catch (e) { return location.pathname; } }
+  function modelKey() { try { return C.m.getData().urn || C.m.getDocumentNode().getRootNode().urn() || null; } catch (e) { return null; } }
   const decKey = () => 'keo-bim:decisions:' + modelKey();
-  function loadDec() { try { const j = JSON.parse(localStorage.getItem(decKey()) || 'null'); if (j && Array.isArray(j.merge)) return j; } catch (e) { } return null; }
-  function saveDec() { try { localStorage.setItem(decKey(), JSON.stringify({ merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv, saved: new Date().toISOString() })); } catch (e) { } }
+  const validGroup = g => typeof g === 'string' && LIB.DATA.rooms.some(r => r.g === g);
+  function loadDec() { if (!modelKey()) return null; try { const j = JSON.parse(localStorage.getItem(decKey()) || 'null'); if (j && Array.isArray(j.merge)) return j; } catch (e) { st.storageWarning = 'Не удалось прочитать сохранённые решения этой модели.'; } return null; }
+  function decisionsData() { return { model: modelKey(), bGroup: S.bGroup, merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv }; }
+  function restoreDec(d, initialGroup = '') {
+    st.dec = { merge: d && d.merge || [], split: d && d.split || [], assign: d && d.assign || [], lanterns: d && d.lanterns || {} };
+    st.normOv = d && d.normOv || {};
+    // Сохранённое «авто» тоже имеет приоритет над стартовым параметром закладки.
+    const group = d && Object.prototype.hasOwnProperty.call(d, 'bGroup') ? d.bGroup : initialGroup;
+    S.bGroup = validGroup(group) ? group : '';
+  }
+  function saveDec() {
+    st.storageWarning = '';
+    if (!modelKey()) { st.storageWarning = 'Идентификатор модели недоступен: выбор действует в текущем сеансе. Сохраните решения в JSON.'; return; }
+    try { localStorage.setItem(decKey(), JSON.stringify({ ...decisionsData(), saved: new Date().toISOString() })); }
+    catch (e) { st.storageWarning = 'Не удалось сохранить решения в браузере. Выбор действует в текущем сеансе; сохраните JSON.'; }
+  }
+  function refreshPurpose() {
+    st.purpose = Cc.inferGroup((st.rooms || []).map(r => r.name), LIB.DATA.rooms);
+    st.group = S.bGroup || st.purpose.group;
+  }
 
   /* ---------- анализ ---------- */
-  async function analyze(progress) {
+  async function analyze(progress, opts) {
     const v = window.NOP_VIEWER; if (!v || !v.model || v.model.is2d()) throw new Error('Откройте 3D-вид модели');
     C = G.ctx(v);
+    const key = modelKey();
+    if (st.model !== key || (!key && st.modelRef !== C.m)) {
+      st.storageWarning = ''; restoreDec(loadDec(), opts && opts.bGroup);
+      st.model = key; st.modelRef = C.m;
+    }
     // лучи Viewer (наружная область, затенение, фонари) не видят геометрию за секущей плоскостью: анализ — без сечения
     // (повторный запуск из «План L01» давал 43 рассчитанных пространства вместо 63)
     if ((v.getCutPlanes() || []).length) { v.setCutPlanes([]); st.plan = false; }
     progress('Каталог элементов…');
     cat = await G.catalog(C);
     const rooms = await G.rooms(C);
-    const d = loadDec(); if (d) { st.dec = { merge: d.merge || [], split: d.split || [], assign: d.assign || [], lanterns: d.lanterns || {} }; st.normOv = d.normOv || {}; }
     const aec = await Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null);
     const T = aec && aec.refPointTransformation;
     st.north = northOf(T); st.aecLoc = aec && aec.locationParameters;
@@ -2663,7 +2737,7 @@ const KeoBim = (function () {
     const bb = C.m.getBoundingBox(), box = [bb.min.x * C.S - 5, bb.min.y * C.S - 5, bb.max.x * C.S + 5, bb.max.y * C.S + 5];
     const skip = /Planting|Furniture|Mechanical Equipment|Plumbing|Specialty|Lines|Grids|Level|Room Separation|Sun Path|Area|Rooms/;
     HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip.test(c)), 0.5, box);
-    st.group = S.bGroup || Cc.guessGroup(rooms.map(r => r.name), LIB.DATA.rooms); st.T = T;
+    refreshPurpose(); st.T = T;
     // физические преграды (свет, состав пространства) и линии разделения помещений (только опознание помещений Revit)
     const bcats = ['Revit Walls', 'Revit Curtain Panels', 'Revit Curtain Wall Mullions', 'Revit Doors', 'Revit Windows', 'Revit Structural Columns', 'Revit Columns'];
     for (const L of levels) {
@@ -2770,11 +2844,11 @@ const KeoBim = (function () {
     return { rot: 0, src: 'сведения о севере в модели не переданы — принят север по оси +Y Viewer (проверьте и задайте поправку в настройках)', unknown: true };
   }
   // нормы: назначение помещения по табл. А.1 (или выбор пользователя для пространства)
-  const normRow = rm => { const ov = st.normOv[rm.key]; if (ov !== undefined) return ov === '-' ? null : LIB.DATA.rooms.find(x => x.id === ov) || null; return Cc.mapNorm(rm.name, LIB.DATA.rooms, st.group); };
+  const normRow = rm => { const ov = st.normOv[rm.key]; if (ov !== undefined) return ov === '-' ? null : LIB.DATA.rooms.find(x => x.id === ov) || null; return st.group ? Cc.mapNorm(rm.name, LIB.DATA.rooms, st.group) : null; };
   function rowsOf(sp) {
     const ov = st.normOv[sp.key];
     if (ov !== undefined) return [ov === '-' ? null : LIB.DATA.rooms.find(x => x.id === ov) || null];
-    return sp.rooms.map(rm => Cc.mapNorm(rm.name, LIB.DATA.rooms, st.group));
+    return sp.rooms.map(normRow);
   }
   function calcLevel(L) {
     const out = [], cell2 = L.R.cell * L.R.cell, regPts = roomPts(L);
@@ -2783,6 +2857,7 @@ const KeoBim = (function () {
       const areaC = L.cnt[i] * cell2, areaV = sp.regIds.reduce((s, id) => s + (L.R.regs[id].areaV || 0), 0);
       const dA = areaRevit > 0 ? Math.min(Math.abs(areaRevit - areaC), Math.abs(areaRevit - areaV)) / areaRevit : null;
       const base = { sp, key: sp.key, level: L.name, floor: L.floor, rooms: sp.rooms, title: Cc.title(sp), nums: sp.rooms.map(r => r.num).join('+'), runs: L.cells.runs[i],
+        unresolvedRooms: st.normOv[sp.key] !== undefined ? [] : sp.rooms.filter(rm => st.normOv[rm.key] !== '-' && !normRow(rm) && !Cc.knownUnnormed(rm.name, st.group)).map(rm => `${rm.num} ${rm.name}`),
         area: { revit: areaRevit, model: areaC, modelV: areaV, dA, warn: dA !== null && dA > 0.05 } };
       const o = VOPS.filter(x => x.lvl === L.name && (x.space === i || (x.reg && L.spRegs[i] && L.spRegs[i].has(x.reg)))), ls = LANS.filter(x => x.lvl === L.name && x.space === i);
       ls.forEach(l => { l.conf = lanConf(l); });
@@ -2823,12 +2898,27 @@ const KeoBim = (function () {
   }
   // пересборка уровня после ручного решения (без повторного среза)
   function rebuild(levelName) {
-    const L = st.levels.find(l => l.name === levelName); if (!L) return;
+    if (levelName && !st.levels.some(l => l.name === levelName)) return;
     const selKey = st.sel && st.sel.key;
-    compose(L);
-    st.res = st.res.filter(r => r.level !== L.name).concat(calcLevel(L));
+    // Смена назначения меняет состав пространств. Сначала собираем все уровни,
+    // затем заново связываем фонари с новыми индексами пространств и считаем.
+    st.levels.forEach(compose);
+    lanterns(st.levels);
+    st.res = st.levels.flatMap(calcLevel);
     st.sel = st.res.find(r => r.key === selKey) || null;
     draw(); renderList();
+  }
+  async function setBuildingGroup(group) {
+    if (st.busy) return;
+    if (!C || window.NOP_VIEWER?.model !== C.m) throw new Error('Модель изменилась — запустите анализ заново.');
+    if (group !== '' && !validGroup(group)) throw new Error('Выберите назначение здания из списка.');
+    st.busy = true;
+    try {
+      statusLine('Пересчёт с новым назначением здания…'); await tick();
+      S.bGroup = group; refreshPurpose(); saveDec(); rebuild();
+      statusLine('Пересчёт завершён. Назначение здания: ' + (st.group || 'не определено') + '.');
+    } catch (e) { st.res = []; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); console.error(e); }
+    finally { st.busy = false; }
   }
   // kind: 'merge' | 'split' | 'assign' (помещения в неопознанный контур at) | null — вернуть автоматический состав
   function decide(kind, keys, levelName, at) {
@@ -2845,6 +2935,7 @@ const KeoBim = (function () {
     if (r.kind === 'nogeo') return { k: 'none', t: 'контур не найден' };
     if (r.kind === 'unknown') return { k: 'err', t: 'уточните состав' };
     if (r.kind === 'err') return { k: 'err', t: r.err };
+    if (r.unresolvedRooms && r.unresolvedRooms.length) return { k: 'err', t: 'уточните назначение' };
     if (r.sp && r.sp.unknown.length) return { k: 'err', t: 'уточните состав' };
     if (r.lanPending) return { k: 'err', t: 'уточните тип фонаря' };
     if (r.mode === 'comb') { if (!r.comb) return { k: 'err', t: 'ошибка данных' }; if (r.comb.normOk === null) return { k: 'none', t: 'не нормируется' }; return r.comb.pass ? { k: 'ok', t: 'соответствует*' } : { k: 'bad', t: 'не соответствует*' }; }
@@ -2972,6 +3063,7 @@ const KeoBim = (function () {
 #keo-bim header h2{font-size:14px;margin:0;flex:1}#keo-bim button{font:inherit;cursor:pointer}
 #keo-bim .kb-x{border:0;background:none;font-size:18px;line-height:1;color:var(--muted);padding:2px 6px}
 #keo-bim .kb-body{overflow:auto;flex:1;padding:10px 12px}
+#keo-bim .kb-purpose{border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:10px}#keo-bim .kb-purpose label{display:block;margin:6px 0}#keo-bim .kb-purpose select{font:inherit;padding:5px;border:1px solid var(--line);border-radius:5px}#keo-bim .kb-purpose ul{padding-left:18px;font-size:12px}#keo-bim .kb-purpose p{overflow-wrap:anywhere}
 #keo-bim .kb-row{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
 #keo-bim .kb-btn{border:1px solid var(--line);background:var(--surface-2);border-radius:6px;padding:5px 9px}
 #keo-bim .kb-btn.on{background:var(--ink);color:#fff;border-color:var(--ink)}#keo-bim .kb-btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -3041,6 +3133,7 @@ const KeoBim = (function () {
     const badges = r => [r.mode && r.mode !== 'side' ? `<span class="bdg">${MODE[r.mode]}</span>` : '', r.sp && r.sp.merged ? `<span class="bdg${r.sp.manual ? '' : ' w'}">${r.sp.manual ? 'объединено вручную' : 'объединено авто'}</span>` : '',
       r.sp && (r.sp.balance.length || r.sp.neighbours.length || r.sp.dup || r.sp.unknown.length) ? '<span class="bdg w">уточните состав</span>' : '', r.area && r.area.warn ? '<span class="bdg w">площадь ≠ контур</span>' : ''].join('');
     main.innerHTML = `
+      ${purposeHTML()}
       <div class="kb-row">${lvBtns}<button class="kb-btn${!st.plan ? ' on' : ''}" data-a="3d">3D</button></div>
       <div class="kb-sum"><div><b>${calc.length}</b>рассчитано</div><div style="color:${COL.ok}"><b>${n('ok')}</b>норма</div><div style="color:${COL.bad}"><b>${n('bad')}</b>ниже нормы</div><div class="muted"><b>${n('none') + n('err') + other.length}</b>прочие</div></div>
       <div class="kb-row"><button class="kb-btn${st.filter === 'all' ? ' on' : ''}" data-f="all">Все рассчитанные</button><button class="kb-btn${st.filter === 'bad' ? ' on' : ''}" data-f="bad">Ниже нормы</button><button class="kb-btn${st.filter === 'check' ? ' on' : ''}" data-f="check">Проверить состав (${nChk})</button><button class="kb-btn${st.filter === 'other' ? ' on' : ''}" data-f="other">Без расчёта</button></div>
@@ -3059,13 +3152,30 @@ const KeoBim = (function () {
     main.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderList(); labels(); });
     main.querySelectorAll('tr.r').forEach(tr => tr.onclick = () => select(st.res[+tr.dataset.i]));
     main.querySelector('[data-a=csv]').onclick = exportCSV; main.querySelector('[data-a=json]').onclick = exportJSON;
-    main.querySelector('[data-a=dexp]').onclick = () => download('КЕО_решения_по_составу.json', JSON.stringify({ model: modelKey(), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv, names: Object.fromEntries((st.rooms || []).map(r => [r.key, `${r.level} · ${r.num} ${r.name}`])) }, null, 1), 'application/json');
+    main.querySelector('[data-a=dexp]').onclick = () => download('КЕО_решения_по_составу.json', JSON.stringify({ ...decisionsData(), names: Object.fromEntries((st.rooms || []).map(r => [r.key, `${r.level} · ${r.num} ${r.name}`])) }, null, 1), 'application/json');
     main.querySelector('[data-a=dimp]').onclick = importDec;
-    main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); st.levels.forEach(l => rebuild(l.name)); });
+    main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); rebuild(); });
     main.querySelectorAll('[data-lid]').forEach(b => b.onclick = () => { const id = +b.dataset.lid; C.v.clearThemingColors(C.m); C.v.setThemingColor(id, new THREE.Vector4(0.85, 0.27, 0.23, 1), C.m); C.v.fitToView([id], C.m); });
-    const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; saveDec(); st.levels.forEach(l => rebuild(l.name)); };
+    const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; saveDec(); rebuild(); };
+    main.querySelector('[data-a=purpose]').onclick = () => setBuildingGroup(main.querySelector('[data-purpose]').value).catch(e => statusLine(e.message));
     bindSettings(main);
     renderDetail();
+  }
+  function purposeHTML() {
+    const p = st.purpose, groups = [...new Set(LIB.DATA.rooms.map(r => r.g))];
+    const source = S.bGroup ? 'Задано вручную для этой модели' : 'Определено автоматически — первый прогон';
+    const notice = !p || p.status === 'unknown' ? 'Характерных названий недостаточно. Выберите назначение здания.'
+      : p.status === 'ambiguous' ? 'Есть признаки нескольких назначений. Проверьте выбранный вариант и назначения отдельных помещений.'
+      : p.status === 'tentative' ? 'Вывод по ограниченному набору признаков — проверьте назначение.' : 'Вывод по совокупности характерных помещений. Проверьте результат первого прогона.';
+    const evidence = p && p.candidates.slice(0, 3).map(c => `<li><b>${esc(c.group)}</b>: ${c.evidence.slice(0, 5).map(e => `${esc(e.name)}${e.count > 1 ? ` × ${e.count}` : ''}`).join('; ')}</li>`).join('');
+    return `<section class="kb-purpose kb-set" aria-label="Назначение здания">
+      <b>Назначение здания: ${esc(st.group || 'не определено')}</b>
+      <p class="muted" style="font-size:12px;margin:4px 0">${source}. ${S.bGroup ? 'Автоматический анализ: ' + esc(p && p.group || 'не определено') + '.' : notice}</p>
+      <label>Уточнить назначение <select data-purpose style="max-width:100%;width:100%"><option value="">Автоматически по всем помещениям</option>${groups.map(g => `<option value="${esc(g)}"${S.bGroup === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select></label>
+      <button class="kb-btn pri" data-a="purpose">Применить и пересчитать</button>
+      <details><summary>Почему выбрано это назначение</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Это предположение по названиям, а не подтверждённая классификация.</p>${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
+      ${st.storageWarning ? `<p class="kb-warn">${esc(st.storageWarning)}</p>` : ''}
+    </section>`;
   }
   // все кандидаты в фонари и элементы с именем фонаря: что найдено, к чему привязано, что учтено и почему
   function lanOverview() {
@@ -3080,14 +3190,17 @@ const KeoBim = (function () {
   }
   function importDec() {
     const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
-    inp.onchange = () => { const f = inp.files[0]; if (!f) return; f.text().then(t => { const j = JSON.parse(t); st.dec = { merge: j.merge || [], split: j.split || [], assign: j.assign || [], lanterns: j.lanterns || {} }; st.normOv = j.normOv || {}; saveDec(); st.levels.forEach(l => rebuild(l.name)); }).catch(e => statusLine('Не удалось прочитать решения: ' + e.message)); };
+    inp.onchange = () => { const f = inp.files[0]; if (!f) return; f.text().then(t => {
+      const j = JSON.parse(t);
+      if (!j || !Array.isArray(j.merge)) throw new Error('ожидается файл решений по составу');
+      if (j.model && modelKey() && j.model !== modelKey()) throw new Error('файл относится к другой модели');
+      restoreDec(j, S.bGroup); refreshPurpose(); saveDec(); rebuild();
+    }).catch(e => statusLine('Не удалось прочитать решения: ' + e.message)); };
     inp.click();
   }
   function settingsHTML() {
     const opt = (list, cur) => list.map((x, i) => `<option value="${i}"${+cur === i ? ' selected' : ''}>${esc(x.t)} — ${f2(x.v)}</option>`).join('');
-    const groups = [...new Set(LIB.DATA.rooms.map(r => r.g))];
-    return `<label>Тип здания (табл. А.1) <select data-s="bGroup"><option value="">определить по названиям</option>${groups.map(g => `<option${S.bGroup === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select></label>
-      <label>Группа района по ресурсам светового климата <input type="number" min="1" max="5" step="1" data-s="group" value="${S.group}"></label>
+    return `<label>Группа района по ресурсам светового климата <input type="number" min="1" max="5" step="1" data-s="group" value="${S.group}"></label>
       <label>ρср — средневзвешенный коэффициент отражения <input type="number" step="0.01" data-s="rho" value="${S.rho}"></label>
       <label>τ1 окон — светопропускание <select data-s="t1">${opt(LIB.DATA.tau1, S.t1)}</select></label>
       <label>τ2 окон — переплёты <select data-s="t2">${opt(LIB.DATA.tau2, S.t2)}</select></label>
@@ -3177,8 +3290,6 @@ const KeoBim = (function () {
       if (warn.length) h += `<p class="muted" style="font-size:11.5px">${[...new Set(warn)].map(esc).join('<br>')}</p>`;
       if (r.C && r.C.ok) h += `<details><summary>Полный разбор: формулы, коэффициенты, схема${r.mode === 'comb' ? ' (верхний свет, Б.3)' : ''}</summary><div class="rep">${reportHTML(LIB.KEO.buildModel(r.st, r.C))}</div></details>`;
       h += `<div class="kb-row" style="margin-top:8px"><button class="kb-btn" data-a="one">Исходные для калькулятора (.json)</button></div>`;
-      const rowsA1 = LIB.DATA.rooms.slice().sort((a, b) => (b.g === st.group) - (a.g === st.group));
-      h += `<label class="muted" style="display:block;font-size:12px">Назначение по табл. А.1: <select data-norm style="max-width:100%"><option value="">авто (по названиям помещений)</option>${['<option value="-"' + (st.normOv[r.key] === '-' ? ' selected' : '') + '>— без нормы КЕО —</option>', ...rowsA1.map(x => `<option value="${x.id}"${st.normOv[r.key] === x.id ? ' selected' : ''}>${esc(x.n + '. ' + x.name + ' (' + x.g.slice(0, 40) + ')')}</option>`)].join('')}</select></label>`;
       h += `<p class="muted" style="font-size:11px">${esc(PRELIM)}</p>`;
     } else if (r.kind === 'calc' && r.C && !r.C.ok) {
       h += `<p class="muted">${esc((r.C.err || []).join('; '))}</p>`;
@@ -3187,6 +3298,11 @@ const KeoBim = (function () {
     } else if (r.kind === 'nogeo') h += `<p class="muted">${esc(r.why || '')} — помещение есть в модели, но его контур не удалось выделить по срезу и подобрать по балансу площадей. Посчитайте его в калькуляторе вручную или объедините с соседним помещением.</p>`;
     else if (r.kind === 'dark') h += `<p class="muted">${r.lanPending ? 'Окон нет; фонари есть, но их тип не подтверждён (раздел «Фонари в модели» ниже).' : 'У пространства нет наружных окон, витражей и фонарей.'}</p>` + lansHTML(r);
     else if (r.kind === 'unknown') h += `<p class="muted">После выбора помещений контур будет рассчитан как пространство.</p>`;
+    if (r.rooms.length) {
+      if (r.unresolvedRooms && r.unresolvedRooms.length) h += `<p class="kb-warn">Назначение не распознано: ${r.unresolvedRooms.map(esc).join('; ')}. Это не означает отсутствие нормы КЕО. Выберите назначение ниже.</p>`;
+      const rowsA1 = LIB.DATA.rooms.slice().sort((a, b) => (b.g === st.group) - (a.g === st.group));
+      h += `<label class="muted" style="display:block;font-size:12px">Назначение по табл. А.1: <select data-norm style="max-width:100%"><option value="">авто (по названиям помещений)</option>${['<option value="-"' + (st.normOv[r.key] === '-' ? ' selected' : '') + '>— без нормы КЕО —</option>', ...rowsA1.map(x => `<option value="${x.id}"${st.normOv[r.key] === x.id ? ' selected' : ''}>${esc(x.n + '. ' + x.name + ' (' + x.g.slice(0, 40) + ')')}</option>`)].join('')}</select></label>`;
+    }
     box.innerHTML = h + '</div>';
     const sn = box.querySelector('[data-norm]'); if (sn) sn.onchange = () => { if (sn.value === '') delete st.normOv[r.key]; else st.normOv[r.key] = sn.value; saveDec(); rebuild(r.level); };
     const b1 = box.querySelector('[data-a=one]'); if (b1) b1.onclick = () => download(`КЕО_${r.nums}.json`, JSON.stringify(r.st, null, 2), 'application/json');
@@ -3221,24 +3337,28 @@ const KeoBim = (function () {
     download('КЕО_по_модели.csv', '﻿' + rows.map(x => x.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n'), 'text/csv');
   }
   function exportJSON() {
-    download('КЕО_по_модели.json', JSON.stringify({ settings: S, decisions: st.dec, normOv: st.normOv, spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
   async function run(opts) {
-    Object.assign(S, opts || {});
+    if (st.busy) return st;
+    st.busy = true;
+    const { bGroup, ...otherOpts } = opts || {};
+    Object.assign(S, otherOpts);
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {
-      st.sel = null; await analyze(statusLine);
+      st.sel = null; await analyze(statusLine, opts);
       const calc = st.res.filter(r => r.kind === 'calc');
       statusLine(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с: рассчитано пространств — ${calc.length}.`);
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
       draw(); renderList(); if (st.level) planView(st.level);
     } catch (e) { statusLine('Ошибка: ' + e.message); console.error(e); }
+    finally { st.busy = false; }
     return st;
   }
-  return { run, st: () => st, S, select, planView, destroy, decide };
+  return { run, st: () => st, S, select, planView, destroy, decide, setBuildingGroup };
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
