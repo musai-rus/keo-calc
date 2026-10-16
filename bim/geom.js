@@ -8,6 +8,35 @@ const BimGeom = (function () {
     return { v, m, it, fl, S: m.getUnitScale(), GZ: (m.getData().globalOffset || { z: 0 }).z };
   }
 
+  // Every ray-based stage must see the whole model. Restore display clipping even
+  // on failure; nested calls are harmless. Unknown extension cut sets fail closed.
+  function withFullModel(v, work) {
+    // Ray intersection follows Viewer visibility, including isolation. Do not
+    // mutate that state without a verified restoration contract.
+    if (!v.areAllVisible && !(v.getAggregateHiddenNodes && v.getAggregateIsolation) && !(v.getHiddenNodes && v.getIsolatedNodes)) throw new Error('Viewer не предоставляет проверку видимости всей модели. Расчёт остановлен.');
+    const hasIds = list => {
+      if (!Array.isArray(list) || list.some(x => typeof x !== 'number' && (!x || (!Array.isArray(x.ids) && !Array.isArray(x.nodeIds))))) throw new Error('Viewer вернул неизвестный формат видимости. Расчёт остановлен.');
+      return list.some(x => typeof x === 'number' || (x.ids && x.ids.length) || (x.nodeIds && x.nodeIds.length));
+    };
+    const hidden = v.getAggregateHiddenNodes ? v.getAggregateHiddenNodes() : v.getHiddenNodes ? v.getHiddenNodes() : [];
+    const isolated = v.getAggregateIsolation ? v.getAggregateIsolation() : v.getIsolatedNodes ? v.getIsolatedNodes() : [];
+    if (hasIds(hidden) || hasIds(isolated) || (v.areAllVisible && v.areAllVisible() !== true)) throw new Error('Часть модели скрыта или изолирована. Покажите всю модель и повторите расчёт.');
+    const saved = (v.getCutPlanes() || []).map(p => p.clone ? p.clone() : { ...p });
+    const samePlanes = (a,b) => Array.isArray(a) && a.length === b.length && a.every((p,i) => ['x','y','z','w'].every(k => Number.isFinite(p[k]) && Math.abs(p[k]-b[i][k]) <= 1e-9));
+    const restore = () => {
+      if (!samePlanes(v.getCutPlanes() || [], saved)) v.setCutPlanes(saved);
+      if (!samePlanes(v.getCutPlanes() || [], saved)) throw new Error('Не удалось восстановить исходное сечение Viewer. Результат отменён; восстановите вид вручную.');
+    };
+    try {
+      if (saved.length) v.setCutPlanes([]);
+      const remaining = v.impl && v.impl.getAllCutPlanes ? v.impl.getAllCutPlanes() : v.getCutPlanes();
+      if (remaining && remaining.length) throw new Error('Не удалось снять все сечения Viewer. Отключите сечение и повторите расчёт.');
+      const result = work();
+      if (result && typeof result.then === 'function') return result.finally(restore);
+      restore(); return result;
+    } catch (e) { restore(); throw e; }
+  }
+
   // элементы с категорией, уровнем, типом: листовые узлы и узлы со своей геометрией.
   // Имя — из дерева модели (getBulkProperties2 имени не возвращает: без этого имя семейства, напр. «Skywindow», не проверялось).
   // Экземпляр семейства с вложенным семейством (фонарь A_GMO_Skywindow_Angle: категория «Окна», внутри — обобщённая модель-обрамление)
@@ -45,6 +74,26 @@ const BimGeom = (function () {
         area: A.v, areaRaw: o.u['Area'] && o.u['Area'][0], areaUnit: A.unit, areaSrc: A.ok ? 'Revit, свойство Area' : null,
         per: P.v, h: H.v, warn };
     }).filter(r => r.area > 0 || r.warn.length);
+  }
+
+  // Location properties have no bearing on north or climate coefficients until
+  // confirmed by the user. Preserve labels/sources; do not geocode zero/zero.
+  async function location(C) {
+    return C.m.getPropertyDb().executeUserFunction(function (pdb) {
+      const out = [];
+      pdb.enumObjects(id => {
+        const values = []; let category = '';
+        pdb.enumObjectProperties(id, (a, v) => {
+          const d = pdb.getAttributeDef(a), n = d.name, value = pdb.getAttrValue(a, v);
+          if (n === 'Category') category = String(value);
+          if (/^(Project Address|Address|AECplaceName|Latitude|Longitude)$/i.test(n) && value !== null && value !== '')
+            values.push({ name: n, value: String(value), unit: d.dataTypeContext || '' });
+        });
+        if (/Project Information|Project Base Point|Survey Point/i.test(category))
+          values.forEach(p => out.push({ ...p, source: category, id }));
+      });
+      return out;
+    });
   }
 
   // Viewer может хранить half-float позиции внутри Float32Array: vbstride не означает xyz Float32.
@@ -176,20 +225,33 @@ const BimGeom = (function () {
       const P = [], Pa = []; let A = 0, NZ = 0, Aa = 0, NZa = 0, up = 0;
       C.it.enumNodeFragments(id, f => {
         const mt = C.fl.getMaterial(f), glass = !!(mt && (mt.transparent || mt.opacity < 0.95));
-        const g = C.fl.getGeometry(f); if (!g || !g.vb || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
+        const g = C.fl.getGeometry(f); if (!g || !g.vb || !g.vb.length || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
         const n = g.vb.length / g.vbstride, Q = [], read = positionReader(g, mat4.elements, S);
         for (let i = 0; i < n; i++) Q.push(read(i));
         const ib = g.ib || (g.index && g.index.array);
         if (ib) for (let i = 0; i + 2 < ib.length; i += 3) { const a = Q[ib[i]], b = Q[ib[i + 1]], cc = Q[ib[i + 2]]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = cc[0] - a[0], vy = cc[1] - a[1], vz = cc[2] - a[2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, ar = Math.hypot(nx, ny, nz) / 2; Aa += ar; NZa += Math.abs(nz) / 2; if (glass) { A += ar; NZ += Math.abs(nz) / 2; if (nz > 0) up += nz / 2; } }
         Q.forEach(q => Pa.push(q)); if (glass) Q.forEach(q => P.push(q));
       }, true);
+      if (!Pa.length) { if (named) diag.push({id, cat:c, label, named, reason:'геометрия элемента отсутствует — фонарь не учтён'}); return; }
       const box = pts => {
-        let mx = 0, my = 0, z0 = 1e9, z1 = -1e9; pts.forEach(p => { mx += p[0]; my += p[1]; z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]); }); mx /= pts.length; my /= pts.length;
-        let sxx = 0, syy = 0, sxy = 0; pts.forEach(p => { const dx = p[0] - mx, dy = p[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
-        const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), t = [Math.cos(ang), Math.sin(ang)], n = [-t[1], t[0]];
-        let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
-        pts.forEach(p => { const u = (p[0] - mx) * t[0] + (p[1] - my) * t[1], w = (p[0] - mx) * n[0] + (p[1] - my) * n[1]; a0 = Math.min(a0, u); a1 = Math.max(a1, u); b0 = Math.min(b0, w); b1 = Math.max(b1, w); });
-        return { t, n, w: a1 - a0, d: b1 - b0, h: z1 - z0, z0, z1, c: [mx + t[0] * (a0 + a1) / 2 + n[0] * (b0 + b1) / 2, my + t[1] * (a0 + a1) / 2 + n[1] * (b0 + b1) / 2] };
+        // Minimum-area rectangle of the XY convex hull: independent of triangle
+        // duplication, vertex order and unequal tessellation density.
+        const q = [...new Map(pts.map(p => [p[0] + ':' + p[1], p])).values()].sort((a,b) => a[0]-b[0] || a[1]-b[1]);
+        const cross = (a,b,c) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+        const half = list => { const h=[]; list.forEach(p => { while(h.length>1 && cross(h[h.length-2],h[h.length-1],p)<=0) h.pop(); h.push(p); }); return h; };
+        const lo=half(q), hi=half(q.slice().reverse()), hull=lo.slice(0,-1).concat(hi.slice(0,-1));
+        let best=null;
+        for(let i=0;i<Math.max(1,hull.length);i++) {
+          const a=hull[i]||q[0], b=hull[(i+1)%hull.length]||a;
+          let angle=Math.atan2(b[1]-a[1],b[0]-a[0]); angle=((angle % Math.PI)+Math.PI)%Math.PI;
+          const t=[Math.cos(angle),Math.sin(angle)], n=[-t[1],t[0]];
+          let a0=Infinity,a1=-Infinity,b0=Infinity,b1=-Infinity;
+          q.forEach(p=>{const u=p[0]*t[0]+p[1]*t[1],v=p[0]*n[0]+p[1]*n[1];a0=Math.min(a0,u);a1=Math.max(a1,u);b0=Math.min(b0,v);b1=Math.max(b1,v);});
+          const w=a1-a0,d=b1-b0,area=w*d;
+          if(!best || area<best.area-1e-9 || Math.abs(area-best.area)<=1e-9 && (w>best.w+1e-9 || Math.abs(w-best.w)<=1e-9 && angle<best.angle)) best={t,n,w,d,area,angle,c:[t[0]*(a0+a1)/2+n[0]*(b0+b1)/2,t[1]*(a0+a1)/2+n[1]*(b0+b1)/2]};
+        }
+        let z0=Infinity,z1=-Infinity;pts.forEach(p=>{z0=Math.min(z0,p[2]);z1=Math.max(z1,p[2]);});
+        return {...best,hull,h:z1-z0,z0,z1};
       };
       const glassOk = P.length >= 3 && A > 0.02;
       const flat = glassOk ? NZ / A : 0, flatAll = Aa > 0 ? NZa / Aa : 0;
@@ -206,7 +268,16 @@ const BimGeom = (function () {
         rec.auto = glassOk && rec.tilt <= 15 && LANTERN_ZENITH.test([inf.type, inf.fam, inf.name].join(' '));
         if (!glassOk) rec.note = 'стекло в семействе не выделено материалом — размеры по габариту элемента';
         // круглое остекление: точки стекла на одном расстоянии от центра (разброс < 5 %) — фонарь круглый, d — по стеклу
-        if (glassOk) { const rr = P.map(p => Math.hypot(p[0] - bb.c[0], p[1] - bb.c[1])), r1 = Math.max(...rr), r0 = Math.min(...rr.filter(r => r > 0.3 * r1)); if (r1 > 0.1 && (r1 - r0) / r1 < 0.05) { rec.round = true; rec.d = 2 * r1; } }
+        if (glassOk) {
+          const rim = bb.hull;
+          const rr = rim.map(p => Math.hypot(p[0] - bb.c[0], p[1] - bb.c[1])), radius = Math.max(...rr);
+          const angles = [...new Set(rim.map(p => Math.round(Math.atan2(p[1] - bb.c[1], p[0] - bb.c[0]) * 1e6) / 1e6))].sort((a, b) => a - b);
+          const gaps = angles.map((a, i) => (i + 1 < angles.length ? angles[i + 1] : angles[0] + 2 * Math.PI) - a);
+          // Equal corner radii alone also describe every rectangle. Require a
+          // distributed polygonal perimeter, not repeated triangle vertices.
+          if (radius > 0.1 && Math.min(bb.w, bb.d) / Math.max(bb.w, bb.d) > 0.9 && angles.length >= 8 && Math.max(...gaps) <= Math.PI / 2 &&
+              rim.every(p => Math.abs(Math.hypot(p[0] - bb.c[0], p[1] - bb.c[1]) - radius) / radius < 0.05)) { rec.round = true; rec.d = 2 * radius; }
+        }
         out.push(rec); diag.push(rec); return;
       }
       if (!glassOk) { if (named) diag.push({ id, cat: c, label, named, reason: 'нет прозрачных фрагментов (стекло не выделено материалом) и геометрия не обращена вверх' }); return; }
@@ -239,10 +310,19 @@ const BimGeom = (function () {
   // (линии разделения помещений светопрозрачны и не мешают); сторона — снаружи (Rp.ext) и внутри (клетка пространства)
   function assign(Rp, spaceLab, ops, floor, top) {
     const okReg = id => Rp.ext.has(id) || (Rp.regs[id] && Rp.regs[id].areaC > 1.5);
-    const side = (o, sg) => { for (let k = 0.01; k < 2.5; k += 0.02) { const x = o.c[0] + sg * o.n[0] * k, y = o.c[1] + sg * o.n[1] * k, id = labelAt(Rp, x, y); if (id > 0 && okReg(id)) { const i = Math.floor((x - Rp.minx) / Rp.cell), j = Math.floor((y - Rp.miny) / Rp.cell); return { id, k, sp: (i >= 0 && j >= 0 && i < Rp.W && j < Rp.H) ? spaceLab[j * Rp.W + i] : -1 }; } } return null; };
+    const side = (o, sg) => { for (let k = 0.01; k < 2.5; k += 0.02) {
+      const x = o.c[0] + sg * o.n[0] * k, y = o.c[1] + sg * o.n[1] * k, id = labelAt(Rp, x, y);
+      const i = Math.floor((x - Rp.minx) / Rp.cell), j = Math.floor((y - Rp.miny) / Rp.cell);
+      const sp = (i >= 0 && j >= 0 && i < Rp.W && j < Rp.H) ? spaceLab[j * Rp.W + i] : -1;
+      if (id > 0 && (okReg(id) || sp >= 0)) return { id, k, sp };
+    } return null; };
     const st = { level: 0, outer: 0, inner: 0, none: 0, noSpace: 0 };
     ops.forEach(o => {
       if (o.roof || o.z0 < floor - 0.3 || o.z0 >= top - 0.05) return;
+      // Level bands overlap at floor-0.3. Preserve the first eligible owner
+      // (app visits floors bottom-up); never mix another floor's space index
+      // with the original level name. Cross-level geometry needs review.
+      if (o.floor !== undefined && o.floor !== floor) { o.levelBoundary = true; return; }
       st.level++;
       const A = side(o, 1), B = side(o, -1); if (!A || !B) { st.none++; return; }
       const ea = Rp.ext.has(A.id), eb = Rp.ext.has(B.id);
@@ -281,13 +361,58 @@ const BimGeom = (function () {
     return h && h.distance * S <= (maxD || 1e9) ? z + h.distance * S : null;
   }
   // размеры фонаря из параметров семейства (A_GMO_Skywindow_Angle: Diameter_Inside — D1, верхнее отверстие шахты под стеклом;
-  // Diameter_Bottom — D2, нижнее отверстие в потолке; значения в мм)
+  // Diameter_Bottom — D2, нижнее отверстие в потолке; единицы из units / dataTypeContext)
   async function lanternParams(C, ids) {
     if (!ids.length) return {};
     const names = ['Diameter_Inside', 'Diameter_Bottom'];
-    const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: names }, ok, bad)).catch(() => []);
-    const out = {}, m = v => { const x = parseFloat(v); return isNaN(x) || x <= 0 ? null : x > 20 ? x / 1000 : x; };
-    props.forEach(r => { const g = n => (r.properties.find(p => p.attributeName === n || p.displayName === n) || {}).displayValue; const dIn = m(g('Diameter_Inside')), dBot = m(g('Diameter_Bottom')); if (dIn || dBot) out[r.dbId] = { dIn, dBot }; });
+    const unitLabels = new Map([['m','meters'],['mm','millimeters'],['cm','centimeters'],['dm','decimeters'],['ft','feet'],['in','inches']]);
+    const lengthUnit = u => unitLabels.has(u) ? 'autodesk.unit.unit:' + unitLabels.get(u) + '-1.0.1' : u;
+    let bulkFailed = false, rawFailed = false;
+    const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: names }, ok, bad)).catch(() => { bulkFailed = true; return []; });
+    let raw = [];
+    // Bulk display values can be rounded/localised and omit units. Prefer raw
+    // property DB values paired with each attribute's explicit dataTypeContext.
+    try { raw = await C.m.getPropertyDb().executeUserFunction(function (pdb) {
+      const out = [];
+      pdb.enumObjects(id => {
+        const values = [];
+        pdb.enumObjectProperties(id, (a, v) => {
+          const d = pdb.getAttributeDef(a);
+          if (d.name === 'Diameter_Inside' || d.name === 'Diameter_Bottom')
+            values.push({ name: d.name, value: pdb.getAttrValue(a, v), context: d.dataTypeContext || d.units || null });
+        });
+        if (values.length) out.push({ id, values });
+      });
+      return out;
+    }); } catch (e) { rawFailed = true; /* explicit bulk units may still be available */ }
+    const out = {};
+    ids.forEach(id => {
+      const db = raw.find(r => r.id === id), bulk = props.find(r => r.dbId === id), notes = [];
+      const read = name => {
+        const rp = db && db.values.find(p => p.name === name), bp = bulk && bulk.properties.find(p => p.attributeName === name || p.displayName === name);
+        if (!rp && !bp) return null;
+        // Public Viewer PropertyResult reports units; property DB attributes
+        // usually expose dataTypeContext. Never pair one API's value with the
+        // other API's units (bulk may already be converted/localised).
+        const candidates = [];
+        if (rp) candidates.push({value:rp.value, context:rp.context, source:'property DB'});
+        if (bp) candidates.push({value:bp.displayValue, context:bp.units || bp.dataTypeContext, source:'Viewer properties'});
+        const failures = [];
+        for (const p of candidates) {
+          const c = BimSpaces.conv(p.value, lengthUnit(p.context), 'len');
+          if (c.ok && c.v > 0) {
+            if (failures.length) notes.push(`${name}: исходный параметр не прочитан с известными единицами; использовано значение ${p.source} с его единицами`);
+            return c.v;
+          }
+          failures.push(c.warn || 'нужен положительный размер');
+        }
+        notes.push(`${name}: ${[...new Set(failures)].join('; ')}; параметр не используется`);
+        return null;
+      };
+      const dIn = read('Diameter_Inside'), dBot = read('Diameter_Bottom');
+      if ((!dIn || !dBot) && (bulkFailed || rawFailed)) notes.push('Не удалось полностью прочитать параметры шахты; отсутствие размеров в модели не подтверждено.');
+      if (dIn || dBot || notes.length) out[id] = { dIn, dBot, notes };
+    });
     return out;
   }
   // то же с элементом, в который упёрся луч
@@ -339,6 +464,6 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { ctx, catalog, rooms, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
+  return { withFullModel, ctx, catalog, rooms, location, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
 })();
 

@@ -2,7 +2,7 @@
 # Сборка keo-bim.js: данные + ядро калькулятора + модуль «КЕО по модели» (для запуска в окне Autodesk Viewer)
 cd "$(dirname "$0")/.."
 node -e "
-const D=require('./data.js'); D.regions=[{name:'г. Москва',g:1}];
+const D=require('./data.js');
 process.stdout.write('window.DATA='+JSON.stringify(D)+';\n');
 " > bim/_data.js
 { echo '/* КЕО по модели — сборка. Запуск: KeoBim.run() в окне Autodesk Viewer с открытой 3D-моделью. */';
