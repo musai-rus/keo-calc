@@ -40,7 +40,8 @@ context.statusElement=statusElement;
 const storage=new Map();context.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
 vm.runInContext(scripts[0],context);
 let bundle=fs.readFileSync(__dirname+'/keo-bim.js','utf8');
-bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {} }; }; draw = () => {}; renderList = () => {};\n  return { _exportJSON: exportJSON, _roomDiagnosticData: roomDiagnosticData, _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _bindSettings: bindSettings, run, st: () => st, S,');
+bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {} }; }; draw = () => {}; renderList = () => {};\n  return { _exportJSON: exportJSON, _exportCSV: exportCSV, _roomDiagnosticData: roomDiagnosticData, _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _bindSettings: bindSettings, run, st: () => st, S,');
+bundle=bundle.replace(/  function download\(name, text, type\) \{[^\n]+\}/,'  function download(name, text, type) { window.capturedDownload = { name, text, type }; }');
 vm.runInContext(bundle,context);
 vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
 (async()=>{
@@ -58,6 +59,10 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   await KeoBim.run({region:'г. Москва'});
   assert.ok(KeoBim.st().res.every(r=>r.kind==='calc'&&r.C.ok));
   const roomDiag=KeoBim._roomDiagnosticData();assert.equal(roomDiag.rooms.length,KeoBim.st().rooms.length);assert.equal(Object.values(roomDiag.counts.placement).reduce((a,b)=>a+b,0),roomDiag.rooms.length);assert.deepEqual(Object.keys(roomDiag.unplacedReasons),[]);
+  const actual=KeoBim.st().res[0];assert.equal(actual.env.containsPoint(actual.env.pts[0]),true);assert.equal(actual.env.containsPoint([1e9,1e9]),false);
+  const blocked={kind:'err',level:'L01',key:'unsupported-fixture',rooms:[{key:'synthetic-room',num:'synthetic',name:'Synthetic unsupported room'}],err:'Unsupported synthetic section',notes:['Unsupported synthetic section']};
+  KeoBim.st().res.push(blocked);KeoBim._exportJSON();const exported=JSON.parse(capturedDownload.text);assert.equal(exported.calculationErrors.length,1);assert.equal(exported.calculationErrors[0].error,blocked.err);assert.equal(exported.spaces.some(r=>r.rooms.some(rm=>rm.key==='synthetic-room')),false);assert.equal(exported.calculationErrors[0].state,undefined);assert.equal(exported.calculationErrors[0].pass,undefined);
+  KeoBim._exportCSV();const csvLine=capturedDownload.text.split('\\r\\n').find(l=>l.includes('Synthetic unsupported room'));assert.ok(csvLine.includes('"";"";"Unsupported synthetic section"'));assert.equal(csvLine.includes('соответствует'),false);KeoBim.st().res.pop();
   const result=()=>JSON.stringify(KeoBim.st().res.map(r=>({key:r.key,e:r.comb?.eAvgR??r.C?.res?.eFinal,side:r.comb?.eSide,top:r.comb?.eTop})));
   const initial=result();
   assert.equal(KeoBim.st().res[0].st.groupManual,false);

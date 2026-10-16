@@ -2755,6 +2755,14 @@ const BimCalc = (function () {
     const hasSide = ops && ops.length, hasTop = lanterns.length > 0;
     if (!hasSide && !hasTop) return { err: 'нет световых проёмов' };
     const mode = hasSide && hasTop ? 'comb' : hasTop ? 'top' : 'side';
+    // Б.3 currently uses one room height for all lanterns. A shared height
+    // cannot represent different elevations: stop before producing a result.
+    const heights = lanterns.filter(l => Number.isFinite(l.H) && l.H > 0);
+    if (heights.some((l, i) => heights.slice(i + 1).some(other => Math.abs(l.H - other.H) > 1e-6))) {
+      const detail = heights.map(l => `ID ${l.id ?? 'не указан'}: H=${l.H} м`).join('; ');
+      const err = `Фонари с разными высотами не поддерживаются расчётом Б.3 с общей высотой помещения (${detail}). Верхний или комбинированный КЕО не рассчитан.`;
+      notes.push(err); return { err, notes };
+    }
     const col = mode === 'side' ? 'eSideN' : 'eTopN';
     const row = spaceNorm(env.rows, col), rule = row ? row.rt : 'center';
     // расчётная точка бокового света — в помещении, определяющем норму пространства (например, в групповой, а не на перегородке со спальней)
@@ -2818,10 +2826,16 @@ const BimCalc = (function () {
       T.lanterns.push({ x: r2(q[0]), y: r2(q[1]) }); typeIds[types.indexOf(T)].push(l.id);
     });
     notes.push(`Фонари — допущения: ${lanterns.every(l => l.dTop && l.dBot) ? 'размеры обоих отверстий шахты — из параметров семейства' : 'неполные параметры шахты: верхнее отверстие — по заданному диаметру или стеклу; нижнее — по заданному диаметру, иначе равно верхнему'}, стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
-    const Hs = lanterns.map(l => l.H).filter(h => h > 0);
+    const Hs = heights.map(l => l.H);
     if (Hs.length < lanterns.length) notes.push(`высота помещения под фонарём не определена по модели — принята высота помещения ${fc(H)} м (допущение)`);
     const st = baseState(env, sp, row); st.mode = 'top';
-    st.top = { sys: 'shaft', L: r2(fr.L), B: r2(fr.B), H: r2(Hs.length ? Math.min(...Hs) : H), spans: 1, l1: null, y0: null, nPts: 0, types, b2: [] };
+    st.top = { sys: 'shaft', L: r2(fr.L), B: r2(fr.B), H: r2(Hs.length ? Hs[0] : H), spans: 1, l1: null, y0: null, nPts: 0, types, b2: [] };
+    const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
+    const outside = P.flatMap((p, j) => (env.containsPoint ? env.containsPoint(p) : inside(pts, p, 0.3)) ? [] : [j + 1]);
+    if (outside.length) {
+      const err = `Автоматический характерный разрез не поддерживает этот контур: РТ${outside.join(', РТ')} вне контура пространства. Верхний или комбинированный КЕО не рассчитан; требуется проверенный разрез.`;
+      notes.push(err); return { err, notes, pts: P, frame: fr };
+    }
     const Ct = env.KEO.compute(st);
     // вклад каждого фонаря в eв по точкам: прямая составляющая coef·q·cos^m·τ0·MF·CN (Б.3) + доля отражённой sотр пропорционально его εв
     const lanContrib = [];
@@ -2832,8 +2846,6 @@ const BimCalc = (function () {
         lanContrib.push({ id, e: T.pts.map(p => T.coef * p.rows[li].qc * k + T.sOtr * own / tot) });
       });
     });
-    const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
-    P.forEach((p, j) => { if (!inside(pts, p, 0.3)) notes.push(`РТ${j + 1} вне контура пространства (сложная форма в плане) — результат в ней ориентировочный`); });
     if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes, lanContrib };
 
     // комбинированное (Б.4): e = eв + eб в каждой точке; eб — боковое освещение в той же точке через видимые участки окон
@@ -3103,6 +3115,7 @@ const KeoBim = (function () {
       const lsCalc = ls.filter(l => l.conf === 'b3'), lanPending = ls.filter(l => !l.conf).length;
       if (!o.length && !lsCalc.length) { out.push({ ...base, kind: 'dark', lans: ls, lanPending }); return; }
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
+        containsPoint: p => { const R = L.R, x = Math.floor((p[0] - R.minx) / R.cell), y = Math.floor((p[1] - R.miny) / R.cell); return x >= 0 && y >= 0 && x < R.W && y < R.H && L.lab[y * R.W + x] === i; },
         rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
       if (o.some(x => x.levelBoundary)) (r.notes = r.notes || []).push('Проём попадает в диапазоны нескольких уровней: сохранена первая привязка снизу вверх. Проверьте этаж и геометрию высокого проёма.');
@@ -3656,7 +3669,7 @@ const KeoBim = (function () {
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, roomDiagnostics: roomDiagnosticData(), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, roomDiagnostics: roomDiagnosticData(), calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [] })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */

@@ -225,6 +225,7 @@ const KeoBim = (function () {
       const lsCalc = ls.filter(l => l.conf === 'b3'), lanPending = ls.filter(l => !l.conf).length;
       if (!o.length && !lsCalc.length) { out.push({ ...base, kind: 'dark', lans: ls, lanPending }); return; }
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
+        containsPoint: p => { const R = L.R, x = Math.floor((p[0] - R.minx) / R.cell), y = Math.floor((p[1] - R.miny) / R.cell); return x >= 0 && y >= 0 && x < R.W && y < R.H && L.lab[y * R.W + x] === i; },
         rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
       if (o.some(x => x.levelBoundary)) (r.notes = r.notes || []).push('Проём попадает в диапазоны нескольких уровней: сохранена первая привязка снизу вверх. Проверьте этаж и геометрию высокого проёма.');
@@ -778,7 +779,7 @@ const KeoBim = (function () {
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, roomDiagnostics: roomDiagnosticData(), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, roomDiagnostics: roomDiagnosticData(), calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [] })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
