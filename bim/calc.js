@@ -305,7 +305,13 @@ const BimCalc = (function () {
     }
 
     // верхний свет (Б.3) — фонари в системе координат главных осей пространства
-    const fr = planFrame(pts);
+    const choice = env.shortSection ? BimSections.resolve(env.shortSection.context, env.shortSection.record, env.KEO) : null;
+    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors } : undefined;
+    if (env.shortSection?.pending || choice?.errors.length) {
+      const err = env.shortSection.pending ? 'Ручной разрез ещё не применён. Примените проверенные параметры или верните авто.' : choice.errors.join(' ');
+      notes.push(err); return { err, notes, section: env.shortSection.pending ? { mode: 'draft', params: env.shortSection.pending, errors: [err] } : section };
+    }
+    const manual = choice?.mode === 'manual', fr = manual ? env.shortSection.context.frame : planFrame(pts);
     const types = [], typeIds = [];
     lanterns.forEach(l => {
       const q = fr.toLocal(l.c), av = r2(l.av), bv = r2(l.bv);
@@ -322,16 +328,21 @@ const BimCalc = (function () {
     notes.push(`Фонари — допущения: ${lanterns.every(l => l.dTop && l.dBot) ? 'размеры обоих отверстий шахты — из параметров семейства' : 'неполные параметры шахты: верхнее отверстие — по заданному диаметру или стеклу; нижнее — по заданному диаметру, иначе равно верхнему'}, стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
     const st = baseState(env, sp, row); st.mode = 'top';
     st.top = { sys: 'shaft', L: r2(fr.L), B: r2(fr.B), H: r2(heights[0].H), spans: 1, l1: null, y0: null, nPts: 0, types, b2: [] };
+    if (manual) {
+      const p = env.shortSection.record.params;
+      Object.assign(st.top, { y0: p.y0, nPts: p.nPts, nPtsBasis: p.nPtsBasis });
+      notes.push(`Разрез задан пользователем: y0=${fc(p.y0)} м, РТ=${p.nPts}. Обоснование: ${p.nPtsBasis}. Прямоугольная схема подтверждена пользователем; разрешение маски ${fc(env.shortSection.context.cell)} м.`);
+    }
     const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
     const outside = P.flatMap((p, j) => (env.containsPoint ? env.containsPoint(p) : inside(pts, p, 0.3)) ? [] : [j + 1]);
     if (outside.length) {
       const err = `Автоматический характерный разрез не поддерживает этот контур: РТ${outside.join(', РТ')} вне контура пространства. Верхний или комбинированный КЕО не рассчитан; требуется проверенный разрез.`;
-      notes.push(err); return { err, notes, pts: P, frame: fr };
+      notes.push(err); return { err, notes, pts: P, frame: fr, section };
     }
     const Ct = env.KEO.compute(st);
     if (!Ct.ok) {
       const err = (Ct.err || []).join('; ') || 'Ядро отклонило расчёт верхнего или комбинированного КЕО.';
-      notes.push(err); return { err, notes, pts: P, frame: fr };
+      notes.push(err); return { err, notes, pts: P, frame: fr, section };
     }
     // вклад каждого фонаря в eв по точкам: прямая составляющая coef·q·cos^m·τ0·MF·CN (Б.3) + доля отражённой sотр пропорционально его εв
     const lanContrib = [];
@@ -342,7 +353,7 @@ const BimCalc = (function () {
         lanContrib.push({ id, e: T.pts.map(p => T.coef * p.rows[li].qc * k + T.sOtr * own / tot) });
       });
     });
-    if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes, lanContrib };
+    if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes, lanContrib, section };
 
     // комбинированное (Б.4): e = eв + eб в каждой точке; eб — боковое освещение в той же точке через видимые участки окон
     const sideAt = P.map(A => {
@@ -357,7 +368,7 @@ const BimCalc = (function () {
     const eAvgR = Math.round(stt * 100 + 1e-9) / 100, norm = env.KEO.normOf(st), uni = eMin / stt;
     const normOk = norm.v === null || norm.v === undefined ? null : eAvgR >= norm.v - 1e-9, uniOk = uni >= 1 / 3 - 1e-9;
     const comb = { eTop, eSide: sideAt.map(x => x.e), e, eAvg: stt, eAvgR, eMin, uni, uniInv: stt / eMin, norm, normOk, uniOk, pass: normOk === null ? null : normOk && uniOk, sideAt };
-    return { mode, row, st, C: Ct, comb, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, geo: sideAt[Math.floor(P.length / 2)].geo || [], notes, lanContrib };
+    return { mode, row, st, C: Ct, comb, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, geo: sideAt[Math.floor(P.length / 2)].geo || [], notes, lanContrib, section };
   }
 
   /* ---------- противостоящие здания из профиля затенения ---------- */

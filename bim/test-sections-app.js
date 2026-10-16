@@ -1,0 +1,43 @@
+/* Actual app/engine persistence, reset and invalidation; synthetic Viewer, no DOM claim. */
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const scripts=[...fs.readFileSync(__dirname+'/test-purpose.html','utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+const storage=new Map(),context=vm.createContext({console:{log(){},error(){}},performance,setTimeout,clearTimeout,setInterval:()=>0,clearInterval(){},assert});context.window=context;
+context.document={querySelector:()=>({}),querySelectorAll:()=>[],getElementById:()=>null,body:{contains:()=>true}};
+context.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
+vm.runInContext(scripts[0],context);
+let source=fs.readFileSync(__dirname+'/keo-bim.js','utf8').replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){}};};draw=()=>{};renderList=()=>{};\n  return {_html:shortSectionHTML,_json:exportJSON,_dec:exportDec, run, st: () => st, S,');
+source=source.replace(/  function download\(name, text, type\) \{[^\n]+\}/,'  function download(name,text,type){window.downloaded=JSON.parse(text);}');
+vm.runInContext(source,context);vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
+(async()=>{
+await vm.runInContext(`(async()=>{
+ let width=3.6;const height=2.4;
+ const model=(urn,version=urn)=>({...makeModel(urn),getDocumentNode:()=>({data:{guid:'short-view'},getRootNode:()=>({urn:()=>version})})});
+ NOP_VIEWER.model=model('short:A');
+ G.location=async()=>[];
+ G.rooms=async()=>[{id:1,key:'room',eid:'room',level:'L01',name:'Раздевальная',num:'synthetic',area:width*height,per:2*(width+height),h:3.6,warn:[]}];
+ G.slice=(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:[[0,0,width,0],[width,0,width,height],[width,height,0,height],[0,height,0,0]];
+ G.openings=()=>[{id:200,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:[width/2,height/2],t:[1,0],n:[0,1],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}];
+ const opts={region:'г. Москва',bGroup:group('A57')},current=()=>KeoBim.st().res.find(r=>r.key==='room');
+ await KeoBim.run(opts);assert.match(current().err,/L ≤ 4/);assert.equal(current().sectionContext.error,'');
+ const p={y0:1.2,nPts:3,nPtsBasis:'Synthetic project section selection',confirmed:true};
+ const preview=KeoBim.previewShortSection('room',p);assert.equal(preview.errors.length,0);assert.equal(preview.points.length,3);assert.equal(current().kind,'err');assert.equal(current().st,undefined);assert.equal(current().section.mode,'draft');
+ KeoBim._json();assert.equal(downloaded.spaces.length,0);assert.equal(downloaded.calculationErrors[0].section.mode,'draft');assert.equal(Object.keys(downloaded.shortSections).length,0);
+ assert.throws(()=>KeoBim.setShortSection('room',{...p,nPtsBasis:''}),/обоснование/);
+ KeoBim.setShortSection('room',p);assert.equal(current().C.ok,true);assert.equal(current().section.mode,'manual');assert.equal(current().st.top.nPts,3);
+ KeoBim._json();assert.equal(downloaded.spaces.length,1);assert.equal(downloaded.spaces[0].section.params.nPtsBasis,p.nPtsBasis);assert.equal(downloaded.spaces[0].state.top.y0,1.2);assert.equal(downloaded.shortSections.room.scope.model,'short:A');
+ KeoBim._dec();assert.equal(downloaded.shortSections.room.params.confirmed,true);
+ const saved=localStorage.getItem('keo-bim:decisions:short:A');assert.equal(JSON.parse(saved).shortSections.room.params.nPts,3);
+ const initial=current().C.res.eFinal;await KeoBim.run(opts);assert.equal(current().C.res.eFinal,initial);assert.equal(current().section.mode,'manual');
+ const html=KeoBim._html(current());assert.ok(html.includes('data-short-preview'));assert.ok(html.includes('data-short-action="auto"'));assert.ok(html.includes('Synthetic project section selection'));
+ NOP_VIEWER.model=model('short:B');await KeoBim.run(opts);assert.equal(Object.keys(KeoBim.st().sections).length,0);assert.equal(current().section.mode,'auto');assert.match(current().err,/L ≤ 4/);
+ NOP_VIEWER.model=model('short:A');await KeoBim.run(opts);assert.equal(current().C.res.eFinal,initial);
+ width=3.5;await KeoBim.run(opts);assert.equal(current().section.mode,'stale');assert.equal(current().st,undefined);assert.match(current().err,/устарел/);KeoBim._json();assert.equal(downloaded.spaces.length,0);assert.equal(downloaded.calculationErrors[0].section.mode,'stale');
+ assert.ok(KeoBim._html(current()).includes('устарел'));assert.equal(KeoBim._html(current()).includes('type="checkbox" checked'),false);
+ KeoBim.setShortSection('room',p);assert.equal(current().C.ok,true);
+ KeoBim.setShortSection('room',null);assert.equal(current().section.mode,'auto');assert.equal(current().st,undefined);assert.equal(Object.keys(KeoBim.st().sections).length,0);assert.equal(Object.keys(JSON.parse(localStorage.getItem('keo-bim:decisions:short:A')).shortSections).length,0);
+ await KeoBim.run(opts);assert.match(current().err,/L ≤ 4/);
+ KeoBim.setShortSection('room',p);NOP_VIEWER.model=model('short:A','another-derivative');await KeoBim.run(opts);assert.equal(current().section.mode,'stale');assert.equal(current().st,undefined);
+ KeoBim.destroy();
+})()`,context);
+console.log('PASS actual app: preview, invalid apply, apply, JSON, persisted reload, two models, geometry/version invalidation, explicit reapply, auto reset');
+})().catch(e=>{console.error(e);process.exitCode=1});

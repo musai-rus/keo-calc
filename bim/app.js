@@ -11,7 +11,7 @@ const KeoBim = (function () {
     lt1: 3, lt2: 0, lrho: 0.7, northDeg: '',
     exclude: 'лестни|\\bЛК\\b|коридор|холл|вестибюл', glassExclude: 'stemalit|эмал', code: '', object: ''
   };
-  let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false, dec: { merge: [], split: [], assign: [], lanterns: {} }, normOv: {} };
+  let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false, dec: { merge: [], split: [], assign: [], lanterns: {} }, normOv: {}, sections: {}, sectionDrafts: {} };
   let C, cat, ui, cssEl, overlay = 'keo-bim', labelsEl, labelViewer, drawViewer, drawModel, running, HM, VOPS = [], LANS = [];
   const exRe = () => S.exclude ? new RegExp(S.exclude, 'i') : null;
   const isExcluded = rm => { const re = exRe(); return !!(re && re.test(rm.name || '')); };
@@ -29,14 +29,16 @@ const KeoBim = (function () {
     if (d.assign !== undefined && (!Array.isArray(d.assign) || !d.assign.every(a => map(a) && Array.isArray(a.at) && a.at.length === 2 && a.at.every(Number.isFinite) && keys(a.keys)))) fail();
     if (d.lanterns !== undefined && (!map(d.lanterns) || !Object.values(d.lanterns).every(v => v === 'b3' || v === 'skip'))) fail();
     if (d.normOv !== undefined && (!map(d.normOv) || !Object.values(d.normOv).every(v => v === '-' || LIB.DATA.rooms.some(r => r.id === v)))) fail();
+    if (d.shortSections !== undefined) BimSections.validateRecords(d.shortSections);
     if (d.northDeg !== undefined) northOf(null, d.northDeg);
     return d;
   }
   function loadDec() { if (!modelKey()) return null; try { const j = JSON.parse(localStorage.getItem(decKey()) || 'null'); if (j) return validateDec(j); } catch (e) { st.storageWarning = 'Не удалось прочитать сохранённые решения этой модели.'; } return null; }
-  function decisionsData() { return { model: modelKey(), bGroup: S.bGroup, northDeg: S.northDeg, climate: Cc.climate(S, LIB.DATA.regions), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv }; }
+  function decisionsData() { return { model: modelKey(), bGroup: S.bGroup, northDeg: S.northDeg, climate: Cc.climate(S, LIB.DATA.regions), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv, shortSections: st.sections }; }
   function restoreDec(d, initialGroup = '', initialClimate = null) {
     st.dec = { merge: d && d.merge || [], split: d && d.split || [], assign: d && d.assign || [], lanterns: d && d.lanterns || {} };
     st.normOv = d && d.normOv || {};
+    st.sections = d && d.shortSections || {}; st.sectionDrafts = {};
     // Сохранённое «авто» тоже имеет приоритет над стартовым параметром закладки.
     const group = d && Object.prototype.hasOwnProperty.call(d, 'bGroup') ? d.bGroup : initialGroup;
     S.bGroup = validGroup(group) ? group : '';
@@ -228,6 +230,12 @@ const KeoBim = (function () {
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
         containsPoint: p => { const R = L.R, x = Math.floor((p[0] - R.minx) / R.cell), y = Math.floor((p[1] - R.miny) / R.cell); return x >= 0 && y >= 0 && x < R.W && y < R.H && L.lab[y * R.W + x] === i; },
         rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
+      if (lsCalc.some(l => !l.shaded)) {
+        const node = C.m.getDocumentNode();
+        const scope = { model: modelKey(), version: node?.getRootNode()?.urn?.() || null, view: node?.data?.guid || null, level: L.name, floor: L.floor, rooms: sp.rooms.map(r=>String(r.eid || r.key)).sort() };
+        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc });
+        env.shortSection = { context: base.sectionContext, record: st.sections[sp.key], pending: st.sectionDrafts[sp.key] };
+      }
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
       if (o.some(x => x.levelBoundary)) (r.notes = r.notes || []).push('Проём попадает в диапазоны нескольких уровней: сохранена первая привязка снизу вверх. Проверьте этаж и геометрию высокого проёма.');
       if (lanPending) (r.notes = r.notes || []).unshift(`фонарей с неподтверждённым типом: ${lanPending} — в расчёте не учтены, подтвердите тип в разделе «Фонари»`);
@@ -574,7 +582,7 @@ const KeoBim = (function () {
       ${lanOverview()}
       <p class="muted" style="font-size:11px">${esc(PRELIM)} Север: ${esc(st.north ? st.north.src : '—')}.</p>
       <details class="kb-set"><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
-      <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button><button class="kb-btn" data-a="dexp">Решения по составу (JSON)</button><button class="kb-btn" data-a="dimp">Загрузить решения</button>${st.dec.merge.length || st.dec.split.length || (st.dec.assign || []).length || Object.keys(st.dec.lanterns || {}).length || Object.keys(st.normOv).length ? '<button class="kb-btn" data-a="dclr">Сбросить решения</button>' : ''}</div>
+      <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button><button class="kb-btn" data-a="dexp">Решения по составу (JSON)</button><button class="kb-btn" data-a="dimp">Загрузить решения</button>${st.dec.merge.length || st.dec.split.length || (st.dec.assign || []).length || Object.keys(st.dec.lanterns || {}).length || Object.keys(st.normOv).length || Object.keys(st.sections).length || Object.keys(st.sectionDrafts).length ? '<button class="kb-btn" data-a="dclr">Сбросить решения</button>' : ''}</div>
       <p class="muted" style="font-size:11px">Контуры восстановлены по срезу модели на высоте ${f2(S.cut, 1)} м над полом: помещения Revit опознаются по контуру с линиями разделения, состав расчётного пространства и затенение — по физическим стенам, перегородкам и витражам (линии разделения не считаются стенами). Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б: Б.1 — боковое, Б.3 — верхнее, Б.4 — комбинированное). Экспериментальная версия: нормативная точность на модели не подтверждена.</p>`;
     main.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => planView(b.dataset.lv));
     main.querySelector('[data-a="3d"]').onclick = () => { st.level = null; view3d(); renderList(); labels(); };
@@ -585,7 +593,7 @@ const KeoBim = (function () {
     main.querySelector('[data-a=dimp]').onclick = importDec;
     main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { if (!decisionReady()) return; const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); rebuild(); });
     main.querySelectorAll('[data-lid]').forEach(b => b.onclick = () => focusLantern(+b.dataset.lid));
-    const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { if (!decisionReady()) return; st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; saveDec(); rebuild(); };
+    const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { if (!decisionReady()) return; st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; st.sections = {}; st.sectionDrafts = {}; saveDec(); rebuild(); };
     main.querySelector('[data-a=purpose]').onclick = () => setBuildingGroup(main.querySelector('[data-purpose]').value).catch(e => statusLine(e.message));
     bindSettings(main);
     renderDetail();
@@ -716,6 +724,49 @@ const KeoBim = (function () {
     const con = new Map((r.lanContrib || []).map(c => [c.id, c.e]));
     return '<h3>Фонари</h3><table class="kb-t"><tr><th>ID, семейство : тип</th><th>отверстие, м</th><th>наклон</th><th class="num">H / hш, м</th><th>Статус</th><th class="num">вклад eв по РТ, %</th></tr>' + ls.map(l => `<tr><td>${esc(String(l.id))}<div class="muted">${esc(l.label || l.type || l.cat)}</div></td><td>${lanDim(l)}<div class="muted">${l.round || l.dTop ? 'стекло ⌀' + f2(l.d || l.av) : 'оси ' + esc(l.ori || '')}</div></td><td>${l.tilt === null || l.tilt === undefined ? '?' : f2(l.tilt, 0) + '°'}</td><td class="num">${l.H ? f2(l.H) : '<b>?</b>'} / ${l.hsf !== undefined ? f2(l.hsf) : '<b>?</b>'}</td><td>${esc(LAN_ST(l))}${l.note ? `<div class="muted">${esc(l.note)}</div>` : ''}</td><td class="num">${con.has(l.id) ? con.get(l.id).map(x => f2(x, 3)).join('<br>') : '—'}</td></tr>`).join('') + '</table>';
   }
+  function sectionPreviewSVG(ctx, points, params) {
+    const qs=ctx.runs; if(!qs.length) return '';
+    const x0=Math.min(...qs.map(q=>q[0])),x1=Math.max(...qs.map(q=>q[1])),y0=Math.min(...qs.map(q=>q[2])),y1=Math.max(...qs.map(q=>q[3]));
+    const scale=Math.min(300/(x1-x0),160/(y1-y0)),xy=p=>[10+(p[0]-x0)*scale,10+(y1-p[1])*scale],pair=p=>xy(p).join(',');
+    const mask=qs.map(q=>`<polygon points="${[[q[0],q[2]],[q[1],q[2]],[q[1],q[3]],[q[0],q[3]]].map(pair).join(' ')}"/>`).join('');
+    const f=ctx.frame,line=f && Number.isFinite(params.y0)?[f.toWorld([0,params.y0]),f.toWorld([f.L,params.y0])]:null;
+    return `<svg data-short-preview viewBox="0 0 320 185" role="img" aria-label="Маска пространства, ручной разрез и расчётные точки" style="width:100%;background:#f3f5f7"><g fill="#d5dbe0">${mask}</g>${line?`<polyline points="${line.map(pair).join(' ')}" fill="none" stroke="#1f6fb2" stroke-width="1.5"/>`:''}${points.map((p,i)=>{const[x,y]=xy(p);return `<circle cx="${x}" cy="${y}" r="3" fill="${ctx.containsPoint(p)?'#1f6fb2':'#b3261e'}"/><text x="${x+4}" y="${y-4}" font-size="10">${i+1}</text>`;}).join('')}</svg>`;
+  }
+  function shortSectionHTML(r) {
+    const ctx=r.sectionContext; if(!ctx) return '';
+    const record=st.sections[r.key],state=BimSections.resolve(ctx,record,LIB.KEO),draft=st.sectionDrafts[r.key];
+    let p=draft || record?.params || {y0:'',nPts:0,nPtsBasis:'',confirmed:false};
+    if(state.mode==='stale' && !draft) p={...p,confirmed:false};
+    const preview=BimSections.preview(ctx,p,LIB.KEO),label=draft?'черновик — расчёт не выполнен':state.mode==='manual'?'ручной':state.mode==='stale'?'устарел — расчёт заблокирован':'авто';
+    const error=[...(state.errors||[]),...(draft?preview.errors:[])];
+    let h=`<details class="kb-set" data-short-editor${record||draft||!ctx.error&&r.kind==='err'?' open':''}><summary>Короткий прямоугольный разрез: ${esc(label)}</summary><p class="muted">Схема и размеры в предпросмотре получены по полной маске, шаг ${f2(ctx.cell)} м. L=${f2(ctx.frame?.L)} м, B=${f2(ctx.frame?.B)} м. Маска не подтверждает нормативную применимость отражённой составляющей: прямоугольную схему проверяет пользователь по проекту.</p>`;
+    if(ctx.error) h+=`<p class="kb-warn">${esc(ctx.error)}</p>`;
+    else h+=`<label>y0 от стены y=0 схемы, м <input data-short="y0" type="number" step="0.01" value="${esc(p.y0)}" style="width:85px"></label><label style="display:block">Число РТ <input data-short="nPts" type="number" min="3" max="101" step="1" value="${p.nPts||''}" style="width:70px"></label><label style="display:block">Обоснование числа РТ для 2 &lt; L ≤ 4 м <textarea data-short="nPtsBasis" maxlength="4000" style="width:100%">${esc(p.nPtsBasis)}</textarea></label><label style="display:block"><input data-short="confirmed" type="checkbox"${p.confirmed?' checked':''}> Подтверждаю прямоугольную схему по проекту</label><p class="muted" data-short-message>Изменения полей — черновик. Предпросмотр не рассчитывает КЕО; для расчёта нажмите «Применить».</p><div class="kb-row"><button class="kb-btn" data-short-action="preview">Предпросмотр</button><button class="kb-btn" data-short-action="apply">Применить</button></div>`;
+    if(record||draft) h+='<button class="kb-btn" data-short-action="auto">Вернуть авто</button>';
+    h+=sectionPreviewSVG(ctx,preview.points,p);
+    if(error.length) h+=`<p class="kb-warn">${[...new Set(error)].map(esc).join('<br>')}</p>`;
+    return h+'</details>';
+  }
+  function sectionResult(key) {
+    const r=st.res.find(r=>r.key===key);if(!r?.sectionContext) throw Error('Пространство с ручным разрезом отсутствует в текущем анализе.');return r;
+  }
+  function setShortSection(key,params) {
+    if(!decisionReady()) return;
+    const r=sectionResult(key),record=params===null?null:BimSections.record(r.sectionContext,params,LIB.KEO);
+    if(record) st.sections[key]=record; else delete st.sections[key];
+    delete st.sectionDrafts[key];saveDec();rebuild(r.level);return st.res.find(r=>r.key===key);
+  }
+  function previewShortSection(key,params) {
+    if(!decisionReady()) return;
+    const r=sectionResult(key),p=BimSections.preview(r.sectionContext,params,LIB.KEO);
+    st.sectionDrafts[key]={...params};rebuild(r.level);return p;
+  }
+  function bindShortSection(box,r) {
+    const editor=box.querySelector('[data-short-editor]');if(!editor) return;
+    const read=()=>({y0:LIB.KEO.readNum(editor.querySelector('[data-short=y0]').value).v,nPts:LIB.KEO.readNum(editor.querySelector('[data-short=nPts]').value).v,nPtsBasis:editor.querySelector('[data-short=nPtsBasis]').value,confirmed:editor.querySelector('[data-short=confirmed]').checked});
+    editor.querySelectorAll('[data-short]').forEach(el=>el.oninput=()=>{editor.querySelector('[data-short-message]').textContent='Изменения ещё не применены. Показанный ранее расчёт относится к сохранённым параметрам.';});
+    editor.querySelectorAll('[data-short-action]').forEach(b=>b.onclick=()=>{try{if(b.dataset.shortAction==='auto')setShortSection(r.key,null);else if(b.dataset.shortAction==='preview')previewShortSection(r.key,read());else setShortSection(r.key,read());}catch(e){const msg=editor.querySelector('[data-short-message]');if(msg)msg.textContent=e.message;}});
+  }
   function pointsHTML(r) {
     if (r.mode === 'comb') {
       const c = r.comb;
@@ -734,7 +785,7 @@ const KeoBim = (function () {
     if (ok) {
       const n = r.comb ? r.comb.norm : r.C.norm;
       h += `<div style="display:flex;gap:16px;align-items:baseline;margin:8px 0"><div><span class="kb-big">${f2(e)}</span> %<div class="muted">${r.mode === 'side' ? 'расчётный e<sub>р</sub>' : 'e<sub>ср</sub> по точкам'}</div></div><div><span class="kb-big" style="font-weight:500">${n.v === null || n.v === undefined ? '—' : f2(n.v)}</span> %<div class="muted">нормируемый e<sub>н</sub></div></div></div>`;
-      h += `<div class="muted" style="font-size:12px">${n.room ? `Норма: табл. А.1 СП 367, п. ${n.room.n} «${esc(n.room.name)}», ${esc(n.colName)}` : 'Назначение не найдено в табл. А.1 — норма не задана'}.${r.mode === 'side' ? ` Точка: ${r.multi ? 'центр пространства (проёмы в нескольких стенах)' : esc(LIB.KEO.RT_TEXT[r.row ? r.row.rt : 'center'])}, ${r.row && r.row.h === 0 ? 'на полу' : 'на УРП 0,8 м'}.` : ` Точки — на характерном разрезе по главной оси пространства (${r.pts.length} шт.).`}</div>`;
+      h += `<div class="muted" style="font-size:12px">${n.room ? `Норма: табл. А.1 СП 367, п. ${n.room.n} «${esc(n.room.name)}», ${esc(n.colName)}` : 'Назначение не найдено в табл. А.1 — норма не задана'}.${r.mode === 'side' ? ` Точка: ${r.multi ? 'центр пространства (проёмы в нескольких стенах)' : esc(LIB.KEO.RT_TEXT[r.row ? r.row.rt : 'center'])}, ${r.row && r.row.h === 0 ? 'на полу' : 'на УРП 0,8 м'}.` : ` Точки — ${r.section?.mode==='manual'?'по разрезу пользователя':'по главной оси пространства'} (${r.pts.length} шт.).`}</div>`;
     }
     h += compHTML(r) + areaHTML(r);
     if (ok) {
@@ -764,7 +815,9 @@ const KeoBim = (function () {
       const rowsA1 = LIB.DATA.rooms.slice().sort((a, b) => (b.g === st.group) - (a.g === st.group));
       h += `<label class="muted" style="display:block;font-size:12px">Назначение по табл. А.1: <select data-norm style="max-width:100%"><option value="">авто (по названиям помещений)</option>${['<option value="-"' + (st.normOv[r.key] === '-' ? ' selected' : '') + '>— без нормы КЕО —</option>', ...rowsA1.map(x => `<option value="${x.id}"${st.normOv[r.key] === x.id ? ' selected' : ''}>${esc(x.n + '. ' + x.name + ' (' + x.g.slice(0, 40) + ')')}</option>`)].join('')}</select></label>`;
     }
+    h += shortSectionHTML(r);
     box.innerHTML = h + '</div>';
+    bindShortSection(box, r);
     const sn = box.querySelector('[data-norm]'); if (sn) sn.onchange = () => { if (!decisionReady()) return; if (sn.value === '') delete st.normOv[r.key]; else st.normOv[r.key] = sn.value; saveDec(); rebuild(r.level); };
     const b1 = box.querySelector('[data-a=one]'); if (b1) b1.onclick = () => exportOne(r);
     const keys = r.rooms.map(x => x.key);
@@ -813,7 +866,7 @@ const KeoBim = (function () {
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, roomDiagnostics: roomDiagnosticData(), calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [] })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
@@ -830,7 +883,7 @@ const KeoBim = (function () {
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {
-      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; VOPS = []; LANS = []; HM = null;
+      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; VOPS = []; LANS = []; HM = null;
       await analyze(statusLine, opts);
       st.dirty = false; saveDec();
       const calc = st.res.filter(r => r.kind === 'calc');
@@ -841,7 +894,7 @@ const KeoBim = (function () {
     finally { st.busy = false; }
     return st;
   }
-  return { run, st: () => st, S, select, planView, destroy, decide, setBuildingGroup };
+  return { run, st: () => st, S, select, planView, destroy, decide, setBuildingGroup, setShortSection, previewShortSection };
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
