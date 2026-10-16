@@ -306,7 +306,7 @@ const BimCalc = (function () {
 
     // верхний свет (Б.3) — фонари в системе координат главных осей пространства
     const choice = env.shortSection ? BimSections.resolve(env.shortSection.context, env.shortSection.record, env.KEO) : null;
-    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors } : undefined;
+    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors, lengthRange: env.shortSection.context.lengthRange } : undefined;
     if (env.shortSection?.pending || choice?.errors.length) {
       const err = env.shortSection.pending ? 'Ручной разрез ещё не применён. Примените проверенные параметры или верните авто.' : choice.errors.join(' ');
       notes.push(err); return { err, notes, section: env.shortSection.pending ? { mode: 'draft', params: env.shortSection.pending, errors: [err] } : section };

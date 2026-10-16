@@ -26,14 +26,36 @@ const BimSections = (function () {
     const {u,v,x0,y0,L,B}=best,O=[u[0]*x0+v[0]*y0,u[1]*x0+v[1]*y0];
     return {O,u,v,L,B,toLocal:p=>[(p[0]-O[0])*u[0]+(p[1]-O[1])*u[1],(p[0]-O[0])*v[0]+(p[1]-O[1])*v[1]],toWorld:p=>[O[0]+p[0]*u[0]+p[1]*v[0],O[1]+p[0]*u[1]+p[1]*v[1]]};
   }
+  function lengthBounds(centers,cell) {
+    if(centers.length<3) return null;
+    let diameter=0,width=Infinity;
+    for(let i=0;i<centers.length;i++) {
+      for(let j=i+1;j<centers.length;j++) diameter=Math.max(diameter,Math.hypot(centers[i][0]-centers[j][0],centers[i][1]-centers[j][1]));
+      const a=centers[i],b=centers[(i+1)%centers.length],len=Math.hypot(b[0]-a[0],b[1]-a[1]);
+      const projections=centers.map(p=>((b[0]-a[0])*p[1]-(b[1]-a[1])*p[0])/len);
+      width=Math.min(width,Math.max(...projections)-Math.min(...projections));
+    }
+    // G.raster blocks a cell at most hypot(.8,.5)*cell from a wall
+    // sample (floor(x), floor(x+.3), and the analogous y offset).
+    // Erode the exact rectangle by this radius + grid covering radius.
+    // Snapping that inner rectangle to grid centers covers every exact
+    // point within radius r; this also covers center-sampled masks.
+    const wallRadius=Math.hypot(.8,.5)*cell,coverRadius=cell/Math.SQRT2,inset=wallRadius+coverRadius;
+    if(width<2*inset) return null;
+    const radius=Math.SQRT2*inset+coverRadius;
+    // For an exact rectangle, diagonal D and minimum width B satisfy
+    // L²=D²-B². Both D and B increase by at most 2r from the center hull.
+    // These bounds do not assume that the fitted raster axes are exact.
+    return {min:Math.sqrt(Math.max(0,diameter**2-(width+2*radius)**2)),max:Math.sqrt((diameter+2*radius)**2-width**2),radius};
+  }
   // Exact serialization is intentional: no digest collisions or area-only reuse.
   function context({scope,runs,cell,cut,grid,containsPoint,openings=[],lanterns=[]}) {
     const sorted=(runs||[]).map(q=>q.slice()).sort((a,b)=>a[2]-b[2]||a[0]-b[0]||a[3]-b[3]||a[1]-b[1]);
     const clean=sorted.length && sorted.every(q=>q.length===4 && q.every(finite) && q[1]>q[0] && q[3]>q[2]);
     const frame=clean?rectangle(sorted):null;
-    const snapshot = xs => xs.map(o=>Object.fromEntries(['id','c','t','n','nin','w','d','z0','z1','av','bv','dTop','dBot','H','hsf','shaded'].map(k=>[k,o[k]]))).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+    const snapshot = xs => xs.map(o=>Object.fromEntries(['id','c','t','n','nin','w','d','z0','z1','av','bv','dTop','dBot','H','hsf','tilt','round','shaded'].map(k=>[k,o[k]]))).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
     const signature=JSON.stringify({v:VERSION,scope,cell,cut,runs:sorted,openings:snapshot(openings),lanterns:snapshot(lanterns)});
-    let error='';
+    let error='',lengthRange=null;
     if(!scope || !scope.model || !scope.view || !scope.version) error='Нет устойчивой идентичности версии модели: ручной разрез не сохраняется.';
     else if(!frame || !finite(cell) || cell<=0 || !grid || ![grid.minx,grid.miny,grid.W,grid.H].every(finite) || typeof containsPoint!=='function') error='Нет полной маски пространства для проверки прямоугольной схемы.';
     else {
@@ -41,6 +63,7 @@ const BimSections = (function () {
       // Every deeper cell must belong to this space: holes/notches are not filled.
       const margin=Math.SQRT2*cell;
       const centers=convexHull(sorted.flatMap(q=>[[q[0]+cell/2,q[2]+cell/2],[q[1]-cell/2,q[2]+cell/2],[q[1]-cell/2,q[3]-cell/2],[q[0]+cell/2,q[3]-cell/2]]));
+      lengthRange=lengthBounds(centers,cell);
       const xs=sorted.flatMap(q=>[q[0],q[1]]),ys=sorted.flatMap(q=>[q[2],q[3]]);
       const x0=Math.max(0,Math.floor((Math.min(...xs)-grid.minx)/cell)),x1=Math.min(grid.W-1,Math.ceil((Math.max(...xs)-grid.minx)/cell));
       const y0=Math.max(0,Math.floor((Math.min(...ys)-grid.miny)/cell)),y1=Math.min(grid.H-1,Math.ceil((Math.max(...ys)-grid.miny)/cell));
@@ -52,8 +75,9 @@ const BimSections = (function () {
         if((inHull || q[0]>margin && q[0]<frame.L-margin && q[1]>margin && q[1]<frame.B-margin) && !containsPoint(p)) { error='Полная маска не подтверждает прямоугольную схему: есть внутренний разрыв, отверстие или сложный контур.'; break; }
       }
       if(!error && !(+frame.L.toFixed(2)>2 && frame.L<=4+1e-9)) error=+frame.L.toFixed(2)<=2?'L ≤ 2 м: нужна отдельная схема расчёта.':'Ручная настройка доступна только для коротких прямоугольных разрезов 2 < L ≤ 4 м.';
+      if(!error && (!lengthRange || !(lengthRange.min>2 && lengthRange.max<=4))) error='Растр не подтверждает, что весь диапазон возможной длины лежит в 2 < L ≤ 4 м. Нужны точные границы или отдельная схема расчёта.';
     }
-    return {scope,signature,frame,runs:sorted,cell,containsPoint,error};
+    return {scope,signature,frame,runs:sorted,cell,containsPoint,error,lengthRange};
   }
   function validateRecords(records) {
     if(!records || typeof records!=='object' || Array.isArray(records)) throw Error('Неверный формат ручных разрезов.');
