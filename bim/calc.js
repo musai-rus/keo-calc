@@ -39,7 +39,8 @@ const BimCalc = (function () {
   // Общие слова не голосуют за тип здания; одинаковые названия имеют ограниченный вес.
   const COMMON_GROUP = /Прочие помещения|Вспомогательные/;
   const GROUP_STOP = new Set(['кабин', 'рабоч', 'персо', 'дежур', 'обслу', 'хране', 'подго', 'детей', 'детск', 'отдел', 'обраб', 'готов']);
-  const SERVICE = /коридор|холл|вестибюл|санузел|туалет|уборн|душев|кладов|склад|тамбур|лестни|венткам|электрощит|технич|насосн|гардероб|кухн|цех|моечн|столов|буфет|раздевал/i;
+  const SERVICE = /коридор|холл|вестибюл|санузел|туалет|уборн|душев|кладов|склад|тамбур|лестни|венткам|электрощит|технич|насосн|инвентар|реагент|водопод|фильтр|хлор|дезинф|оборудован|инструктор|тренерск|персонал|гардероб|кухн|цех|моечн|столов|буфет|раздевал/i;
+  const serviceName = name => SERVICE.test(name) && !/кухн[а-я]*[- ]гостин/i.test(name);
   // Признаки дополняют словарь таблицы (например, «переговорная» не написана в строке A1).
   // ID указывает только группу из существующей БД; значения норм здесь не назначаются.
   const GROUP_HINTS = [
@@ -65,30 +66,37 @@ const BimCalc = (function () {
     const dict = new Map(groups.map(g => [g, new Set(rows.filter(r => r.g === g).flatMap(r => words(r.name)))]));
     const frequency = new Map();
     dict.forEach(ws => ws.forEach(w => frequency.set(w, (frequency.get(w) || 0) + 1)));
-    const hints = GROUP_HINTS.map(([id, re, weight]) => ({ group: (rows.find(r => r.id === id) || {}).g, re, weight }));
+    const hints = GROUP_HINTS.map(([id, re, weight], concept) => ({ concept, group: (rows.find(r => r.id === id) || {}).g, re, weight }));
     const samples = new Map();
     names.forEach(value => {
       const name = String(value || '').trim(), key = name.toLowerCase().replace(/ё/g, 'е').replace(/[\d\s.,_№\-]+/g, ' ').trim();
       if (!key) return;
       const s = samples.get(key); if (s) s.count++; else samples.set(key, { name, count: 1 });
     });
-    const scores = new Map(groups.map(group => [group, { group, score: 0, evidence: [] }]));
+    const scores = new Map(groups.map(group => [group, { group, score: 0, evidence: [], concepts: new Map() }]));
     samples.forEach(s => {
       const ws = [...new Set(words(s.name))].filter(w => !GROUP_STOP.has(w));
       groups.forEach(group => {
         const matched = ws.filter(w => dict.get(group).has(w));
-        const lexical = SERVICE.test(s.name) ? 0 : matched.reduce((n, w) => n + 1 / frequency.get(w), 0);
-        const hint = Math.max(0, ...hints.filter(h => h.group === group && h.re.test(s.name)).map(h => h.weight));
-        const weight = Math.max(hint, Math.min(3, lexical));
+        const lexical = serviceName(s.name) ? 0 : matched.reduce((n, w) => n + 1 / frequency.get(w), 0);
+        const matches = hints.filter(h => h.group === group && h.re.test(s.name)).sort((a, b) => b.weight - a.weight);
+        const hint = matches[0];
+        // A service room referring to a pool/clinic/etc. is supporting evidence,
+        // never a strong signal of the whole building's function.
+        const weight = serviceName(s.name) ? (hint ? Math.min(1, hint.weight) : 0) : Math.max(hint ? hint.weight : 0, Math.min(3, lexical));
         if (weight < 0.5) return;
         const c = scores.get(group), score = weight * Math.min(2, Math.sqrt(s.count));
-        c.score += score; c.evidence.push({ name: s.name, count: s.count, score, strong: weight >= 4 });
+        const concept = weight >= 4 && hint ? hint.concept : 'support';
+        const cap = concept === 'support' ? 3 : hint.weight * 2;
+        c.concepts.set(concept, Math.min(cap, (c.concepts.get(concept) || 0) + score));
+        c.score = [...c.concepts.values()].reduce((a, b) => a + b, 0);
+        c.evidence.push({ name: s.name, count: s.count, score, strong: weight >= 4, service: serviceName(s.name) });
       });
     });
     const candidates = [...scores.values()].filter(c => c.score > 0).sort((a, b) => b.score - a.score || a.group.localeCompare(b.group, 'ru'));
-    candidates.forEach(c => c.evidence.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru')));
+    candidates.forEach(c => { delete c.concepts; c.evidence.sort((a, b) => Number(b.strong) - Number(a.strong) || b.score - a.score || a.name.localeCompare(b.name, 'ru')); });
     const best = candidates[0], second = candidates[1];
-    const usable = best && (best.evidence.some(e => e.strong) || best.evidence.length >= 2 && best.score >= 3);
+    const usable = best && (best.evidence.some(e => e.strong) || best.evidence.some(e => !e.service) && best.evidence.length >= 2 && best.score >= 3);
     const competing = !!(usable && second && second.score >= best.score * 0.5 && second.evidence.some(e => e.strong));
     const status = !usable ? 'unknown' : competing ? 'ambiguous' : best.evidence.length >= 2 && best.score >= 8 ? 'supported' : 'tentative';
     return { group: usable ? best.group : null, status, total: names.length, named: [...samples.values()].reduce((n, s) => n + s.count, 0), candidates };
@@ -152,10 +160,23 @@ const BimCalc = (function () {
     return best || rows.find(Boolean) || null;
   }
   const title = sp => sp.rooms.map(r => `${r.num} ${r.name}`).join(' + ');
+  // Only the existing normative directory or an explicit integer group is used.
+  // Place names/coordinates are evidence for the user, not a climate-zone map.
+  function climate(settings, regions) {
+    const region = (regions || []).find(r => r.name === settings.region);
+    if (region) return { region: region.name, group: region.g, source: 'region' };
+    const g = settings.group;
+    if (settings.region) return null;
+    if (['string', 'number'].includes(typeof g) && g !== '' && Number.isInteger(Number(g)) && +g >= 1 && +g <= 5)
+      return { region: '', group: +g, source: 'manual' };
+    return null;
+  }
   function baseState(env, sp, row) {
     const S = env.settings, st = env.KEO.defaultState();
     st.meta = { code: S.code || '', object: S.object || '', room: title(sp), author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
-    st.region = S.region; st.group = S.group; st.groupManual = true; st.bType = row ? row.g : (S.bGroup || st.bType); st.roomId = row ? row.id : '';
+    const cl = climate(S, env.DATA.regions);
+    if (!cl) throw new Error('Регион не подтверждён: выберите регион или группу светового климата в настройках.');
+    st.region = cl.region; st.group = cl.group; st.groupManual = cl.source === 'manual'; st.bType = row ? row.g : (S.bGroup || st.bType); st.roomId = row ? row.id : '';
     st.rho = S.rho; st.env = 'normal';
     // ρср из настроек модуля: 0,55 — значение по примечанию 2 к табл. Б.6/Б.7; иное — задано пользователем в настройках
     if (Math.abs(+S.rho - 0.55) > 1e-9) { st.rhoMode = 'manual'; st.rhoBasis = 'задано в настройках модуля «КЕО по модели»'; }
@@ -215,6 +236,7 @@ const BimCalc = (function () {
   // env: {KEO, Engine, settings, floor, pts, Rp, T, rows (норма каждого помещения, по порядку sp.rooms), roomPts(rm) — клетки собственного контура помещения, shade(f, A, w)}
   function space(sp, ops, lans, env) {
     const S = env.settings, notes = [], pts = env.pts;
+    if (!climate(S, env.DATA.regions)) return { err: 'Регион не подтверждён: выберите регион или группу светового климата в настройках.' };
     if (pts.length < 4) return { err: 'контур слишком мал' };
     const lanterns = (lans || []).filter(l => { if (l.shaded) notes.push(`фонарь ${fc(l.av)}×${fc(l.bv)} м: ${l.shaded} — не учтён`); return !l.shaded; });
     (lans || []).forEach(l => l.note && notes.push(l.note));
@@ -274,14 +296,16 @@ const BimCalc = (function () {
     lanterns.forEach(l => {
       const q = fr.toLocal(l.c), av = r2(l.av), bv = r2(l.bv);
       // круглый фонарь (Б.3, формула (8.3)): dv — верхнее отверстие шахты (D1), dn — нижнее (D2); без параметров — по стеклу
-      const round = !!(l.round || l.dTop), dv = r2(l.dTop || l.d || av), dn = r2(l.dBot || l.dTop || l.d || av);
-      if (!(l.hsf > 0)) notes.push(`фонарь ${round ? '⌀' + fc(dv) : fc(av) + '×' + fc(bv)} м: высота шахты не определена по модели — принята 0,1 м (допущение, уточните)`);
+      const round = !!(l.round || l.dTop || l.dBot), dv = r2(l.dTop || l.d || av), dn = r2(l.dBot || l.dTop || l.d || av);
+      if (!(l.hsf >= 0.1)) notes.push(`фонарь ${round ? '⌀' + fc(dv) : fc(av) + '×' + fc(bv)} м: высота шахты отсутствует или меньше 0,1 м — в расчёте принята 0,1 м (допущение, уточните)`);
       const hsf = r2(Math.max(0.1, l.hsf || 0.1));
-      let T = types.find(t => round ? (t.shape === 'round' && t.dv === dv && t.dn === dn && t.hsf === hsf) : (t.shape === 'rect' && t.av === av && t.bv === bv && t.hsf === hsf));
-      if (!T) { T = { name: round ? `Фонарь ⌀${dv}${dn !== dv ? '/' + dn : ''}` : `Фонарь ${av}×${bv}`, shape: round ? 'round' : 'rect', av, bv, an: av, bn: bv, dv: round ? dv : 1, dn: round ? dn : 1, hsf, refl: 'diffuse', rhoW: S.lrho ?? 0.7, t1: env.DATA.tau1[S.lt1 ?? S.t1].v, t2: env.DATA.tau2[S.lt2 ?? S.t2].v, t3: 1, t4: 1, net: false, tilt: l.tilt <= 15 ? 0 : l.tilt <= 45 ? 1 : l.tilt <= 75 ? 2 : 3, lanterns: [] }; types.push(T); typeIds.push([]); }
+      const tilt = l.tilt === null || l.tilt === undefined || l.tilt <= 15 ? 0 : l.tilt <= 45 ? 1 : l.tilt <= 75 ? 2 : 3;
+      if (l.tilt === null || l.tilt === undefined) notes.push('Наклон стекла фонаря не определён — принят горизонтальный (допущение; проверьте MF).');
+      let T = types.find(t => t.tilt === tilt && (round ? (t.shape === 'round' && t.dv === dv && t.dn === dn && t.hsf === hsf) : (t.shape === 'rect' && t.av === av && t.bv === bv && t.hsf === hsf)));
+      if (!T) { T = { name: round ? `Фонарь ⌀${dv}${dn !== dv ? '/' + dn : ''}` : `Фонарь ${av}×${bv}`, shape: round ? 'round' : 'rect', av, bv, an: av, bn: bv, dv: round ? dv : 1, dn: round ? dn : 1, hsf, refl: 'diffuse', rhoW: S.lrho ?? 0.7, t1: env.DATA.tau1[S.lt1 ?? S.t1].v, t2: env.DATA.tau2[S.lt2 ?? S.t2].v, t3: 1, t4: 1, net: false, tilt, lanterns: [] }; types.push(T); typeIds.push([]); }
       T.lanterns.push({ x: r2(q[0]), y: r2(q[1]) }); typeIds[types.indexOf(T)].push(l.id);
     });
-    notes.push(`Фонари — допущения: ${lanterns.every(l => l.dTop) ? 'размеры отверстий шахты — из параметров семейства' : 'шахта без параметров в модели — вертикальная (нижнее отверстие = верхнему)'}, стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
+    notes.push(`Фонари — допущения: ${lanterns.every(l => l.dTop && l.dBot) ? 'размеры обоих отверстий шахты — из параметров семейства' : 'неполные параметры шахты: верхнее отверстие — по заданному диаметру или стеклу; нижнее — по заданному диаметру, иначе равно верхнему'}, стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
     const Hs = lanterns.map(l => l.H).filter(h => h > 0);
     if (Hs.length < lanterns.length) notes.push(`высота помещения под фонарём не определена по модели — принята высота помещения ${fc(H)} м (допущение)`);
     const st = baseState(env, sp, row); st.mode = 'top';
@@ -338,5 +362,5 @@ const BimCalc = (function () {
     }).filter(b => b.Hp > 0.5 && b.l > 0);
   }
 
-  return { mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
+  return { climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();

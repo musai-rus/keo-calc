@@ -58,4 +58,18 @@ test('Нераспознанное назначение отличается о�
   assert.equal(C.knownUnnormed('Помещение XYZ', group('A57')), false);
   assert.equal(C.knownUnnormed('Кладовая', null), false);
 });
+
+
+test('Pool service rooms do not outweigh twelve kindergarten group rooms', () => {
+  const service=['Техническое помещение бассейна','Кладовая инвентаря бассейна','Раздевальная бассейна','Душевая бассейна','Комната инструктора бассейна','Помещение водоподготовки бассейна','Насосная бассейна','Хлораторная бассейна','Реагентная бассейна'];
+  const names=[...Array(12).fill('Групповая'),...Array(12).fill('Спальня'),'Зал бассейна',...service];
+  const r=infer(names);assert.equal(r.group,group('A57'));
+  const sports=r.candidates.find(c=>c.group===group('A68'));
+  assert.ok(sports.evidence.filter(e=>service.includes(e.name)).every(e=>!e.strong));
+  assert.equal(infer([...names,...service.flatMap(n=>Array(100).fill(n+' дополнительное'))]).group,group('A57'));
+});
+test('A real sports building retains primary activity evidence',()=>assert.equal(infer(['Бассейн','Спортивный зал','Тренажерный зал','Раздевальная бассейна']).group,group('A68')));
+test('Service-only building names remain unknown',()=>assert.equal(infer(['Насосная бассейна','Кладовая бассейна','Раздевальная бассейна']).status,'unknown'));
+test('Kitchen-living apartment remains residential',()=>assert.equal(infer(['Кухня-гостиная','Спальня']).group,group('A191')));
+test('Mixed strong functions remain explicitly ambiguous',()=>assert.equal(infer(['Групповая','Групповая','Бассейн','Спортивный зал','Тренажерный зал']).status,'ambiguous'));
 console.log(`${total}/${total} пройдено`);

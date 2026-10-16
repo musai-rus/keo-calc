@@ -8,7 +8,7 @@ window.THREE={Vector3:Vec,Vector4:Vec,Box3:Box,Color:class{},BufferGeometry:clas
 window.Autodesk={Viewing:{CAMERA_CHANGE_EVENT:'camera',CUTPLANES_CHANGE_EVENT:'cuts',Document:{getAecModelData:async()=>({refPointTransformation:[1,0,0,0,1],levels:[{name:'L01',elevation:0},{name:'L02',elevation:5}]})}}};
 const makeModel=urn=>({is2d:()=>false,getData:()=>({urn}),getDocumentNode:()=>({getRootNode:()=>({urn:()=>urn})}),getBoundingBox:()=>({min:{x:0,y:0},max:{x:13,y:8}})});
 let cutPlanes=[];
-window.NOP_VIEWER={model:makeModel('test-purpose:A'),container:document.querySelector('#viewer'),getCutPlanes:()=>cutPlanes,setCutPlanes:p=>cutPlanes=p,overlays:{hasScene:()=>false,removeScene(){},addScene(){},addMesh(){}},impl:{invalidate(){}},addEventListener(){},removeEventListener(){},worldToClient:()=>({x:100,y:100}),navigation:{setView(){},setCameraUpVector(){},fitBounds(){}},fitToView(){},clearThemingColors(){},setThemingColor(){}};
+window.NOP_VIEWER={areAllVisible:()=>true,model:makeModel('test-purpose:A'),container:document.querySelector('#viewer'),getCutPlanes:()=>cutPlanes,setCutPlanes:p=>cutPlanes=p,overlays:{hasScene:()=>false,removeScene(){},addScene(){},addMesh(){}},impl:{invalidate(){}},addEventListener(){},removeEventListener(){},worldToClient:()=>({x:100,y:100}),navigation:{setView(){},setCameraUpVector(){},fitBounds(){}},fitToView(){},clearThemingColors(){},setThemingColor(){}};
 </script>
 <script src="keo-bim.js"></script>
 <script>
@@ -34,6 +34,8 @@ async function apply(g){document.querySelector('[data-purpose]').value=g;documen
 window.testDone=(async()=>{
  for(const k of ['test-purpose:A','test-purpose:B','test-purpose:legacy','test-purpose:blocked'])localStorage.removeItem('keo-bim:decisions:'+k);
  await KeoBim.run();
+ check('Регион не подставляется автоматически',KeoBim.S.group===null&&KeoBim.st().res.every(r=>r.kind==='err'));
+ await KeoBim.run({region:'г. Москва'});
  check('Автоматический первый прогон: ДОО, два уровня',KeoBim.st().group===group('A57')&&KeoBim.st().res.length===2);
  check('Есть вычисленные результаты и верхний свет',KeoBim.st().res.every(r=>r.kind==='calc'&&r.C.ok&&r.mode==='comb'&&r.comb.eTop.some(e=>e>0)&&r.comb.eSide.some(e=>e>0)&&r.lans.length===1));
  check('Вывод и основания видны в панели',document.querySelector('.kb-purpose').textContent.includes('Групповая')&&document.querySelector('.kb-purpose').textContent.includes('Определено автоматически'));
@@ -86,7 +88,7 @@ window.testDone=(async()=>{
  NOP_VIEWER.model=makeModel(null);await KeoBim.run();await apply(group('A1'));
  check('Без URN решения не попадают в общий ключ страницы',KeoBim.st().storageWarning.includes('Идентификатор модели')&&!localStorage.getItem('keo-bim:decisions:null'));
  // Оставляем чистый первый прогон для визуального осмотра.
- NOP_VIEWER.model=makeModel('test-purpose:B');await KeoBim.run();
+ NOP_VIEWER.model=makeModel('test-purpose:B');await KeoBim.run({region:'г. Москва'});
  check('Возврат к авто воспроизводит исходные результаты',KeoBim.st().res.every((r,i)=>(r.comb ? r.comb.eAvgR : r.C.res.eFinal)===original[i]));
  log.textContent+=`\n${total}/${total} пройдено`;window.testResult={ok:true,total};return window.testResult;
 })().catch(e=>{log.textContent+='\nОШИБКА: '+e.stack;window.testResult={ok:false,error:e.message};return window.testResult});

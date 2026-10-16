@@ -10,9 +10,10 @@ const BimSpaces = (function () {
   function unitOf(ctx) { const m = /unit:([A-Za-z]+)-/.exec(ctx || ''); return m ? m[1] : null; }
   // → {v (в м² или м), unit, ok, warn}
   function conv(raw, ctx, kind) {
-    if (raw === undefined || raw === null || raw === '' || isNaN(+raw)) return { v: null, unit: null, ok: false, warn: 'нет значения' };
+    const value = typeof raw === 'string' ? raw.trim().replace(',', '.') : raw;
+    if (!['string', 'number'].includes(typeof value) || value === '' || !Number.isFinite(Number(value))) return { v: null, unit: null, ok: false, warn: 'нет конечного числового значения' };
     const u = unitOf(ctx), tab = kind === 'area' ? AREA : LEN;
-    if (u && tab[u] !== undefined) return { v: +raw * tab[u], unit: u, ok: true };
+    if (u && tab[u] !== undefined) { const v = Number(value) * tab[u]; return Number.isFinite(v) ? { v, unit: u, ok: true } : { v: null, unit: u, ok: false, warn: 'значение вне числового диапазона' }; }
     return { v: null, unit: u || ctx || 'не указаны', ok: false, warn: `единицы ${u || ctx || '(не указаны)'} не распознаны — значение ${raw} не используется` };
   }
 
@@ -31,7 +32,20 @@ const BimSpaces = (function () {
       });
     });
     pairs.sort((a, b) => a[0] - b[0]);
-    pairs.forEach(([d, rm, rg]) => { if (rm.reg || rg.room) return; rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; rm.areaModelV = rg.areaV; });
+    // Equal best area/perimeter candidates cannot identify a Revit room. Never
+    // turn array order into a confident identity assignment.
+    const bestRoom = new Map(), bestRegion = new Map();
+    pairs.forEach(p => {
+      for (const [map, key] of [[bestRoom, p[1]], [bestRegion, p[2]]]) {
+        const best = map.get(key);
+        if (!best) map.set(key, [p]); else if (Math.abs(best[0][0] - p[0]) < 1e-10) best.push(p);
+      }
+    });
+    const ambiguousRooms = new Set(), ambiguousRegions = new Set();
+    bestRoom.forEach((ps, rm) => { if (ps.length > 1) { ambiguousRooms.add(rm); ps.forEach(p => ambiguousRegions.add(p[2])); } });
+    bestRegion.forEach((ps, rg) => { if (ps.length > 1) { ambiguousRegions.add(rg); ps.forEach(p => ambiguousRooms.add(p[1])); } });
+    ambiguousRooms.forEach(rm => { rm.matchAmbiguous = true; });
+    pairs.forEach(([d, rm, rg]) => { if (rm.reg || rg.room || ambiguousRooms.has(rm) || ambiguousRegions.has(rg)) return; rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; rm.areaModelV = rg.areaV; });
     // второй проход: допуск по площади до tol2 (10 %) — только для взаимно единственной пары «помещение ↔ контур»
     // (контур урезан нишей/шкафом за дверными полотнами и т.п.; пример — спальня 84 модели 1226: Area 55,14 м², контур 51,1–52,0 м²)
     const tol2 = 0.10, cand = new Map(), back = new Map();
@@ -79,7 +93,11 @@ const BimSpaces = (function () {
     // R-подобласть → область Rp
     // (в Rp могут быть преграды, которых нет в R, — контуры закрытых дверей: берётся первая клетка контура, свободная в Rp)
     const subsOf = new Map(), toP = new Int32Array(R.regs.length);
-    for (let p = 0; p < R.lab.length; p++) { const id = R.lab[p]; if (id > 0 && !toP[id] && Rp.lab[p] > 0 && Rp.regs[Rp.lab[p]] && Rp.regs[Rp.lab[p]].areaC >= 2) toP[id] = Rp.lab[p]; }
+    // Small enclosed regions may be real rooms. Retain the cavity/noise filter
+    // unless a matched Room or an explicit valid assignment identifies them.
+    const identified = new Set(rooms.filter(rm => rm.reg).map(rm => rm.reg));
+    AS.forEach(a => { const id = cellLab(R, a.at); if ((a.keys || []).some(k => byKey.has(k) && !byKey.get(k).reg)) identified.add(id); });
+    for (let p = 0; p < R.lab.length; p++) { const id = R.lab[p]; if (id > 0 && !toP[id] && Rp.lab[p] > 0 && Rp.regs[Rp.lab[p]] && (Rp.regs[Rp.lab[p]].areaC >= 2 || identified.has(id))) toP[id] = Rp.lab[p]; }
     R.regs.forEach(r => { if (!r || r.border) return; const P = toP[r.id]; if (!P || Rp.ext.has(P)) return; if (!subsOf.has(P)) subsOf.set(P, []); subsOf.get(P).push(r); });
     const free = r => !r.room && !r.rooms;
     // 1) ручное назначение помещений в контур без помещения
@@ -91,16 +109,24 @@ const BimSpaces = (function () {
     });
     // 2) автоматически: контур ≥ 3 м² без помещения ↔ 1–3 неопознанных помещения с той же суммой площадей; только если вариант единственный
     const pool = () => rooms.filter(rm => !rm.reg && rm.sub === undefined && rm.area > 0 && !isExcluded(rm));
-    [...subsOf.values()].flat().filter(r => free(r) && r.areaC >= 3).sort((a, b) => b.areaC - a.areaC).forEach(rg => {
-      const tol = Math.max(0.6, 0.03 * rg.areaC), c = combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg.per);
-      if (c.length === 1) { rg.rooms = c[0].sel; c[0].sel.forEach(rm => { rm.sub = rg.id; rm.byBalance = rg.id; }); }
-      else if (c.length > 1) rg.cands = c.slice(0, 6);
+    // Evaluate every contour against the same pool before accepting anything.
+    // A unique combination for one contour is insufficient if any of its rooms
+    // can also belong to another contour.
+    const proposals = [...subsOf.values()].flat().filter(r => free(r) && r.areaC >= 3).map(rg => {
+      const tol = Math.max(0.6, 0.03 * rg.areaC);
+      return { rg, c: combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg.per) };
+    });
+    const owners = new Map();
+    proposals.forEach(({rg,c}) => c.forEach(v => v.sel.forEach(rm => { if (!owners.has(rm)) owners.set(rm,new Set()); owners.get(rm).add(rg); })));
+    proposals.forEach(({rg,c}) => {
+      if (c.length === 1 && c[0].sel.every(rm => owners.get(rm).size === 1) && new Set(c[0].sel.map(aux)).size <= 1) { rg.rooms = c[0].sel; c[0].sel.forEach(rm => { rm.sub = rg.id; rm.byBalance = rg.id; }); }
+      else if (c.length) rg.cands = c.slice(0, 6);
     });
     const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k)), LK = links(R, Rp);
     const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum })) });
     [...subsOf.keys()].sort((a, b) => a - b).forEach(P => {
       const subs = subsOf.get(P), subOf = new Map(), units = [];
-      const big = subs.filter(s => free(s) && s.areaC >= 8).map(unk); unknown.push(...big.map(u => ({ ...u, P })));
+      const big = subs.filter(s => free(s) && (s.areaC >= 8 || s.cands && s.cands.length)).map(unk); unknown.push(...big.map(u => ({ ...u, P })));
       subs.forEach(s => { const rs = s.room ? [s.room] : s.rooms || []; rs.forEach(r => subOf.set(r, s)); if (rs.length) units.push(rs); });
       const all = units.flat();
       const nonEx = all.filter(r => !isExcluded(r)), ex = all.filter(r => isExcluded(r));
@@ -120,7 +146,7 @@ const BimSpaces = (function () {
       });
       // свободные части без помещения < 8 м² (полосы у витражей, зазоры) делятся между пространствами объёма по близости (spaceLabel);
       // крупные части без помещения не присоединяются — их состав определяет пользователь
-      const grow = subs.filter(s => free(s) && s.areaC < 8).map(s => s.id);
+      const grow = subs.filter(s => free(s) && s.areaC < 8 && !(s.cands && s.cands.length)).map(s => s.id);
       const main = groups.slice().sort((a, b) => b.reduce((s, r) => s + r.area, 0) - a.reduce((s, r) => s + r.area, 0))[0];
       const used = new Set(), subId = r => (subOf.get(r) || {}).id;
       groups.forEach(g => {
@@ -151,10 +177,12 @@ const BimSpaces = (function () {
   // все наборы из 1–3 помещений, сумма площадей которых совпадает с площадью контура (в чистоте или до осей) в пределах tol;
   // периметр контура per (если задан) должен быть совместим: одно помещение — 0,75…1,45 его периметра, несколько — 0,45…1,15 суммы периметров
   function combos(list, targets, tol, per) {
-    const out = [], n = Math.min(list.length, 60);
+    const maxArea = Math.max(...targets) + tol;
+    list = list.filter(r => Number.isFinite(r.area) && r.area > 0 && r.area <= maxArea).slice().sort((a, b) => a.area - b.area || String(a.key).localeCompare(String(b.key)));
+    const out = [], n = list.length;
     const perOk = sel => { if (!(per > 0) || sel.some(r => !(r.per > 0))) return true; const k = per / sel.reduce((a, r) => a + r.per, 0); return sel.length === 1 ? k >= 0.75 && k <= 1.45 : k >= 0.45 && k <= 1.15; };
     const consider = sel => { const s = sel.reduce((a, r) => a + r.area, 0), d = Math.min(...targets.map(t => Math.abs(s - t))); if (d <= tol && perOk(sel)) out.push({ sel, d, sum: s }); };
-    for (let i = 0; i < n; i++) { consider([list[i]]); for (let j = i + 1; j < n; j++) { consider([list[i], list[j]]); for (let k = j + 1; k < n; k++) consider([list[i], list[j], list[k]]); } }
+    for (let i = 0; i < n; i++) { consider([list[i]]); for (let j = i + 1; j < n; j++) { if (list[i].area + list[j].area > maxArea) break; consider([list[i], list[j]]); for (let k = j + 1; k < n; k++) { if (list[i].area + list[j].area + list[k].area > maxArea) break; consider([list[i], list[j], list[k]]); } } }
     return out.sort((a, b) => a.d - b.d);
   }
   // клетка → номер пространства (−1 — не в пространстве): контуры помещений пространства, затем рост по близости в пределах

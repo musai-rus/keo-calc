@@ -6,7 +6,7 @@ const KeoBim = (function () {
   const COL = { ok: '#2e9d5b', bad: '#d9443a', none: '#8a94a0', err: '#c99a06' };
 
   const S = {
-    cell: 0.05, cut: 1.0, bGroup: '', rho: 0.55, t1: 3, t2: 0, t4: 0, rhoF: 0.4, region: 'г. Москва', group: 1,
+    cell: 0.05, cut: 1.0, bGroup: '', rho: 0.55, t1: 3, t2: 0, t4: 0, rhoF: 0.4, region: '', group: null,
     lt1: 3, lt2: 0, lrho: 0.7, northDeg: '',
     exclude: 'лестни|\\bЛК\\b|коридор|холл|вестибюл', glassExclude: 'stemalit|эмал', code: '', object: ''
   };
@@ -19,14 +19,29 @@ const KeoBim = (function () {
   function modelKey() { try { return C.m.getData().urn || C.m.getDocumentNode().getRootNode().urn() || null; } catch (e) { return null; } }
   const decKey = () => 'keo-bim:decisions:' + modelKey();
   const validGroup = g => typeof g === 'string' && LIB.DATA.rooms.some(r => r.g === g);
-  function loadDec() { if (!modelKey()) return null; try { const j = JSON.parse(localStorage.getItem(decKey()) || 'null'); if (j && Array.isArray(j.merge)) return j; } catch (e) { st.storageWarning = 'Не удалось прочитать сохранённые решения этой модели.'; } return null; }
-  function decisionsData() { return { model: modelKey(), bGroup: S.bGroup, merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv }; }
-  function restoreDec(d, initialGroup = '') {
+  function validateDec(d) {
+    const map = x => x && typeof x === 'object' && !Array.isArray(x);
+    const keys = x => Array.isArray(x) && x.every(k => typeof k === 'string' || typeof k === 'number' && Number.isFinite(k));
+    const fail = () => { throw new Error('Неверный формат файла решений. Исходные решения сохранены.'); };
+    if (!map(d) || !Array.isArray(d.merge)) fail();
+    for (const name of ['merge','split']) if (d[name] !== undefined && (!Array.isArray(d[name]) || !d[name].every(keys))) fail();
+    if (d.assign !== undefined && (!Array.isArray(d.assign) || !d.assign.every(a => map(a) && Array.isArray(a.at) && a.at.length === 2 && a.at.every(Number.isFinite) && keys(a.keys)))) fail();
+    if (d.lanterns !== undefined && (!map(d.lanterns) || !Object.values(d.lanterns).every(v => v === 'b3' || v === 'skip'))) fail();
+    if (d.normOv !== undefined && (!map(d.normOv) || !Object.values(d.normOv).every(v => v === '-' || LIB.DATA.rooms.some(r => r.id === v)))) fail();
+    if (d.northDeg !== undefined) northOf(null, d.northDeg);
+    return d;
+  }
+  function loadDec() { if (!modelKey()) return null; try { const j = JSON.parse(localStorage.getItem(decKey()) || 'null'); if (j) return validateDec(j); } catch (e) { st.storageWarning = 'Не удалось прочитать сохранённые решения этой модели.'; } return null; }
+  function decisionsData() { return { model: modelKey(), bGroup: S.bGroup, northDeg: S.northDeg, climate: Cc.climate(S, LIB.DATA.regions), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv }; }
+  function restoreDec(d, initialGroup = '', initialClimate = null) {
     st.dec = { merge: d && d.merge || [], split: d && d.split || [], assign: d && d.assign || [], lanterns: d && d.lanterns || {} };
     st.normOv = d && d.normOv || {};
     // Сохранённое «авто» тоже имеет приоритет над стартовым параметром закладки.
     const group = d && Object.prototype.hasOwnProperty.call(d, 'bGroup') ? d.bGroup : initialGroup;
     S.bGroup = validGroup(group) ? group : '';
+    const cl = Cc.climate((d && Object.prototype.hasOwnProperty.call(d, 'climate') ? d.climate : initialClimate) || {}, LIB.DATA.regions);
+    S.region = cl ? cl.region : ''; S.group = cl ? cl.group : null;
+    S.northDeg = d && Object.prototype.hasOwnProperty.call(d, 'northDeg') ? d.northDeg : initialClimate && initialClimate.northDeg !== undefined ? initialClimate.northDeg : '';
   }
   function saveDec() {
     st.storageWarning = '';
@@ -39,24 +54,33 @@ const KeoBim = (function () {
     st.group = S.bGroup || st.purpose.group;
   }
 
+  let closed = false;
+  function assertModel() {
+    if (closed) throw new Error('Анализ отменён: панель закрыта.');
+    if (!C || window.NOP_VIEWER !== C.v || window.NOP_VIEWER.model !== C.m) throw new Error('Модель изменилась — запустите анализ заново.');
+  }
+  function decisionReady() { if (st.busy) return false; assertModel(); if (st.dirty) throw new Error('Настройки изменены — запустите полный пересчёт.'); return true; }
+
   /* ---------- анализ ---------- */
   async function analyze(progress, opts) {
     const v = window.NOP_VIEWER; if (!v || !v.model || v.model.is2d()) throw new Error('Откройте 3D-вид модели');
     C = G.ctx(v);
     const key = modelKey();
     if (st.model !== key || (!key && st.modelRef !== C.m)) {
-      st.storageWarning = ''; restoreDec(loadDec(), opts && opts.bGroup);
+      st.storageWarning = ''; restoreDec(loadDec(), opts && opts.bGroup, opts);
       st.model = key; st.modelRef = C.m;
     }
     // лучи Viewer (наружная область, затенение, фонари) не видят геометрию за секущей плоскостью: анализ — без сечения
     // (повторный запуск из «План L01» давал 43 рассчитанных пространства вместо 63)
-    if ((v.getCutPlanes() || []).length) { v.setCutPlanes([]); st.plan = false; }
     progress('Каталог элементов…');
-    cat = await G.catalog(C);
-    const rooms = await G.rooms(C);
+    cat = await G.catalog(C); assertModel();
+    const rooms = await G.rooms(C); assertModel();
     const aec = await Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null);
-    const T = aec && aec.refPointTransformation;
+    assertModel(); const T = aec && aec.refPointTransformation;
     st.north = northOf(T); st.aecLoc = aec && aec.locationParameters;
+    try { st.location = await G.location(C); st.locationWarning = ''; }
+    catch (e) { st.location = []; st.locationWarning = 'Адрес модели прочитать не удалось; выберите регион вручную.'; }
+    assertModel();
     const lv = (aec && aec.levels || []).map(l => ({ name: l.name, floor: (l.elevation - C.GZ) * C.S })).sort((a, b) => a.floor - b.floor);
     lv.forEach((l, i) => { l.top = i < lv.length - 1 ? lv[i + 1].floor : l.floor + 6; l.rooms = rooms.filter(r => r.level === l.name); });
     const levels = lv.filter(l => l.rooms.length);
@@ -72,22 +96,22 @@ const KeoBim = (function () {
     // физические преграды (свет, состав пространства) и линии разделения помещений (только опознание помещений Revit)
     const bcats = ['Revit Walls', 'Revit Curtain Panels', 'Revit Curtain Wall Mullions', 'Revit Doors', 'Revit Windows', 'Revit Structural Columns', 'Revit Columns'];
     for (const L of levels) {
-      progress(`Уровень ${L.name}: срез и контуры…`); await tick();
+      progress(`Уровень ${L.name}: срез и контуры…`); await tick(); assertModel();
       const z = L.floor + S.cut;
       const segsP = G.slice(C, cat, bcats, z), segsL = G.slice(C, cat, ['Revit <Room Separation>'], z, [L.floor, 0.6]), segsD = G.doorBoxes(C, cat, z);
       const bx = G.bounds(segsP.concat(segsL));
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
       L.Rp = G.raster(segsP.concat(segsD), S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
       SP.matchRooms(L.R, L.rooms);
-      G.markExterior(C, L.Rp, z);
+      G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
       compose(L);
     }
     progress('Фонари: привязка к помещениям, шахты, затенение…'); await tick();
-    const LP = await G.lanternParams(C, LANS.map(l => l.id));
-    LANS.forEach(l => { const q = LP[l.id]; if (q) { l.dTop = q.dIn || null; l.dBot = q.dBot || null; } });
+    const LP = await G.lanternParams(C, LANS.map(l => l.id)); assertModel();
+    LANS.forEach(l => { const q = LP[l.id]; if (q) { l.dTop = q.dIn || null; l.dBot = q.dBot || null; l.paramNotes = q.notes || []; } });
     lanterns(levels);
     st.levels = levels; st.res = [];
-    for (const L of levels) { progress(`Уровень ${L.name}: расчёт…`); await tick(); st.res.push(...calcLevel(L)); }
+    for (const L of levels) { progress(`Уровень ${L.name}: расчёт…`); await tick(); assertModel(); st.res.push(...calcLevel(L)); }
     return st.res;
   }
   const tick = () => new Promise(r => setTimeout(r, 0));
@@ -119,19 +143,18 @@ const KeoBim = (function () {
   function lanterns(levels) {
     const down = levels.slice().sort((a, b) => b.floor - a.floor);
     // лучи Viewer не видят геометрию за секущей плоскостью — на время привязки фонарей сечение снимается
-    const cp = C.v.getCutPlanes(); if (cp.length) C.v.setCutPlanes([]);
-    try { lanterns0(down); } finally { if (cp.length) C.v.setCutPlanes(cp); }
+    return G.withFullModel(C.v, () => lanterns0(down));
   }
   function lanterns0(down) {
     LANS.forEach(l => {
       // уровень — не ближайший по высоте, а тот, на чей пол фонарь светит: верхний уровень ниже стекла, между полом которого
       // и стеклом нет непрозрачного перекрытия (луч вверх из точки под фонарём на высоте среза)
       delete l.lvl; delete l.space; delete l.hostSlab; delete l.shaded; delete l.H; delete l.hsf; l.why = null;
-      if (l.note0 === undefined) l.note0 = l.note || ''; l.note = l.note0 || undefined; // пометки пересчитываются заново
+      if (l.note0 === undefined) l.note0 = l.note || ''; l.note = [l.note0, ...(l.paramNotes || [])].filter(Boolean).join('; ') || undefined; // пометки пересчитываются заново
       // размеры отверстий шахты: D1 = Diameter_Inside — верхнее (под стеклом), D2 = Diameter_Bottom — нижнее (в потолке),
       // из параметров семейства; нет параметров — по стеклу, шахта вертикальная (допущение)
-      if (l.dTop) l.note = (l.note ? l.note + '; ' : '') + `шахта${l.round ? ' круглая' : ''}: верх D1 = ${f2(l.dTop)} м, низ D2 = ${f2(l.dBot || l.dTop)} м (параметры семейства Diameter_Inside / Diameter_Bottom); стекло ${f2(l.round ? l.d : l.av)} м`;
-      else l.note = (l.note ? l.note + '; ' : '') + `размеры шахты в модели не заданы — отверстие по стеклу ${l.round ? '⌀' + f2(l.d) : f2(l.av) + '×' + f2(l.bv)} м, шахта вертикальная (допущение)`;
+      if (l.dTop || l.dBot) l.note = (l.note ? l.note + '; ' : '') + `шахта${l.round ? ' круглая' : ''}: верх D1 = ${l.dTop ? f2(l.dTop) : 'по стеклу'} м, низ D2 = ${l.dBot ? f2(l.dBot) : 'принят равным верхнему'} м (параметры семейства Diameter_Inside / Diameter_Bottom); стекло ${f2(l.round ? l.d : l.av)} м`;
+      else l.note = (l.note ? l.note + '; ' : '') + `размеры шахты не получены — отверстие по стеклу ${l.round ? '⌀' + f2(l.d) : f2(l.av) + '×' + f2(l.bv)} м, шахта вертикальная (допущение)`;
       for (const L of down) {
         if (l.z0 < L.floor + 2) continue;
         const hh = G.hitUpEl(C, l.c[0], l.c[1], L.floor + S.cut, l.z0 - L.floor);
@@ -169,19 +192,26 @@ const KeoBim = (function () {
     return id > 0 ? 'под фонарём часть без помещения Revit (контур не опознан)' : 'точка под фонарём попадает в стену или перегородку на высоте среза';
   }
   // север: ручная поправка (настройка) или поворот из refPointTransformation (внутренние координаты Revit → общие, истинный север)
-  function northOf(T) {
-    if (S.northDeg !== '' && S.northDeg !== null && !isNaN(+S.northDeg)) return { rot: +S.northDeg, src: `задан вручную: поправка ${f2(+S.northDeg, 1)}°` };
-    if (T && T.length >= 5 && (T[0] || T[1])) { const rot = -Math.atan2(T[1], T[0]) * 180 / Math.PI; return { rot, src: `истинный север Revit (refPointTransformation модели): поворот осей модели ${f2(rot, 1)}°` }; }
+  function northOf(T, raw = S.northDeg) {
+    const text = raw === null || raw === undefined ? '' : String(raw).trim();
+    if (text !== '') {
+      const rot = Number(text.replace(',', '.'));
+      if (!['string', 'number'].includes(typeof raw) || !Number.isFinite(rot)) throw new Error('Поправка на север должна быть конечным числом градусов.');
+      return { rot, src: `задан вручную: поправка ${f2(rot, 1)}°` };
+    }
+    if (T && T.length >= 5 && Number.isFinite(T[0]) && Number.isFinite(T[1]) && (T[0] || T[1])) { const rot = -Math.atan2(T[1], T[0]) * 180 / Math.PI; return { rot, src: `истинный север Revit (refPointTransformation модели): поворот осей модели ${f2(rot, 1)}°` }; }
     return { rot: 0, src: 'сведения о севере в модели не переданы — принят север по оси +Y Viewer (проверьте и задайте поправку в настройках)', unknown: true };
   }
   // нормы: назначение помещения по табл. А.1 (или выбор пользователя для пространства)
-  const normRow = rm => { const ov = st.normOv[rm.key]; if (ov !== undefined) return ov === '-' ? null : LIB.DATA.rooms.find(x => x.id === ov) || null; return st.group ? Cc.mapNorm(rm.name, LIB.DATA.rooms, st.group) : null; };
+  function overrideRow(ov) { if (ov === '-') return null; const row = LIB.DATA.rooms.find(x => x.id === ov); if (!row) throw new Error('Сохранённое назначение помещения отсутствует в таблице норм: ' + ov + '. Выберите назначение заново.'); return row; }
+  const normRow = rm => { const ov = st.normOv[rm.key]; if (ov !== undefined) return overrideRow(ov); return st.group ? Cc.mapNorm(rm.name, LIB.DATA.rooms, st.group) : null; };
   function rowsOf(sp) {
     const ov = st.normOv[sp.key];
-    if (ov !== undefined) return [ov === '-' ? null : LIB.DATA.rooms.find(x => x.id === ov) || null];
+    if (ov !== undefined) return [overrideRow(ov)];
     return sp.rooms.map(normRow);
   }
-  function calcLevel(L) {
+  function calcLevel(L) { return G.withFullModel(C.v, () => calcLevel0(L)); }
+  function calcLevel0(L) {
     const out = [], cell2 = L.R.cell * L.R.cell, regPts = roomPts(L);
     L.spaces.forEach((sp, i) => {
       const areaRevit = sp.rooms.reduce((s, r) => s + (r.area || 0), 0);
@@ -197,6 +227,7 @@ const KeoBim = (function () {
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
         rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
+      if (o.some(x => x.levelBoundary)) (r.notes = r.notes || []).push('Проём попадает в диапазоны нескольких уровней: сохранена первая привязка снизу вверх. Проверьте этаж и геометрию высокого проёма.');
       if (lanPending) (r.notes = r.notes || []).unshift(`фонарей с неподтверждённым типом: ${lanPending} — в расчёте не учтены, подтвердите тип в разделе «Фонари»`);
       out.push({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o, lans: ls, lanPending });
     });
@@ -205,7 +236,7 @@ const KeoBim = (function () {
     // помещения без расчётного контура: не опознаны по срезу и не закрыты балансом площадей
     const placed = new Set(L.spaces.flatMap(s => s.rooms.map(r => r.key)));
     L.rooms.filter(rm => !isExcluded(rm) && !placed.has(rm.key)).forEach(rm => out.push({ key: rm.key, level: L.name, floor: L.floor, rooms: [rm], title: `${rm.num} ${rm.name}`, nums: rm.num, kind: 'nogeo',
-      why: !(rm.area > 0) ? (rm.warn.join('; ') || 'нет площади') : rm.reg ? 'контур в наружной области или вне здания' : 'контур не выделен по срезу' }));
+      why: !(rm.area > 0) ? (rm.warn.join('; ') || 'нет площади') : rm.matchAmbiguous ? 'равнозначные контуры по площади: назначьте помещение вручную; порядок элементов не определяет соответствие' : rm.reg ? 'контур в наружной области или вне здания' : 'контур не выделен по срезу' }));
     return out;
   }
   // клетки собственных контуров помещений (для расчётной точки в помещении, определяющем норму)
@@ -229,23 +260,32 @@ const KeoBim = (function () {
   }
   // пересборка уровня после ручного решения (без повторного среза)
   function rebuild(levelName) {
+    assertModel(); if (st.dirty) throw new Error('Настройки изменены — запустите полный пересчёт.');
     if (levelName && !st.levels.some(l => l.name === levelName)) return;
     const selKey = st.sel && st.sel.key;
     // Смена назначения меняет состав пространств. Сначала собираем все уровни,
     // затем заново связываем фонари с новыми индексами пространств и считаем.
-    st.levels.forEach(compose);
-    lanterns(st.levels);
-    st.res = st.levels.flatMap(calcLevel);
+    st.res = [];
+    try {
+      st.north = northOf(st.T);
+      G.withFullModel(C.v, () => {
+        st.levels.forEach(compose);
+        lanterns(st.levels);
+        st.res = st.levels.flatMap(calcLevel);
+      });
+    } catch (e) {
+      st.sel = null; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); throw e;
+    }
     st.sel = st.res.find(r => r.key === selKey) || null;
     draw(); renderList();
   }
   async function setBuildingGroup(group) {
-    if (st.busy) return;
+    if (!decisionReady()) return;
     if (!C || window.NOP_VIEWER?.model !== C.m) throw new Error('Модель изменилась — запустите анализ заново.');
     if (group !== '' && !validGroup(group)) throw new Error('Выберите назначение здания из списка.');
     st.busy = true;
     try {
-      statusLine('Пересчёт с новым назначением здания…'); await tick();
+      statusLine('Пересчёт с новым назначением здания…'); await tick(); assertModel();
       S.bGroup = group; refreshPurpose(); saveDec(); rebuild();
       statusLine('Пересчёт завершён. Назначение здания: ' + (st.group || 'не определено') + '.');
     } catch (e) { st.res = []; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); console.error(e); }
@@ -253,6 +293,7 @@ const KeoBim = (function () {
   }
   // kind: 'merge' | 'split' | 'assign' (помещения в неопознанный контур at) | null — вернуть автоматический состав
   function decide(kind, keys, levelName, at) {
+    if (!decisionReady()) return;
     const D = st.dec, hit = g => g.some(k => keys.includes(k));
     D.merge = D.merge.filter(g => !hit(g)); D.split = D.split.filter(g => !hit(g));
     D.assign = (D.assign || []).filter(a => !hit(a.keys) && !(at && a.at[0] === at[0] && a.at[1] === at[1]));
@@ -262,6 +303,7 @@ const KeoBim = (function () {
 
   /* ---------- статус пространства ---------- */
   function status(r) {
+    if (r.lanPending) return { k: 'err', t: 'уточните тип фонаря' };
     if (r.kind === 'dark') return { k: 'none', t: 'нет световых проёмов' };
     if (r.kind === 'nogeo') return { k: 'none', t: 'контур не найден' };
     if (r.kind === 'unknown') return { k: 'err', t: 'уточните состав' };
@@ -351,11 +393,12 @@ const KeoBim = (function () {
   let cutTimer = null, cutPoll = null;
   // имя события в LMV — CUTPLANES_CHANGE_EVENT («cutplanesChanged»); CUT_PLANES_CHANGE_EVENT не существует (addEventListener с undefined падает)
   const EV_CUT = Autodesk.Viewing.CUTPLANES_CHANGE_EVENT || Autodesk.Viewing.CUT_PLANES_CHANGE_EVENT || null;
-  function onCut() { clearTimeout(cutTimer); cutTimer = setTimeout(() => { if (visLevel() !== st.drawn) draw(); }, 50); }
+  function onCut() { if (st.busy) return; clearTimeout(cutTimer); cutTimer = setTimeout(() => { if (!st.busy && visLevel() !== st.drawn) draw(); }, 50); }
   const centroid = r => { if (!r.runs || !r.runs.length) return null; let a = 0, x = 0, y = 0; r.runs.forEach(q => { const s = (q[1] - q[0]) * (q[3] - q[2]); a += s; x += s * (q[0] + q[1]) / 2; y += s * (q[2] + q[3]) / 2; }); return [x / a, y / a]; };
 
   /* ---------- вид «план уровня» ---------- */
   function planView(levelName) {
+    if (!decisionReady()) return;
     const v = C.v, L = st.levels.find(l => l.name === levelName) || st.levels[0]; if (!L) return;
     st.level = L.name; st.plan = true;
     v.setCutPlanes([new THREE.Vector4(0, 0, 1, -(L.floor + 1.3) / C.S)]);
@@ -370,10 +413,11 @@ const KeoBim = (function () {
     v.navigation.setView(new THREE.Vector3(c.x, c.y, c.z + h), c); v.navigation.setCameraUpVector(new THREE.Vector3(0, 1, 0));
     v.navigation.fitBounds(false, bx);
   }
-  function view3d() { const v = C.v; st.plan = false; v.setCutPlanes([]); v.fitToView(); draw(); }
+  function view3d() { if (!decisionReady()) return; const v = C.v; st.plan = false; v.setCutPlanes([]); v.fitToView(); draw(); }
 
   /* ---------- выбор пространства: подсветка его окон и фонарей ---------- */
   function select(r, fly = true) {
+    if (!decisionReady()) return; if (!st.res.includes(r)) throw new Error('Результат устарел — выберите помещение из текущего расчёта.');
     st.sel = r; draw(); renderList();
     const v = C.v;
     const ids = [...(r.ops || []), ...(r.lans || [])].map(o => o.id);
@@ -441,7 +485,7 @@ const KeoBim = (function () {
     ui.querySelector('[data-a=min]').onclick = () => ui.classList.toggle('min');
     ui.querySelector('[data-a=close]').onclick = destroy;
   }
-  function destroy() { clearInterval(cutPoll); ui?.remove(); labelsEl?.remove(); labelsEl = null; try { C.v.overlays.removeScene(overlay); C.v.setCutPlanes([]); C.v.clearThemingColors(C.m); C.v.removeEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, place); if (EV_CUT) C.v.removeEventListener(EV_CUT, onCut); } catch (e) { } }
+  function destroy() { closed = true; st.res = []; st.sel = null; clearInterval(cutPoll); ui?.remove(); labelsEl?.remove(); labelsEl = null; try { C.v.overlays.removeScene(overlay); C.v.clearThemingColors(C.m); C.v.removeEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, place); if (EV_CUT) C.v.removeEventListener(EV_CUT, onCut); } catch (e) { } }
   const statusLine = t => { const el = document.getElementById('kb-status'); if (el) el.textContent = t; };
 
   // сводка по помещениям Revit: каждое помещение — ровно в одном пространстве, в списке «без контура» или исключено
@@ -465,6 +509,7 @@ const KeoBim = (function () {
       r.sp && (r.sp.balance.length || r.sp.neighbours.length || r.sp.dup || r.sp.unknown.length) ? '<span class="bdg w">уточните состав</span>' : '', r.area && r.area.warn ? '<span class="bdg w">площадь ≠ контур</span>' : ''].join('');
     main.innerHTML = `
       ${purposeHTML()}
+      ${climateHTML()}
       <div class="kb-row">${lvBtns}<button class="kb-btn${!st.plan ? ' on' : ''}" data-a="3d">3D</button></div>
       <div class="kb-sum"><div><b>${calc.length}</b>рассчитано</div><div style="color:${COL.ok}"><b>${n('ok')}</b>норма</div><div style="color:${COL.bad}"><b>${n('bad')}</b>ниже нормы</div><div class="muted"><b>${n('none') + n('err') + other.length}</b>прочие</div></div>
       <div class="kb-row"><button class="kb-btn${st.filter === 'all' ? ' on' : ''}" data-f="all">Все рассчитанные</button><button class="kb-btn${st.filter === 'bad' ? ' on' : ''}" data-f="bad">Ниже нормы</button><button class="kb-btn${st.filter === 'check' ? ' on' : ''}" data-f="check">Проверить состав (${nChk})</button><button class="kb-btn${st.filter === 'other' ? ' on' : ''}" data-f="other">Без расчёта</button></div>
@@ -483,11 +528,11 @@ const KeoBim = (function () {
     main.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderList(); labels(); });
     main.querySelectorAll('tr.r').forEach(tr => tr.onclick = () => select(st.res[+tr.dataset.i]));
     main.querySelector('[data-a=csv]').onclick = exportCSV; main.querySelector('[data-a=json]').onclick = exportJSON;
-    main.querySelector('[data-a=dexp]').onclick = () => download('КЕО_решения_по_составу.json', JSON.stringify({ ...decisionsData(), names: Object.fromEntries((st.rooms || []).map(r => [r.key, `${r.level} · ${r.num} ${r.name}`])) }, null, 1), 'application/json');
+    main.querySelector('[data-a=dexp]').onclick = exportDec;
     main.querySelector('[data-a=dimp]').onclick = importDec;
-    main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); rebuild(); });
-    main.querySelectorAll('[data-lid]').forEach(b => b.onclick = () => { const id = +b.dataset.lid; C.v.clearThemingColors(C.m); C.v.setThemingColor(id, new THREE.Vector4(0.85, 0.27, 0.23, 1), C.m); C.v.fitToView([id], C.m); });
-    const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; saveDec(); rebuild(); };
+    main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { if (!decisionReady()) return; const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); rebuild(); });
+    main.querySelectorAll('[data-lid]').forEach(b => b.onclick = () => focusLantern(+b.dataset.lid));
+    const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { if (!decisionReady()) return; st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; saveDec(); rebuild(); };
     main.querySelector('[data-a=purpose]').onclick = () => setBuildingGroup(main.querySelector('[data-purpose]').value).catch(e => statusLine(e.message));
     bindSettings(main);
     renderDetail();
@@ -520,18 +565,33 @@ const KeoBim = (function () {
       <table class="kb-t"><tr><th>ID</th><th>Семейство : тип</th><th>отверстие, наклон</th><th>Уровень</th><th>Статус / причина</th></tr>${D.map(row).join('')}</table></details>`;
   }
   function importDec() {
+    if (!decisionReady()) return; const importedModel = C.m;
     const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
     inp.onchange = () => { const f = inp.files[0]; if (!f) return; f.text().then(t => {
+      if (!decisionReady() || C.m !== importedModel) throw new Error('Анализ или модель изменились во время чтения файла.');
       const j = JSON.parse(t);
-      if (!j || !Array.isArray(j.merge)) throw new Error('ожидается файл решений по составу');
+      validateDec(j);
       if (j.model && modelKey() && j.model !== modelKey()) throw new Error('файл относится к другой модели');
-      restoreDec(j, S.bGroup); refreshPurpose(); saveDec(); rebuild();
+      const north = northOf(st.T, Object.prototype.hasOwnProperty.call(j, 'northDeg') ? j.northDeg : S.northDeg);
+      restoreDec(j, S.bGroup, S); st.north = north; refreshPurpose(); saveDec(); rebuild();
     }).catch(e => statusLine('Не удалось прочитать решения: ' + e.message)); };
     inp.click();
   }
+  function climateHTML() {
+    const cl = Cc.climate(S, LIB.DATA.regions);
+    const aec = st.aecLoc || {};
+    const evidence = (st.location || []).map(p => `${p.source}: ${p.name} = ${p.value}`);
+    for (const k of ['placeName', 'AECplaceName', 'latitude', 'longitude'])
+      if (aec[k] !== undefined && aec[k] !== null && aec[k] !== '') evidence.push(`AEC ${k} = ${aec[k]}`);
+    return `<section class="kb-set${cl ? '' : ' kb-warn'}" aria-label="Регион строительства"><b>${cl ? `Световой климат: ${esc(cl.region || 'группа задана вручную')}, группа ${cl.group}` : 'Регион не подтверждён — расчёт КЕО остановлен'}</b>
+      <p class="muted">${cl ? 'Выбор пользователя для этой модели.' : 'Выберите регион из справочника или явно задайте группу 1–5 в настройках ниже.'} СП 52.13330.2016, прил. Е. Адрес и координаты модели не определяют группу автоматически; 0/0 могут быть незаданными координатами. Север определяется отдельно.</p>
+      ${evidence.length ? `<details><summary>Местоположение из модели — проверьте</summary><ul>${evidence.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : '<p class="muted">Надёжное местоположение из модели не получено.</p>'}
+      ${st.locationWarning ? `<p>${esc(st.locationWarning)}</p>` : ''}</section>`;
+  }
   function settingsHTML() {
     const opt = (list, cur) => list.map((x, i) => `<option value="${i}"${+cur === i ? ' selected' : ''}>${esc(x.t)} — ${f2(x.v)}</option>`).join('');
-    return `<label>Группа района по ресурсам светового климата <input type="number" min="1" max="5" step="1" data-s="group" value="${S.group}"></label>
+    return `<label>Регион строительства (справочник СП 52, прил. Е) <select data-s="region"><option value="">Не выбран / группа вручную</option>${LIB.DATA.regions.map(r => `<option value="${esc(r.name)}"${S.region === r.name ? ' selected' : ''}>${esc(r.name)} — группа ${r.g}</option>`).join('')}</select></label>
+      <label>Группа района вручную (1–5; заменяет регион) <input type="number" min="1" max="5" step="1" data-s="group" value="${S.group ?? ''}"></label>
       <label>ρср — средневзвешенный коэффициент отражения <input type="number" step="0.01" data-s="rho" value="${S.rho}"></label>
       <label>τ1 окон — светопропускание <select data-s="t1">${opt(LIB.DATA.tau1, S.t1)}</select></label>
       <label>τ2 окон — переплёты <select data-s="t2">${opt(LIB.DATA.tau2, S.t2)}</select></label>
@@ -546,7 +606,24 @@ const KeoBim = (function () {
       <div class="kb-row"><button class="kb-btn pri" data-a="rerun">Пересчитать</button></div>`;
   }
   function bindSettings(root) {
-    root.querySelectorAll('[data-s]').forEach(el => el.onchange = () => { const k = el.dataset.s; S[k] = (el.type === 'text' || k === 'bGroup') ? el.value : +el.value; });
+    root.querySelectorAll('[data-s]').forEach(el => el.onchange = () => {
+      const k = el.dataset.s;
+      if (st.busy || !C || window.NOP_VIEWER?.model !== C.m) {
+        el.value = S[k] ?? ''; statusLine(st.busy ? 'Дождитесь завершения расчёта.' : 'Модель изменилась — запустите анализ заново.'); return;
+      }
+      if (k === 'region') {
+        S.region = el.value; const cl = Cc.climate({ region: S.region }, LIB.DATA.regions); S.group = cl ? cl.group : null;
+        root.querySelector('[data-s=group]').value = S.group ?? '';
+      } else if (k === 'group') {
+        S.region = ''; S.group = el.value === '' ? null : +el.value; root.querySelector('[data-s=region]').value = '';
+      } else S[k] = (el.type === 'text' || k === 'bGroup') ? el.value : +el.value;
+      if (!['region', 'group', 'northDeg'].includes(k)) { st.dirty = true; st.res = []; st.sel = null; draw(); renderList(); statusLine('Настройки изменены — нажмите «Пересчитать».'); }
+      if (k === 'northDeg') {
+        try { st.north = northOf(st.T); saveDec(); rebuild(); }
+        catch (e) { st.res = []; draw(); renderList(); statusLine('Ошибка поправки на север: ' + e.message); }
+      }
+      if (k === 'region' || k === 'group') { saveDec(); try { rebuild(); } catch (e) { statusLine('Ошибка пересчёта: ' + e.message); } }
+    });
     root.querySelector('[data-a=rerun]').onclick = () => run();
   }
 
@@ -635,8 +712,8 @@ const KeoBim = (function () {
       h += `<label class="muted" style="display:block;font-size:12px">Назначение по табл. А.1: <select data-norm style="max-width:100%"><option value="">авто (по названиям помещений)</option>${['<option value="-"' + (st.normOv[r.key] === '-' ? ' selected' : '') + '>— без нормы КЕО —</option>', ...rowsA1.map(x => `<option value="${x.id}"${st.normOv[r.key] === x.id ? ' selected' : ''}>${esc(x.n + '. ' + x.name + ' (' + x.g.slice(0, 40) + ')')}</option>`)].join('')}</select></label>`;
     }
     box.innerHTML = h + '</div>';
-    const sn = box.querySelector('[data-norm]'); if (sn) sn.onchange = () => { if (sn.value === '') delete st.normOv[r.key]; else st.normOv[r.key] = sn.value; saveDec(); rebuild(r.level); };
-    const b1 = box.querySelector('[data-a=one]'); if (b1) b1.onclick = () => download(`КЕО_${r.nums}.json`, JSON.stringify(r.st, null, 2), 'application/json');
+    const sn = box.querySelector('[data-norm]'); if (sn) sn.onchange = () => { if (!decisionReady()) return; if (sn.value === '') delete st.normOv[r.key]; else st.normOv[r.key] = sn.value; saveDec(); rebuild(r.level); };
+    const b1 = box.querySelector('[data-a=one]'); if (b1) b1.onclick = () => exportOne(r);
     const keys = r.rooms.map(x => x.key);
     box.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => decide(b.dataset.dec === 'split' ? 'split' : null, keys, r.level));
     box.querySelectorAll('[data-merge]').forEach(b => b.onclick = () => decide('merge', [...keys, b.dataset.merge], r.level));
@@ -662,30 +739,47 @@ const KeoBim = (function () {
 
   /* ---------- экспорт ---------- */
   function download(name, text, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+  function focusLantern(id) {
+    if (!decisionReady()) return;
+    C.v.clearThemingColors(C.m); C.v.setThemingColor(id, new THREE.Vector4(0.85, 0.27, 0.23, 1), C.m); C.v.fitToView([id], C.m);
+  }
+  function exportOne(r) {
+    if (!decisionReady()) return;
+    if (!st.res.includes(r)) throw new Error('Результат устарел — выберите помещение из текущего расчёта.');
+    download(`КЕО_${r.nums}.json`, JSON.stringify(r.st, null, 2), 'application/json');
+  }
+  function exportDec() {
+    if (!decisionReady()) return;
+    download('КЕО_решения_по_составу.json', JSON.stringify({ ...decisionsData(), names: Object.fromEntries((st.rooms || []).map(r => [r.key, `${r.level} · ${r.num} ${r.name}`])) }, null, 1), 'application/json');
+  }
   function exportCSV() {
+    if (!decisionReady()) return;
     const rows = [['Уровень', 'Номера', 'Помещения Revit', 'ElementId', 'Площадь Revit, м2', 'Площадь контура, м2', 'Освещение', 'e, %', 'eн, %', 'Итог', 'Состав', 'Пункт табл. А.1']];
     st.res.forEach(r => { const s = status(r), e = eOf(r), en = enOf(r); rows.push([r.level, r.nums, r.rooms.map(x => x.name).join(' + '), r.rooms.map(x => x.eid || x.key).join(' + '), r.area ? f2(r.area.revit) : r.rooms[0] && r.rooms[0].area > 0 ? f2(r.rooms[0].area) : '', r.area ? f2(r.area.model) : '', r.mode ? MODE[r.mode] : '', e === null ? '' : f2(e), en === null || en === undefined ? '' : f2(en), s.t, r.sp ? (r.sp.merged ? (r.sp.manual ? 'объединено вручную' : 'объединено авто') : r.sp.manual ? 'раздельно (решение)' : '') : '', r.row ? r.row.n : '']); });
     download('КЕО_по_модели.csv', '﻿' + rows.map(x => x.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n'), 'text/csv');
   }
   function exportJSON() {
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
+    if (!decisionReady()) return;
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
   async function run(opts) {
     if (st.busy) return st;
-    st.busy = true;
+    st.busy = true; closed = false;
     const { bGroup, ...otherOpts } = opts || {};
     Object.assign(S, otherOpts);
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {
-      st.sel = null; await analyze(statusLine, opts);
+      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; VOPS = []; LANS = []; HM = null;
+      await analyze(statusLine, opts);
+      st.dirty = false; saveDec();
       const calc = st.res.filter(r => r.kind === 'calc');
       statusLine(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с: рассчитано пространств — ${calc.length}.`);
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
-      draw(); renderList(); if (st.level) planView(st.level);
-    } catch (e) { statusLine('Ошибка: ' + e.message); console.error(e); }
+      draw(); renderList();
+    } catch (e) { st.res = []; try { if (C) { draw(); renderList(); } } catch (_) { } statusLine('Ошибка: ' + e.message); console.error(e); }
     finally { st.busy = false; }
     return st;
   }
