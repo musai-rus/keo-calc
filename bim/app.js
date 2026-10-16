@@ -4,6 +4,7 @@ const KeoBim = (function () {
   const f2 = (x, n = 2) => (x === null || x === undefined || isNaN(x)) ? '—' : Number(x).toFixed(n).replace('.', ',');
   const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const COL = { ok: '#2e9d5b', bad: '#d9443a', none: '#8a94a0', err: '#c99a06' };
+  const OWNER = Symbol.for('keo-bim:destroy');
 
   const S = {
     cell: 0.05, cut: 1.0, bGroup: '', rho: 0.55, t1: 3, t2: 0, t4: 0, rhoF: 0.4, region: '', group: null,
@@ -11,7 +12,7 @@ const KeoBim = (function () {
     exclude: 'лестни|\\bЛК\\b|коридор|холл|вестибюл', glassExclude: 'stemalit|эмал', code: '', object: ''
   };
   let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false, dec: { merge: [], split: [], assign: [], lanterns: {} }, normOv: {} };
-  let C, cat, ui, overlay = 'keo-bim', labelsEl, HM, VOPS = [], LANS = [];
+  let C, cat, ui, cssEl, overlay = 'keo-bim', labelsEl, labelViewer, drawViewer, drawModel, running, HM, VOPS = [], LANS = [];
   const exRe = () => S.exclude ? new RegExp(S.exclude, 'i') : null;
   const isExcluded = rm => { const re = exRe(); return !!(re && re.test(rm.name || '')); };
 
@@ -54,7 +55,7 @@ const KeoBim = (function () {
     st.group = S.bGroup || st.purpose.group;
   }
 
-  let closed = false;
+  let closed = false, closeVersion = 0;
   function assertModel() {
     if (closed) throw new Error('Анализ отменён: панель закрыта.');
     if (!C || window.NOP_VIEWER !== C.v || window.NOP_VIEWER.model !== C.m) throw new Error('Модель изменилась — запустите анализ заново.');
@@ -349,8 +350,11 @@ const KeoBim = (function () {
     const below = st.levels.filter(l => l.floor < z - 0.01); return below.length ? below[below.length - 1].name : null;
   }
   const shown = r => { const lv = visLevel(); return lv === null || r.level === lv; };
+  const currentView = () => !closed && window.KeoBim?.run === run && C && window.NOP_VIEWER === C.v && C.v.model === C.m && ui && document.body.contains(ui);
   function draw() {
+    if (!currentView()) return;
     const v = C.v, Sx = C.S;
+    drawViewer = v; drawModel = C.m;
     if (v.overlays.hasScene(overlay)) v.overlays.removeScene(overlay);
     v.overlays.addScene(overlay);
     st.drawn = visLevel();
@@ -372,10 +376,14 @@ const KeoBim = (function () {
     v.impl.invalidate(true, true, true);
   }
   function labels() {
+    if (!currentView()) return;
     const v = C.v;
+    if (labelViewer && labelViewer !== v) clearLabels();
     if (!labelsEl) {
       document.querySelectorAll('#keo-labels').forEach(e => e.remove()); // метки предыдущего запуска
       labelsEl = document.createElement('div'); labelsEl.id = 'keo-labels'; v.container.appendChild(labelsEl);
+      labelsEl[OWNER] = destroy;
+      labelViewer = v;
       v.addEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, place); if (EV_CUT) v.addEventListener(EV_CUT, onCut);
       // setCutPlanes (в т.ч. из других инструментов) событие CUTPLANES_CHANGE не вызывает — сечение дополнительно проверяется по таймеру
       clearInterval(cutPoll); cutPoll = setInterval(onCut, 500);
@@ -384,13 +392,13 @@ const KeoBim = (function () {
       const s = status(r), e = eOf(r);
       return `<button class="kl kl-${s.k}${st.sel === r ? ' on' : ''}" data-i="${st.res.indexOf(r)}" title="${esc(r.title)}"><b>${esc(r.nums)}</b> ${e === null ? '—' : f2(e)}%</button>`;
     }).join('');
-    labelsEl.querySelectorAll('.kl').forEach(b => b.onclick = ev => { ev.stopPropagation(); select(st.res[+b.dataset.i], false); });
+    labelsEl.querySelectorAll('.kl').forEach(b => b.onclick = ev => { ev.stopPropagation(); const r = st.res[+b.dataset.i]; if (currentView() && r) select(r, false); });
     place();
   }
   function place() {
-    if (!labelsEl) return; const v = C.v;
+    if (!labelsEl || !currentView()) return; const v = C.v;
     labelsEl.querySelectorAll('.kl').forEach(b => {
-      const r = st.res[+b.dataset.i]; const p = r.A || centroid(r); if (!p) return;
+      const r = st.res[+b.dataset.i]; if (!r) return; const p = r.A || centroid(r); if (!p) return;
       const sc = v.worldToClient(new THREE.Vector3(p[0] / C.S, p[1] / C.S, (r.floor + 0.1) / C.S));
       b.style.transform = `translate(${Math.round(sc.x)}px, ${Math.round(sc.y)}px) translate(-50%, -130%)`;
     });
@@ -399,7 +407,28 @@ const KeoBim = (function () {
   let cutTimer = null, cutPoll = null;
   // имя события в LMV — CUTPLANES_CHANGE_EVENT («cutplanesChanged»); CUT_PLANES_CHANGE_EVENT не существует (addEventListener с undefined падает)
   const EV_CUT = Autodesk.Viewing.CUTPLANES_CHANGE_EVENT || Autodesk.Viewing.CUT_PLANES_CHANGE_EVENT || null;
-  function onCut() { if (st.busy) return; clearTimeout(cutTimer); cutTimer = setTimeout(() => { if (!st.busy && visLevel() !== st.drawn) draw(); }, 50); }
+  function onCut() {
+    if (closed) return;
+    if (!currentView()) { clearVisuals(); return; }
+    if (st.busy) return;
+    clearTimeout(cutTimer); cutTimer = setTimeout(() => { cutTimer = null; if (currentView() && !st.busy && visLevel() !== st.drawn) draw(); }, 50);
+  }
+  function clearLabels() {
+    clearTimeout(cutTimer); cutTimer = null; clearInterval(cutPoll); cutPoll = null;
+    const v = labelViewer; labelViewer = null;
+    try { v?.removeEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, place); } catch (e) { }
+    try { if (EV_CUT) v?.removeEventListener(EV_CUT, onCut); } catch (e) { }
+    labelsEl?.querySelectorAll('.kl').forEach(b => b.onclick = null);
+    labelsEl?.remove(); labelsEl = null;
+  }
+  function clearVisuals() {
+    clearLabels();
+    const v = drawViewer, m = drawModel; drawViewer = null; drawModel = null;
+    // A displaced instance must not remove the current instance's scene/colors.
+    if (window.KeoBim && window.KeoBim.run !== run && v === window.NOP_VIEWER) return;
+    try { v?.overlays.removeScene(overlay); } catch (e) { }
+    try { if (v && m) v.clearThemingColors(m); } catch (e) { }
+  }
   const centroid = r => { if (!r.runs || !r.runs.length) return null; let a = 0, x = 0, y = 0; r.runs.forEach(q => { const s = (q[1] - q[0]) * (q[3] - q[2]); a += s; x += s * (q[0] + q[1]) / 2; y += s * (q[2] + q[3]) / 2; }); return [x / a, y / a]; };
 
   /* ---------- вид «план уровня» ---------- */
@@ -483,15 +512,20 @@ const KeoBim = (function () {
     return st.filter === 'all' ? r.kind === 'calc' : st.filter === 'bad' ? k === 'bad' : st.filter === 'check' ? ambiguous(r) || r.kind === 'nogeo' || r.kind === 'unknown' : st.filter === 'other' ? r.kind !== 'calc' || k === 'none' || k === 'err' : true;
   }
   function mount() {
-    document.getElementById('keo-bim')?.remove(); document.getElementById('keo-bim-css')?.remove();
-    const css = document.createElement('style'); css.id = 'keo-bim-css'; css.textContent = CSS; document.head.appendChild(css);
+    const orphaned = document.querySelectorAll('#keo-bim, #keo-bim-css, #keo-labels');
+    new Set([...orphaned].map(e => e[OWNER])).forEach(dispose => { if (typeof dispose === 'function' && dispose !== destroy) try { dispose(); } catch (e) { } });
+    document.querySelectorAll('#keo-bim, #keo-bim-css, #keo-labels').forEach(e => { e.querySelectorAll('.kl').forEach(b => b.onclick = null); e.remove(); });
+    try { const v = window.NOP_VIEWER; if (v?.overlays?.hasScene(overlay)) v.overlays.removeScene(overlay); } catch (e) { }
+    cssEl = document.createElement('style'); cssEl.id = 'keo-bim-css'; cssEl.textContent = CSS; document.head.appendChild(cssEl);
+    cssEl[OWNER] = destroy;
     ui = document.createElement('section'); ui.id = 'keo-bim';
+    ui[OWNER] = destroy;
     ui.innerHTML = `<header><h2>КЕО по модели</h2><button class="kb-x" data-a="min" title="Свернуть">–</button><button class="kb-x" data-a="close" title="Закрыть">×</button></header><div class="kb-body"><div id="kb-status" class="muted">Анализ…</div><div id="kb-main"></div></div>`;
     document.body.appendChild(ui);
     ui.querySelector('[data-a=min]').onclick = () => ui.classList.toggle('min');
     ui.querySelector('[data-a=close]').onclick = destroy;
   }
-  function destroy() { closed = true; st.res = []; st.sel = null; clearInterval(cutPoll); ui?.remove(); labelsEl?.remove(); labelsEl = null; try { C.v.overlays.removeScene(overlay); C.v.clearThemingColors(C.m); C.v.removeEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, place); if (EV_CUT) C.v.removeEventListener(EV_CUT, onCut); } catch (e) { } }
+  function destroy() { closeVersion++; closed = true; st.res = []; st.sel = null; clearVisuals(); ui?.remove(); cssEl?.remove(); ui = null; cssEl = null; }
   const statusLine = t => { const el = document.getElementById('kb-status'); if (el) el.textContent = t; };
 
   // сводка по помещениям Revit: каждое помещение — ровно в одном пространстве, в списке «без контура» или исключено
@@ -783,9 +817,14 @@ const KeoBim = (function () {
   }
 
   /* ---------- запуск ---------- */
-  async function run(opts) {
-    if (st.busy) return st;
+  function run(opts) {
+    if (window.KeoBim?.run !== run) return Promise.resolve(st);
+    if (st.busy) { const version = closeVersion; return closed && running ? running.then(() => version === closeVersion ? run(opts) : st) : Promise.resolve(st); }
+    running = analyzeRun(opts); return running;
+  }
+  async function analyzeRun(opts) {
     st.busy = true; closed = false;
+    clearVisuals();
     const { bGroup, ...otherOpts } = opts || {};
     Object.assign(S, otherOpts);
     if (!ui || !document.body.contains(ui)) mount();
@@ -798,7 +837,7 @@ const KeoBim = (function () {
       statusLine(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с: рассчитано пространств — ${calc.length}.`);
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
       draw(); renderList();
-    } catch (e) { st.res = []; try { if (C) { draw(); renderList(); } } catch (_) { } statusLine('Ошибка: ' + e.message); console.error(e); }
+    } catch (e) { st.res = []; if (!closed) { clearVisuals(); try { renderList(); } catch (_) { } statusLine('Ошибка: ' + e.message); console.error(e); } }
     finally { st.busy = false; }
     return st;
   }
