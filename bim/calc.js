@@ -245,7 +245,13 @@ const BimCalc = (function () {
     const mode = hasSide && hasTop ? 'comb' : hasTop ? 'top' : 'side';
     // Б.3 currently uses one room height for all lanterns. A shared height
     // cannot represent different elevations: stop before producing a result.
-    const heights = lanterns.filter(l => Number.isFinite(l.H) && l.H > 0);
+    const invalidHeights = lanterns.filter(l => !Number.isFinite(l.H) || l.H <= 0);
+    if (invalidHeights.length) {
+      const detail = invalidHeights.map(l => `ID ${l.id ?? 'не указан'}: H=${String(l.H)}`).join('; ');
+      const err = `Высота помещения под участвующим фонарём не определена или некорректна (${detail}). Верхний или комбинированный КЕО не рассчитан; требуется конечная положительная высота каждого фонаря.`;
+      notes.push(err); return { err, notes };
+    }
+    const heights = lanterns;
     if (heights.some((l, i) => heights.slice(i + 1).some(other => Math.abs(l.H - other.H) > 1e-6))) {
       const detail = heights.map(l => `ID ${l.id ?? 'не указан'}: H=${l.H} м`).join('; ');
       const err = `Фонари с разными высотами не поддерживаются расчётом Б.3 с общей высотой помещения (${detail}). Верхний или комбинированный КЕО не рассчитан.`;
@@ -314,10 +320,8 @@ const BimCalc = (function () {
       T.lanterns.push({ x: r2(q[0]), y: r2(q[1]) }); typeIds[types.indexOf(T)].push(l.id);
     });
     notes.push(`Фонари — допущения: ${lanterns.every(l => l.dTop && l.dBot) ? 'размеры обоих отверстий шахты — из параметров семейства' : 'неполные параметры шахты: верхнее отверстие — по заданному диаметру или стеклу; нижнее — по заданному диаметру, иначе равно верхнему'}, стенки шахты — диффузное отражение ρ = ${String(S.lrho ?? 0.7).replace('.', ',')}, τ1 и τ2 — из настроек, несущих конструкций в проёме нет (τ3 = 1), солнцезащиты нет (τ4 = 1) — проверьте по проекту.`);
-    const Hs = heights.map(l => l.H);
-    if (Hs.length < lanterns.length) notes.push(`высота помещения под фонарём не определена по модели — принята высота помещения ${fc(H)} м (допущение)`);
     const st = baseState(env, sp, row); st.mode = 'top';
-    st.top = { sys: 'shaft', L: r2(fr.L), B: r2(fr.B), H: r2(Hs.length ? Hs[0] : H), spans: 1, l1: null, y0: null, nPts: 0, types, b2: [] };
+    st.top = { sys: 'shaft', L: r2(fr.L), B: r2(fr.B), H: r2(heights[0].H), spans: 1, l1: null, y0: null, nPts: 0, types, b2: [] };
     const P = env.KEO.topPoints(st).map(p => fr.toWorld([p.x, p.y]));
     const outside = P.flatMap((p, j) => (env.containsPoint ? env.containsPoint(p) : inside(pts, p, 0.3)) ? [] : [j + 1]);
     if (outside.length) {

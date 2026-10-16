@@ -237,7 +237,9 @@ console.log('\n=== 8. Верхнее и комбинированное осве�
   ok('фонари разных размеров — разные типы', rT3.st.top.types.length === 2);
   ok('затенённый фонарь не учитывается, есть пояснение', rT3.st.top.types.reduce((s, t) => s + t.lanterns.length, 0) === 3 && rT3.notes.some(n => /не учтён/.test(n)));
   const rMiss = Cc.space(SPC, [], [lan(3, 4, 1.5, 1.5, { H: undefined, hsf: undefined })], env());
-  ok('нет данных о шахте и высоте — допущения показаны явно', rMiss.C.ok && rMiss.notes.filter(n => /допущение/.test(n)).length >= 2, rMiss.notes.filter(n => /допущение/.test(n)).join(' / '));
+  ok('высота помещения неизвестна — отказ без подстановки высоты Room', /Высота.*не определена или некорректна/.test(rMiss.err) && !rMiss.C && !rMiss.st, rMiss.err);
+  const rShaft = Cc.space(SPC, [], [lan(3, 4, 1.5, 1.5, { hsf: undefined })], env());
+  ok('при известной высоте помещения отсутствие высоты шахты показано как допущение', rShaft.C.ok && rShaft.notes.some(n => /высота шахты.*допущение/.test(n)));
   const rAll = Cc.space(SPC, [], [lan(3, 4, 1.5, 1.5, { shaded: 'перекрыт' })], env());
   ok('все фонари затенены, окон нет — расчёт не выполняется', !!rAll.err, rAll.err);
 
