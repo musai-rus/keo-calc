@@ -52,6 +52,9 @@ node bim/test-purpose.js # назначение здания по совокуп
 node bim/test-context.js # сечения, видимость, регион, жизненный цикл приложения в VM (не Autodesk/DOM)
 node bim/test-edge-cases.js # неоднозначные/малые комнаты, границы этажей, геометрия и параметры фонарей
 node bim/test-metamorphic.js # 111 контролей эквивалентной геометрии, единиц и состава
+node bim/test-lantern-properties.js # синтетические Viewer-shaped records, units и безопасные fallback
+node bim/test-lantern-pipeline.js # параметры шахты → входы расчёта, без подмены стеклом
+node bim/test-room-diagnostics.js # причины отсутствия контура и стадии размещения Rooms
 node bim/verify-side.js  # независимая проверка бокового света (интегрирование по небу МКО); с bim/verify/1226-L01.json — помещения модели 1226
 node bim/verify-top.js   # границы прямой составляющей верхнего света (пом. 71 модели 1226)
 python3 build.py    # собрать dist/ и docs/index.html

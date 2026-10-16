@@ -118,8 +118,8 @@ const KeoBim = (function () {
 
   // состав пространств уровня (по текущим решениям) → разметка клеток → привязка вертикальных проёмов
   function compose(L) {
-    const { spaces, unplaced, unknown } = SP.compose(L.R, L.Rp, L.rooms, isExcluded, st.dec, { aux: rm => !normRow(rm) });
-    L.spaces = spaces; L.unplaced = unplaced; L.unknown = unknown;
+    const { spaces, unplaced, unknown, diagnostics } = SP.compose(L.R, L.Rp, L.rooms, isExcluded, st.dec, { aux: rm => !normRow(rm) });
+    L.spaces = spaces; L.unplaced = unplaced; L.unknown = unknown; L.diagnostics = diagnostics;
     L.lab = SP.spaceLabel(L.R, L.Rp, spaces);
     VOPS.forEach(o => { if (o.lvl === L.name) { delete o.space; delete o.lvl; delete o.floor; } });
     L.assign = G.assign(L.Rp, L.lab, VOPS, L.floor, L.top);
@@ -235,8 +235,12 @@ const KeoBim = (function () {
     L.unknown.filter(u => u.space === undefined).forEach(u => out.push({ key: 'unk:' + u.at.join(','), level: L.name, floor: L.floor, rooms: [], title: `Контур без помещения Revit, ${f2(u.area, 1)} м²`, nums: '?', kind: 'unknown', unk: u, A: u.at }));
     // помещения без расчётного контура: не опознаны по срезу и не закрыты балансом площадей
     const placed = new Set(L.spaces.flatMap(s => s.rooms.map(r => r.key)));
-    L.rooms.filter(rm => !isExcluded(rm) && !placed.has(rm.key)).forEach(rm => out.push({ key: rm.key, level: L.name, floor: L.floor, rooms: [rm], title: `${rm.num} ${rm.name}`, nums: rm.num, kind: 'nogeo',
-      why: !(rm.area > 0) ? (rm.warn.join('; ') || 'нет площади') : rm.matchAmbiguous ? 'равнозначные контуры по площади: назначьте помещение вручную; порядок элементов не определяет соответствие' : rm.reg ? 'контур в наружной области или вне здания' : 'контур не выделен по срезу' }));
+    const diagByKey = new Map((L.diagnostics || []).map(d=>[d.key,d]));
+    L.rooms.filter(rm => !isExcluded(rm) && !placed.has(rm.key)).forEach(rm => {
+      const diagnostic = diagByKey.get(rm.key);
+      out.push({key:rm.key,level:L.name,floor:L.floor,rooms:[rm],title:`${rm.num} ${rm.name}`,nums:rm.num,kind:'nogeo',diagnostic,
+        why: DIAG_LABEL[diagnostic && diagnostic.reason] || (!(rm.area>0) ? ((rm.warn||[]).join('; ') || 'нет площади') : 'контур не выделен по срезу')});
+    });
     return out;
   }
   // клетки собственных контуров помещений (для расчётной точки в помещении, определяющем норму)
@@ -274,10 +278,11 @@ const KeoBim = (function () {
         st.res = st.levels.flatMap(calcLevel);
       });
     } catch (e) {
-      st.sel = null; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); throw e;
+      st.res = []; st.sel = null; st.dirty = true; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); throw e;
     }
     st.sel = st.res.find(r => r.key === selKey) || null;
     draw(); renderList();
+    statusLine(`Пересчёт завершён: рассчитано пространств — ${st.res.filter(r => r.kind === 'calc').length}.`);
   }
   async function setBuildingGroup(group) {
     if (!decisionReady()) return;
@@ -288,7 +293,7 @@ const KeoBim = (function () {
       statusLine('Пересчёт с новым назначением здания…'); await tick(); assertModel();
       S.bGroup = group; refreshPurpose(); saveDec(); rebuild();
       statusLine('Пересчёт завершён. Назначение здания: ' + (st.group || 'не определено') + '.');
-    } catch (e) { st.res = []; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); console.error(e); }
+    } catch (e) { st.res = []; st.dirty = true; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); console.error(e); }
     finally { st.busy = false; }
   }
   // kind: 'merge' | 'split' | 'assign' (помещения в неопознанный контур at) | null — вернуть автоматический состав
@@ -489,6 +494,18 @@ const KeoBim = (function () {
   const statusLine = t => { const el = document.getElementById('kb-status'); if (el) el.textContent = t; };
 
   // сводка по помещениям Revit: каждое помещение — ровно в одном пространстве, в списке «без контура» или исключено
+  const DIAG_LABEL = {invalid_area:'нет пригодной площади', ambiguous:'равнозначные кандидаты', physical_exterior:'сопоставленный контур связан с наружной областью', physical_unmapped:'нет физической области', composition_unresolved:'состав не разрешён', claimed_candidate:'кандидаты заняты другими Room', unresolved_candidate:'кандидаты не дают однозначной пары', perimeter_rejected:'индивидуальные кандидаты отклонены по периметру', no_area_candidate:'нет индивидуального кандидата по площади'};
+  function roomDiagnosticData() {
+    if (st.dirty) return {available:false,rooms:[],counts:{placement:{},identification:{},physical:{}},unplacedReasons:{},duplicateKeys:[],unknownContours:[]};
+    const records = st.levels.flatMap(l => (l.diagnostics || []).map(d => ({...d,level:l.name})));
+    (st.noLevel || []).forEach(r => records.push({key:r.key,level:r.level||null,placement:isExcluded(r)?'excluded':'no_level',identification:'not_checked',physical:'not_checked',reason:'no_level'}));
+    const byKey = new Map(), duplicates = [];
+    records.forEach(r => { if(byKey.has(r.key)) duplicates.push(r.key); else byKey.set(r.key,r); });
+    const unique = [...byKey.values()], counts = {};
+    for(const stage of ['placement','identification','physical']) { counts[stage]={}; unique.forEach(r => {const k=r[stage];counts[stage][k]=(counts[stage][k]||0)+1;}); }
+    const unplacedReasons = {}; unique.filter(r=>r.placement==='unplaced').forEach(r=>unplacedReasons[r.reason]=(unplacedReasons[r.reason]||0)+1);
+    return {available:true,rooms:unique,counts,unplacedReasons,duplicateKeys:[...new Set(duplicates)],unknownContours:st.levels.map(l=>({level:l.name,count:l.unknown.length,reasons:l.unknown.reduce((a,u)=>{const k=u.reason||'no_candidate';a[k]=(a[k]||0)+1;return a;},{})}))};
+  }
   function census() {
     const all = (st.rooms || []), cnt = new Map();
     st.res.forEach(r => r.kind !== 'nogeo' && r.rooms.forEach(rm => cnt.set(rm.key, (cnt.get(rm.key) || 0) + 1)));
@@ -504,7 +521,7 @@ const KeoBim = (function () {
     const nChk = st.res.filter(r => (st.level === null || r.level === st.level) && (ambiguous(r) || r.kind === 'nogeo' || r.kind === 'unknown')).length;
     const lvBtns = st.levels.map(l => `<button class="kb-btn${st.level === l.name ? ' on' : ''}" data-lv="${esc(l.name)}">План ${esc(l.name)}</button>`).join('');
     const rows = st.res.filter(pass).sort((a, b) => (a.level + a.nums).localeCompare(b.level + b.nums, 'ru', { numeric: true }));
-    const cs = census();
+    const cs = census(), dg = roomDiagnosticData();
     const badges = r => [r.mode && r.mode !== 'side' ? `<span class="bdg">${MODE[r.mode]}</span>` : '', r.sp && r.sp.merged ? `<span class="bdg${r.sp.manual ? '' : ' w'}">${r.sp.manual ? 'объединено вручную' : 'объединено авто'}</span>` : '',
       r.sp && (r.sp.balance.length || r.sp.neighbours.length || r.sp.dup || r.sp.unknown.length) ? '<span class="bdg w">уточните состав</span>' : '', r.area && r.area.warn ? '<span class="bdg w">площадь ≠ контур</span>' : ''].join('');
     main.innerHTML = `
@@ -517,7 +534,8 @@ const KeoBim = (function () {
       <table class="kb-t"><thead><tr><th>№</th><th>Пространство</th><th class="num">e, %</th><th class="num">e<sub>н</sub>, %</th><th>Итог</th></tr></thead><tbody>
       ${rows.map(r => { const s = status(r), e = eOf(r), en = enOf(r); return `<tr class="r${st.sel === r ? ' sel' : ''}" data-i="${st.res.indexOf(r)}"><td>${esc(r.nums)}</td><td>${esc(r.rooms.length ? r.rooms.map(x => x.name).join(' + ') : r.title)}${badges(r)}<div class="muted" style="font-size:11px">${esc(r.level)}</div></td><td class="num">${e === null ? '—' : f2(e)}</td><td class="num">${en === null || en === undefined ? '—' : f2(en, 1)}</td><td><span class="chip c-${s.k}">${esc(s.t)}</span></td></tr>`; }).join('')}
       </tbody></table>
-      <p class="muted" style="font-size:11px">Помещений Revit: ${cs.all}; в расчётных пространствах — ${cs.inSp}${cs.dup ? `, <b style="color:${COL.bad}">в двух пространствах сразу — ${cs.dup}</b>` : ''}; без контура — ${cs.nogeo}; исключено (ЛК, коридоры, холлы, вестибюли) — ${cs.ex}${cs.units ? `; <b>не распознаны единицы площади — ${cs.units}</b>` : ''}${cs.noLevel ? `; без уровня — ${cs.noLevel}` : ''}. Фонарей найдено: ${cs.lans}, привязано к помещениям: ${cs.lansIn}.</p>
+      <p class="muted" style="font-size:11px">Помещений Revit: ${cs.all}; в расчётных пространствах — ${cs.inSp}${cs.dup ? `, <b style="color:${COL.bad}">в двух пространствах сразу — ${cs.dup}</b>` : ''}; без контура — ${cs.nogeo}; исключено (ЛК, коридоры, холлы, вестибюли) — ${cs.ex}${cs.units ? `; <b>предупреждения свойств — ${cs.units}</b>` : ''}${cs.noLevel ? `; без уровня — ${cs.noLevel}` : ''}. Фонарей найдено: ${cs.lans}, привязано к помещениям: ${cs.lansIn}.</p>
+      <details class="kb-set"><summary>${dg.available ? `Почему Rooms остались без контура (${cs.nogeo})` : 'Диагностика недоступна — выполните полный пересчёт'}</summary><p class="muted">Причины относятся к уникальным Room на известных уровнях; неопознанные контуры считаются отдельно и не соответствуют Rooms один к одному. Индивидуальные кандидаты сравниваются с площадью одного Room; причины отказа суммарного баланса отражены отдельно у неопознанных контуров в JSON. Неоднозначность не разрешается порядком элементов.</p><ul>${Object.entries(dg.unplacedReasons).map(([k,n])=>`<li>${esc(DIAG_LABEL[k]||k)}: ${n}</li>`).join('')}</ul><p class="muted">Подробные кандидаты и стадии размещения включены в общий JSON.</p></details>
       ${lanOverview()}
       <p class="muted" style="font-size:11px">${esc(PRELIM)} Север: ${esc(st.north ? st.north.src : '—')}.</p>
       <details class="kb-set"><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
@@ -620,7 +638,7 @@ const KeoBim = (function () {
       if (!['region', 'group', 'northDeg'].includes(k)) { st.dirty = true; st.res = []; st.sel = null; draw(); renderList(); statusLine('Настройки изменены — нажмите «Пересчитать».'); }
       if (k === 'northDeg') {
         try { st.north = northOf(st.T); saveDec(); rebuild(); }
-        catch (e) { st.res = []; draw(); renderList(); statusLine('Ошибка поправки на север: ' + e.message); }
+        catch (e) { st.res = []; st.dirty = true; draw(); renderList(); statusLine('Ошибка поправки на север: ' + e.message); }
       }
       if (k === 'region' || k === 'group') { saveDec(); try { rebuild(); } catch (e) { statusLine('Ошибка пересчёта: ' + e.message); } }
     });
@@ -760,7 +778,7 @@ const KeoBim = (function () {
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, roomDiagnostics: roomDiagnosticData(), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
@@ -772,7 +790,7 @@ const KeoBim = (function () {
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {
-      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; VOPS = []; LANS = []; HM = null;
+      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; VOPS = []; LANS = []; HM = null;
       await analyze(statusLine, opts);
       st.dirty = false; saveDec();
       const calc = st.res.filter(r => r.kind === 'calc');

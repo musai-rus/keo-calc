@@ -20,6 +20,7 @@ const BimSpaces = (function () {
   /* ---------- помещения ↔ области растра R ---------- */
   // площадь Revit сравнивается с площадью области в чистоте (areaC) и до осей стен (areaV) — зависит от настройки расчёта площадей в Revit
   function matchRooms(R, rooms, tol = 0.04) {
+    R.matchTolerance = tol;
     const regs = R.regs.filter(r => r && !r.border && r.areaC >= 0.8);
     const pairs = [];
     rooms.forEach(rm => {
@@ -88,7 +89,7 @@ const BimSpaces = (function () {
     decisions = decisions || {};
     const M = decisions.merge || [], SPL = decisions.split || [], AS = decisions.assign || [];
     rooms.forEach(rm => { delete rm.byBalance; delete rm.byUser; delete rm.sub; }); // повторная сборка после ручного решения
-    R.regs.forEach(r => { if (r) { delete r.rooms; delete r.cands; } });
+    R.regs.forEach(r => { if (r) { delete r.rooms; delete r.cands; delete r.balanceReason; } });
     const byKey = new Map(rooms.map(r => [r.key, r]));
     // R-подобласть → область Rp
     // (в Rp могут быть преграды, которых нет в R, — контуры закрытых дверей: берётся первая клетка контура, свободная в Rp)
@@ -120,10 +121,10 @@ const BimSpaces = (function () {
     proposals.forEach(({rg,c}) => c.forEach(v => v.sel.forEach(rm => { if (!owners.has(rm)) owners.set(rm,new Set()); owners.get(rm).add(rg); })));
     proposals.forEach(({rg,c}) => {
       if (c.length === 1 && c[0].sel.every(rm => owners.get(rm).size === 1) && new Set(c[0].sel.map(aux)).size <= 1) { rg.rooms = c[0].sel; c[0].sel.forEach(rm => { rm.sub = rg.id; rm.byBalance = rg.id; }); }
-      else if (c.length) rg.cands = c.slice(0, 6);
+      else if (c.length) { rg.cands = c.slice(0, 6); rg.balanceReason = c.length > 1 ? 'multiple_combinations' : c[0].sel.some(rm => owners.get(rm).size > 1) ? 'competing_contours' : 'mixed_auxiliary'; }
     });
     const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k)), LK = links(R, Rp);
-    const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum })) });
+    const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, reason: s.balanceReason || 'no_candidate', cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum })) });
     [...subsOf.keys()].sort((a, b) => a - b).forEach(P => {
       const subs = subsOf.get(P), subOf = new Map(), units = [];
       const big = subs.filter(s => free(s) && (s.areaC >= 8 || s.cands && s.cands.length)).map(unk); unknown.push(...big.map(u => ({ ...u, P })));
@@ -170,7 +171,38 @@ const BimSpaces = (function () {
     });
     const placed = new Set(spaces.flatMap(s => s.rooms));
     const unplaced = rooms.filter(rm => !placed.has(rm) && rm.area > 0 && !isExcluded(rm));
-    return { spaces, unplaced, unknown }; // unknown — все части уровня ≥ 8 м² без помещения Revit
+    // Diagnostics do not change matching or placement. Candidate lists describe
+    // current tolerance evidence, not a proposed identity assignment.
+    const eligible = R.regs.filter(r => r && !r.border && r.areaC >= 0.8);
+    const diagnostics = rooms.map(rm => {
+      const reg = rm.reg || rm.sub || null, P = reg ? toP[reg] || null : null;
+      const physical = !reg ? 'unidentified' : !P ? 'unmapped' : Rp.ext.has(P) ? 'exterior' : 'interior';
+      const placement = placed.has(rm) ? 'placed' : isExcluded(rm) ? 'excluded' : 'unplaced';
+      const identification = rm.byUser ? 'manual' : rm.byBalance !== undefined ? 'balance' : rm.reg ? 'direct' : !(Number.isFinite(rm.area) && rm.area > 0) ? 'invalid_area' : rm.matchAmbiguous ? 'ambiguous' : 'unidentified';
+      const strict = [], loose = [], rejected = [];
+      if (Number.isFinite(rm.area) && rm.area > 0) eligible.forEach(rg => {
+        const delta = Math.min(Math.abs(rg.areaC-rm.area),Math.abs((rg.areaV||rg.areaC)-rm.area));
+        const tight = delta/rm.area < (R.matchTolerance ?? .04) || delta < .4, relaxed = rg.areaC >= 4 && delta/rm.area < .10;
+        if (!tight && !relaxed) return;
+        const ratio = rm.per > 0 ? rg.per/rm.per : null;
+        const owners = rg.room ? [rg.room] : rg.rooms || [];
+        const evidence = {id:rg.id, relativeAreaError:delta/rm.area, perimeterRatio:ratio, areaC:rg.areaC, areaV:rg.areaV||rg.areaC, claimedBy:owners.map(r=>r.key), claimSource:rg.room ? 'direct' : owners.length ? owners.some(r=>r.byUser) ? 'manual' : 'balance' : null};
+        if (ratio !== null && (ratio < .75 || ratio > 1.45)) rejected.push(evidence);
+        else { if(tight) strict.push(evidence); if(relaxed) loose.push(evidence); }
+      });
+      let reason = null;
+      if (placement === 'excluded') reason = 'excluded';
+      else if (placement === 'unplaced') {
+        if (identification === 'invalid_area') reason = 'invalid_area';
+        else if (reg) reason = physical === 'exterior' ? 'physical_exterior' : physical === 'unmapped' ? 'physical_unmapped' : 'composition_unresolved';
+        else if ((strict.length || loose.length) && [...strict,...loose].every(c=>c.claimedBy.length && !c.claimedBy.includes(rm.key))) reason = 'claimed_candidate';
+        else if (rm.matchAmbiguous) reason = 'ambiguous';
+        else if (strict.length || loose.length) reason = 'unresolved_candidate';
+        else reason = rejected.length ? 'perimeter_rejected' : 'no_area_candidate';
+      }
+      return {key:rm.key, placement, identification, physical, reason, region:reg, physicalRegion:P, candidates:{strict,loose,perimeterRejected:rejected}};
+    });
+    return { spaces, unplaced, unknown, diagnostics }; // unknown — все части уровня ≥ 8 м² без помещения Revit
   }
   const cellLab = (R, at) => { const i = Math.floor((at[0] - R.minx) / R.cell), j = Math.floor((at[1] - R.miny) / R.cell); return (i < 0 || j < 0 || i >= R.W || j >= R.H) ? 0 : R.lab[j * R.W + i]; };
   const cellXY = (R, p) => { const i = p % R.W, j = (p - i) / R.W; return [Math.round((R.minx + (i + 0.5) * R.cell) * 1000) / 1000, Math.round((R.miny + (j + 0.5) * R.cell) * 1000) / 1000]; };

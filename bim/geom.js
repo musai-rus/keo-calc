@@ -361,10 +361,12 @@ const BimGeom = (function () {
     return h && h.distance * S <= (maxD || 1e9) ? z + h.distance * S : null;
   }
   // размеры фонаря из параметров семейства (A_GMO_Skywindow_Angle: Diameter_Inside — D1, верхнее отверстие шахты под стеклом;
-  // Diameter_Bottom — D2, нижнее отверстие в потолке; единицы из dataTypeContext)
+  // Diameter_Bottom — D2, нижнее отверстие в потолке; единицы из units / dataTypeContext)
   async function lanternParams(C, ids) {
     if (!ids.length) return {};
     const names = ['Diameter_Inside', 'Diameter_Bottom'];
+    const unitLabels = new Map([['m','meters'],['mm','millimeters'],['cm','centimeters'],['dm','decimeters'],['ft','feet'],['in','inches']]);
+    const lengthUnit = u => unitLabels.has(u) ? 'autodesk.unit.unit:' + unitLabels.get(u) + '-1.0.1' : u;
     let bulkFailed = false, rawFailed = false;
     const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: names }, ok, bad)).catch(() => { bulkFailed = true; return []; });
     let raw = [];
@@ -377,7 +379,7 @@ const BimGeom = (function () {
         pdb.enumObjectProperties(id, (a, v) => {
           const d = pdb.getAttributeDef(a);
           if (d.name === 'Diameter_Inside' || d.name === 'Diameter_Bottom')
-            values.push({ name: d.name, value: pdb.getAttrValue(a, v), context: d.dataTypeContext || null });
+            values.push({ name: d.name, value: pdb.getAttrValue(a, v), context: d.dataTypeContext || d.units || null });
         });
         if (values.length) out.push({ id, values });
       });
@@ -389,11 +391,23 @@ const BimGeom = (function () {
       const read = name => {
         const rp = db && db.values.find(p => p.name === name), bp = bulk && bulk.properties.find(p => p.attributeName === name || p.displayName === name);
         if (!rp && !bp) return null;
-        const useRaw = rp && (rp.context || !bp || !bp.dataTypeContext);
-        const value = useRaw ? rp.value : bp.displayValue, context = useRaw ? rp.context : bp.dataTypeContext;
-        const c = BimSpaces.conv(value, context, 'len');
-        if (!c.ok || !(c.v > 0)) { notes.push(`${name}: ${c.warn || 'нужен положительный размер'}; параметр не используется`); return null; }
-        return c.v;
+        // Public Viewer PropertyResult reports units; property DB attributes
+        // usually expose dataTypeContext. Never pair one API's value with the
+        // other API's units (bulk may already be converted/localised).
+        const candidates = [];
+        if (rp) candidates.push({value:rp.value, context:rp.context, source:'property DB'});
+        if (bp) candidates.push({value:bp.displayValue, context:bp.units || bp.dataTypeContext, source:'Viewer properties'});
+        const failures = [];
+        for (const p of candidates) {
+          const c = BimSpaces.conv(p.value, lengthUnit(p.context), 'len');
+          if (c.ok && c.v > 0) {
+            if (failures.length) notes.push(`${name}: исходный параметр не прочитан с известными единицами; использовано значение ${p.source} с его единицами`);
+            return c.v;
+          }
+          failures.push(c.warn || 'нужен положительный размер');
+        }
+        notes.push(`${name}: ${[...new Set(failures)].join('; ')}; параметр не используется`);
+        return null;
       };
       const dIn = read('Diameter_Inside'), dBot = read('Diameter_Bottom');
       if ((!dIn || !dBot) && (bulkFailed || rawFailed)) notes.push('Не удалось полностью прочитать параметры шахты; отсутствие размеров в модели не подтверждено.');

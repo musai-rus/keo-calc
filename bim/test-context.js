@@ -34,11 +34,13 @@ const html=fs.readFileSync(__dirname+'/test-purpose.html','utf8');
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(x=>x[1]);
 const context=vm.createContext({console:{log(){},error(){}},setTimeout,clearTimeout,setInterval:()=>0,clearInterval(){},performance,assert});
 context.window=context;
-context.document={querySelector:()=>({}),getElementById:()=>null,body:{contains:()=>true}};
+const statusElement={textContent:''};
+context.document={querySelector:()=>({}),getElementById:id=>id==='kb-status'?statusElement:null,body:{contains:()=>true}};
+context.statusElement=statusElement;
 const storage=new Map();context.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
 vm.runInContext(scripts[0],context);
 let bundle=fs.readFileSync(__dirname+'/keo-bim.js','utf8');
-bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {} }; }; draw = () => {}; renderList = () => {};\n  return { _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _bindSettings: bindSettings, run, st: () => st, S,');
+bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {} }; }; draw = () => {}; renderList = () => {};\n  return { _exportJSON: exportJSON, _roomDiagnosticData: roomDiagnosticData, _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _bindSettings: bindSettings, run, st: () => st, S,');
 vm.runInContext(bundle,context);
 vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
 (async()=>{
@@ -55,6 +57,7 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   assert.equal(JSON.stringify(NOP_VIEWER.getCutPlanes()),JSON.stringify(cuts));
   await KeoBim.run({region:'г. Москва'});
   assert.ok(KeoBim.st().res.every(r=>r.kind==='calc'&&r.C.ok));
+  const roomDiag=KeoBim._roomDiagnosticData();assert.equal(roomDiag.rooms.length,KeoBim.st().rooms.length);assert.equal(Object.values(roomDiag.counts.placement).reduce((a,b)=>a+b,0),roomDiag.rooms.length);assert.deepEqual(Object.keys(roomDiag.unplacedReasons),[]);
   const result=()=>JSON.stringify(KeoBim.st().res.map(r=>({key:r.key,e:r.comb?.eAvgR??r.C?.res?.eFinal,side:r.comb?.eSide,top:r.comb?.eTop})));
   const initial=result();
   assert.equal(KeoBim.st().res[0].st.groupManual,false);
@@ -82,6 +85,7 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   const controls={querySelectorAll:()=>[regionInput,groupInput],querySelector:s=>s.includes('region')?regionInput:s.includes('group')?groupInput:rerun};
   KeoBim._bindSettings(controls);
   regionInput.value='Краснодарский край';regionInput.onchange();assert.equal(KeoBim.S.group,5);assert.equal(KeoBim.st().res[0].st.groupManual,false);
+  assert.ok(statusElement.textContent.includes('рассчитано пространств — '+KeoBim.st().res.filter(r=>r.kind==='calc').length));
   groupInput.value='2';groupInput.onchange();assert.equal(KeoBim.S.region,'');assert.equal(KeoBim.st().res[0].st.group,2);
   groupInput.value='2.5';groupInput.onchange();assert.ok(KeoBim.st().res.every(r=>r.kind==='err'));
   groupInput.value='1';groupInput.onchange();assert.ok(KeoBim.st().res.every(r=>r.C.ok));
@@ -95,9 +99,10 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   await KeoBim.run();assert.equal(KeoBim.st().north.unknown,true);assert.equal(KeoBim.st().north.rot,0);Autodesk.Viewing.Document.getAecModelData=getAec;
   const northInput={dataset:{s:'northDeg'},value:'oops',type:'text'}, other={dataset:{s:'rho'},value:'.2',type:'number'};
   KeoBim._bindSettings({querySelectorAll:()=>[northInput,other],querySelector:()=>({})});northInput.onchange();assert.equal(KeoBim.st().res.length,0);
-  await KeoBim.setBuildingGroup('');assert.equal(KeoBim.st().res.length,0);
-  northInput.value='0';northInput.onchange();assert.ok(KeoBim.st().res.every(r=>r.C.ok));
+  await assert.rejects(()=>KeoBim.setBuildingGroup(''),/полный пересчёт/);assert.equal(KeoBim.st().res.length,0);
+  await KeoBim.run({northDeg:'0'});assert.ok(KeoBim.st().res.every(r=>r.C.ok));
   assert.throws(()=>KeoBim._exportOne({}),/Результат устарел/);
+  const setCuts=NOP_VIEWER.setCutPlanes;NOP_VIEWER.setCutPlanes(cuts);NOP_VIEWER.setCutPlanes=p=>{if(!p.length)setCuts(p)};regionInput.value='Краснодарский край';regionInput.onchange();assert.equal(KeoBim.st().res.length,0);assert.ok(/восстановить/.test(statusElement.textContent));assert.equal(KeoBim.st().dirty,true);assert.equal(KeoBim._roomDiagnosticData().available,false);assert.deepEqual(KeoBim._roomDiagnosticData().unplacedReasons,{});assert.throws(()=>KeoBim._exportDec(),/полный пересчёт/);assert.throws(()=>KeoBim._exportJSON(),/полный пересчёт/);NOP_VIEWER.setCutPlanes=setCuts;setCuts(cuts);await KeoBim.run({region:'г. Москва'});groupInput.value='1';groupInput.onchange();
   const normKey=KeoBim.st().res[0].key;KeoBim.st().normOv[normKey]='obsolete-id';await KeoBim.setBuildingGroup('');assert.equal(KeoBim.st().res.length,0);
   delete KeoBim.st().normOv[normKey];await KeoBim.run();assert.ok(KeoBim.st().res.every(r=>r.C.ok));
   other.onchange();assert.equal(KeoBim.st().res.length,0);assert.equal(KeoBim.st().dirty,true);assert.throws(()=>KeoBim.decide('split',['synthetic']),/полный пересчёт/);
