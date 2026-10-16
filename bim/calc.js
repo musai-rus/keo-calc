@@ -329,6 +329,10 @@ const BimCalc = (function () {
       notes.push(err); return { err, notes, pts: P, frame: fr };
     }
     const Ct = env.KEO.compute(st);
+    if (!Ct.ok) {
+      const err = (Ct.err || []).join('; ') || 'Ядро отклонило расчёт верхнего или комбинированного КЕО.';
+      notes.push(err); return { err, notes, pts: P, frame: fr };
+    }
     // вклад каждого фонаря в eв по точкам: прямая составляющая coef·q·cos^m·τ0·MF·CN (Б.3) + доля отражённой sотр пропорционально его εв
     const lanContrib = [];
     if (Ct.ok) Ct.res.types.forEach((T, ti) => {
@@ -341,7 +345,6 @@ const BimCalc = (function () {
     if (mode === 'top') return { mode, row, st, C: Ct, A: P[Math.floor(P.length / 2)], pts: P, frame: fr, notes, lanContrib };
 
     // комбинированное (Б.4): e = eв + eб в каждой точке; eб — боковое освещение в той же точке через видимые участки окон
-    if (!Ct.ok) return { mode, row, st, C: Ct, err: (Ct.err || []).join('; '), notes };
     const sideAt = P.map(A => {
       const walls = sideWalls(F, A, env, pts, [], true, 'center');
       if (!walls.length) return { e: 0, walls: [] };

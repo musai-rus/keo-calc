@@ -7,6 +7,14 @@ let count=0;const test=(name,fn)=>{fn();count++;console.log('PASS '+name)};
 const blocked=(r,pattern)=>{assert.match(r.err,pattern);assert.ok(r.notes.some(n=>n===r.err));for(const k of ['C','comb','st','pass','e','eAvgR'])assert.equal(r[k],undefined,k+' must not contain a result');};
 test('one lantern retains a numeric result',()=>{const r=Cc.space(SPC,[],[lantern(1,4)],env());assert.equal(r.C.ok,true);assert.equal(r.st.top.H,4);assert.ok(r.C.res.e.every(Number.isFinite));});
 test('equal heights preserve results in either order',()=>{const a=lantern(1,4),b=lantern(2,4,9.5),r=Cc.space(SPC,[],[a,b],env()),rev=Cc.space(SPC,[],[b,a],env());assert.equal(r.C.ok,true);assert.deepEqual(r.C.res.e,rev.C.res.e);assert.equal(r.st.top.H,4);});
+for(const mode of ['top','comb'])test(mode+' exposes core rejection of an unjustified short section as a BIM error',()=>{
+ const pts=[[0,0],[3,0],[0,3],[3,3]],r=Cc.space(SPC,mode==='comb'?[win(10,1.5,1.5)]:[],[lantern(1,4,1.5,1.5)],env({pts,containsPoint:()=>true}));
+ blocked(r,/При L ≤ 4 м/);
+});
+for(const mode of ['top','comb'])test(mode+' exposes any core rejection without exportable state',()=>{
+ const e=env(),r=Cc.space(SPC,mode==='comb'?[win(10,3,1.5)]:[],[lantern(1,4)],{...e,KEO:{...e.KEO,compute:()=>({ok:false,err:['Synthetic core rejection']})}});
+ blocked(r,/Synthetic core rejection/);
+});
 for(const mode of ['top','comb'])for(const reverse of [false,true])test(mode+' rejects 4/8 m, reverse='+reverse,()=>{let ls=[lantern(41,4),lantern(82,8,9.5)];if(reverse)ls.reverse();const r=Cc.space(SPC,mode==='comb'?[win(10,3,1.5)]:[],ls,env());blocked(r,/разными высотами/);assert.match(r.err,/ID 41: H=4 м/);assert.match(r.err,/ID 82: H=8 м/);});
 test('range is checked between every pair, including a middle first height',()=>{blocked(Cc.space(SPC,[],[lantern(1,4),lantern(2,4-.75e-6,6),lantern(3,4+.75e-6,9.5)],env()),/разными высотами/);});
 test('numeric height noise within 1e-6 m is accepted',()=>{assert.equal(Cc.space(SPC,[],[lantern(1,4),lantern(2,4+.5e-6,9.5)],env()).C.ok,true);});
