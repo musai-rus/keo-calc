@@ -67,7 +67,29 @@ await vm.runInContext(`(async()=>{
  // A manually edited persisted record with no explanation is never a numeric result.
  const persisted=JSON.parse(localStorage.getItem('keo-bim:decisions:short:two'));persisted.shortSections.room1.params.nPtsBasis='';localStorage.setItem('keo-bim:decisions:short:two',JSON.stringify(persisted));
  reloadApp();await KeoBim.run(opts);assert.equal(second().st,undefined);assert.match(second().err,/обоснование/);KeoBim._json();assert.equal(downloaded.spaces.length,0);assert.equal(downloaded.calculationErrors.length,2);
+ // Actual app wires raw physical slice segments into the source certificate.
+ for(const angle of [0,Math.PI/6,Math.PI/4,-Math.PI/4]){
+  const world=([x,y])=>[.013+x*Math.cos(angle)-y*Math.sin(angle),.017+x*Math.sin(angle)+y*Math.cos(angle)];
+  const points=[[0,0],[3.6,0],[3.6,2.4],[0,2.4]].map(world);
+  Object.assign(KeoBimLib.BimGeom,{
+   rooms:async()=>[{id:1,key:'rotated',eid:'rotated',level:'L01',name:'Раздевальная',num:'synthetic',area:8.64,per:12,h:3.6,warn:[]}],
+   slice:(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:points.map((p,j)=>[...p,...points[(j+1)%4]]),
+   openings:()=>[{id:200,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:world([1.8,1.2]),t:[Math.cos(angle),Math.sin(angle)],n:[-Math.sin(angle),Math.cos(angle)],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}]
+  });
+  NOP_VIEWER.model=model('short:rotated:'+angle);await KeoBim.run(opts);
+  // Existing raster perimeter matching rejects this known synthetic Room at ±45°.
+  // Exercise the public explicit assignment, without changing matcher tolerances.
+  if(KeoBim.st().res.find(r=>r.key==='rotated')?.kind==='nogeo')KeoBim.decide('assign',['rotated'],'L01',world([1.8,1.2]));
+  const r=KeoBim.st().res.find(r=>r.key==='rotated');assert.ok(r);assert.ok(r.sectionContext);assert.equal(r.sectionContext.error,'');assert.equal(r.sectionContext.source.kind,'slice-segments');
+  KeoBim.setShortSection('rotated',p);const calculated=KeoBim.st().res.find(r=>r.key==='rotated');assert.equal(calculated.C.ok,true);assert.equal(calculated.st.top.L,3.6);assert.equal(calculated.section.geometrySource,'slice-segments');
+  KeoBim._json();assert.equal(downloaded.spaces[0].section.geometrySource,'slice-segments');
+  const oldSignature=KeoBim.st().sections.rotated.signature;
+  const notch=[[0,0],[3.6,0],[3.6,2.4],[1.55,2.4],[1.55,2.399],[1.45,2.399],[1.45,2.4],[0,2.4]].map(world);
+  KeoBimLib.BimGeom.slice=(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:notch.map((p,j)=>[...p,...notch[(j+1)%notch.length]]);
+  await KeoBim.run(opts);const changed=KeoBim.st().res.find(r=>r.key==='rotated');assert.equal(changed.section.mode,'stale');assert.equal(changed.st,undefined);assert.equal(KeoBim.st().sections.rotated.signature,oldSignature);
+  KeoBim._json();assert.equal(downloaded.spaces.length,0);assert.equal(downloaded.calculationErrors[0].section.mode,'stale');
+ }
  KeoBim.destroy();
 })()`,context);
-console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis');
+console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis, physical source wiring at 0/30/±45 degrees (explicit synthetic Room assignment where needed), subcell notch invalidation');
 })().catch(e=>{console.error(e);process.exitCode=1});

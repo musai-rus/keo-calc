@@ -149,17 +149,19 @@ const BimGeom = (function () {
     segs.forEach(s => { minx = Math.min(minx, s[0], s[2]); maxx = Math.max(maxx, s[0], s[2]); miny = Math.min(miny, s[1], s[3]); maxy = Math.max(maxy, s[1], s[3]); });
     return [minx - 2, miny - 2, maxx + 2, maxy + 2];
   }
-  // bx — общие границы, чтобы растры R и Rp совпадали поклеточно
-  function raster(segs, cell, bx) {
-    const [minx, miny, maxx, maxy] = bx || bounds(segs);
-    const W = Math.ceil((maxx - minx) / cell), H = Math.ceil((maxy - miny) / cell);
-    const occ = new Uint8Array(W * H);
-    const put = (i, j) => { if (i >= 0 && j >= 0 && i < W && j < H) occ[j * W + i] = 1; };
+  function paintSegments(segs, cell, minx, miny, put) {
     segs.forEach(s => {
       const x0 = (s[0] - minx) / cell, y0 = (s[1] - miny) / cell, x1 = (s[2] - minx) / cell, y1 = (s[3] - miny) / cell;
       const n = Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) * 2) + 1;
       for (let k = 0; k <= n; k++) { const t = k / n, x = x0 + t * (x1 - x0), y = y0 + t * (y1 - y0), i = Math.floor(x), j = Math.floor(y); put(i, j); put(Math.floor(x + 0.3), j); put(i, Math.floor(y + 0.3)); }
     });
+  }
+  // bx — общие границы, чтобы растры R и Rp совпадали поклеточно
+  function raster(segs, cell, bx) {
+    const [minx, miny, maxx, maxy] = bx || bounds(segs);
+    const W = Math.ceil((maxx - minx) / cell), H = Math.ceil((maxy - miny) / cell);
+    const occ = new Uint8Array(W * H);
+    paintSegments(segs, cell, minx, miny, (i,j) => { if (i >= 0 && j >= 0 && i < W && j < H) occ[j * W + i] = 1; });
     const lab = new Int32Array(W * H), q = new Int32Array(W * H), regs = [null];
     for (let s0 = 0; s0 < W * H; s0++) {
       if (occ[s0] || lab[s0]) continue;
@@ -464,6 +466,6 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { withFullModel, ctx, catalog, rooms, location, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
+  return { withFullModel, ctx, catalog, rooms, location, eachGeom, slice, bounds, paintSegments, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
 })();
 

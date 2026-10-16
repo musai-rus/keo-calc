@@ -2192,17 +2192,19 @@ const BimGeom = (function () {
     segs.forEach(s => { minx = Math.min(minx, s[0], s[2]); maxx = Math.max(maxx, s[0], s[2]); miny = Math.min(miny, s[1], s[3]); maxy = Math.max(maxy, s[1], s[3]); });
     return [minx - 2, miny - 2, maxx + 2, maxy + 2];
   }
-  // bx — общие границы, чтобы растры R и Rp совпадали поклеточно
-  function raster(segs, cell, bx) {
-    const [minx, miny, maxx, maxy] = bx || bounds(segs);
-    const W = Math.ceil((maxx - minx) / cell), H = Math.ceil((maxy - miny) / cell);
-    const occ = new Uint8Array(W * H);
-    const put = (i, j) => { if (i >= 0 && j >= 0 && i < W && j < H) occ[j * W + i] = 1; };
+  function paintSegments(segs, cell, minx, miny, put) {
     segs.forEach(s => {
       const x0 = (s[0] - minx) / cell, y0 = (s[1] - miny) / cell, x1 = (s[2] - minx) / cell, y1 = (s[3] - miny) / cell;
       const n = Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) * 2) + 1;
       for (let k = 0; k <= n; k++) { const t = k / n, x = x0 + t * (x1 - x0), y = y0 + t * (y1 - y0), i = Math.floor(x), j = Math.floor(y); put(i, j); put(Math.floor(x + 0.3), j); put(i, Math.floor(y + 0.3)); }
     });
+  }
+  // bx — общие границы, чтобы растры R и Rp совпадали поклеточно
+  function raster(segs, cell, bx) {
+    const [minx, miny, maxx, maxy] = bx || bounds(segs);
+    const W = Math.ceil((maxx - minx) / cell), H = Math.ceil((maxy - miny) / cell);
+    const occ = new Uint8Array(W * H);
+    paintSegments(segs, cell, minx, miny, (i,j) => { if (i >= 0 && j >= 0 && i < W && j < H) occ[j * W + i] = 1; });
     const lab = new Int32Array(W * H), q = new Int32Array(W * H), regs = [null];
     for (let s0 = 0; s0 < W * H; s0++) {
       if (occ[s0] || lab[s0]) continue;
@@ -2507,7 +2509,7 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { withFullModel, ctx, catalog, rooms, location, eachGeom, slice, bounds, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
+  return { withFullModel, ctx, catalog, rooms, location, eachGeom, slice, bounds, paintSegments, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
 })();
 
 /* КЕО по модели: из геометрии помещения и его проёмов — исходные данные калькулятора (то же состояние, что вводится вручную),
@@ -2818,7 +2820,7 @@ const BimCalc = (function () {
 
     // верхний свет (Б.3) — фонари в системе координат главных осей пространства
     const choice = env.shortSection ? BimSections.resolve(env.shortSection.context, env.shortSection.record, env.KEO) : null;
-    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors, lengthRange: env.shortSection.context.lengthRange } : undefined;
+    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors, lengthRange: env.shortSection.context.lengthRange, geometrySource: env.shortSection.context.source?.kind || 'raster' } : undefined;
     if (env.shortSection?.pending || choice?.errors.length) {
       const err = env.shortSection.pending ? 'Ручной разрез ещё не применён. Примените проверенные параметры или верните авто.' : choice.errors.join(' ');
       notes.push(err); return { err, notes, section: env.shortSection.pending ? { mode: 'draft', params: env.shortSection.pending, errors: [err] } : section };
@@ -2906,6 +2908,73 @@ const BimCalc = (function () {
 
   return { climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();
+/* Research: source boundaries certify a rectangle; raster cells are never filled. */
+const BimRectangles = (function () {
+  const finite=Number.isFinite;
+  const normalized=s=>s[0]<s[2]||s[0]===s[2]&&s[1]<=s[3]?s.slice():[s[2],s[3],s[0],s[1]];
+  const sorted=ss=>ss.map(normalized).sort((a,b)=>{for(let k=0;k<4;k++)if(a[k]!==b[k])return a[k]-b[k];return 0});
+  function certify({segments,runs,grid,containsPoint,paintSegments}) {
+    const fail=error=>({error,frame:null});
+    if(!Array.isArray(segments)||!segments.length||segments.some(s=>!Array.isArray(s)||s.length!==4||!s.every(finite))||!Array.isArray(runs)||!runs.length||!grid||typeof containsPoint!=='function'||typeof paintSegments!=='function') return fail('Нет исходных отрезков для подтверждения прямоугольника.');
+    const {cell,minx,miny,W,H}=grid;
+    if(![cell,minx,miny,W,H].every(finite)||!(cell>0)) return fail('Нет согласованной сетки исходного среза.');
+    const centers=runs.flatMap(q=>[[q[0]+cell/2,q[2]+cell/2],[q[1]-cell/2,q[2]+cell/2],[q[1]-cell/2,q[3]-cell/2],[q[0]+cell/2,q[3]-cell/2]]);
+    const xs=centers.map(p=>p[0]),ys=centers.map(p=>p[1]),bb=[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)];
+    // Search radius only selects source segments. It does not allow gaps,
+    // erase obstacles, or change a Room matching tolerance.
+    const search=4*cell,eps=128*Number.EPSILON*Math.max(1,...bb.map(Math.abs));
+    const ss=sorted(segments.filter(s=>Math.max(s[0],s[2])>=bb[0]-search&&Math.min(s[0],s[2])<=bb[2]+search&&Math.max(s[1],s[3])>=bb[1]-search&&Math.min(s[1],s[3])<=bb[3]+search));
+    const angles=[];
+    for(const s of ss)if(Math.hypot(s[2]-s[0],s[3]-s[1])>eps){const a=((Math.atan2(s[3]-s[1],s[2]-s[0])+Math.PI/4)%(Math.PI/2)+Math.PI/2)%(Math.PI/2)-Math.PI/4;if(!angles.some(b=>Math.abs(a-b)<eps))angles.push(a)}
+    angles.sort((a,b)=>a-b);
+    const accepted=[];
+    for(const angle of angles) {
+      const u=[Math.cos(angle),Math.sin(angle)],v=[-u[1],u[0]],local=p=>[p[0]*u[0]+p[1]*u[1],p[0]*v[0]+p[1]*v[1]],world=p=>[p[0]*u[0]+p[1]*v[0],p[0]*u[1]+p[1]*v[1]];
+      const cs=centers.map(local),lo=[Math.min(...cs.map(p=>p[0])),Math.min(...cs.map(p=>p[1]))],hi=[Math.max(...cs.map(p=>p[0])),Math.max(...cs.map(p=>p[1]))];
+      const lines=ss.map(s=>[local(s.slice(0,2)),local(s.slice(2))]);
+      const planes=[[],[]];for(const [a,b]of lines)for(let k=0;k<2;k++)if(Math.abs(a[k]-b[k])<=eps&&Math.abs(a[1-k]-b[1-k])>eps)planes[k].push((a[k]+b[k])/2);
+      const low=planes.map((ps,k)=>Math.max(-Infinity,...ps.filter(x=>x<lo[k]))),high=planes.map((ps,k)=>Math.min(Infinity,...ps.filter(x=>x>hi[k])));
+      if(!low.concat(high).every(finite)||low.some((x,k)=>!(high[k]>x)))continue;
+      const corners=[[low[0],low[1]],[high[0],low[1]],[high[0],high[1]],[low[0],high[1]]].map(world);
+      if(corners.some(p=>p[0]<bb[0]-search||p[0]>bb[2]+search||p[1]<bb[1]-search||p[1]>bb[3]+search))continue;
+      const sides=[[],[],[],[]];let obstacle=false;
+      const relevant=[];
+      for(let j=0;j<lines.length;j++) {
+        const [a,b]=lines[j];let t0=0,t1=1;
+        for(let k=0;k<2;k++){const d=b[k]-a[k];if(Math.abs(d)<=eps){if(a[k]<low[k]-eps||a[k]>high[k]+eps){t0=1;t1=0;break}}else{const p=(low[k]-a[k])/d,q=(high[k]-a[k])/d;t0=Math.max(t0,Math.min(p,q));t1=Math.min(t1,Math.max(p,q))}}
+        if(t1<t0)continue;
+        const p=a.map((x,k)=>x+(b[k]-x)*t0),q=a.map((x,k)=>x+(b[k]-x)*t1);
+        const on=[];for(let k=0;k<2;k++)for(let side=0;side<2;side++){const pos=side?high[k]:low[k];if(Math.abs(p[k]-pos)<=eps&&Math.abs(q[k]-pos)<=eps)on.push(k*2+side)}
+        if(!on.length){obstacle=true;break}
+        if(Math.hypot(p[0]-q[0],p[1]-q[1])>eps){for(const side of on){const k=1-Math.floor(side/2);sides[side].push([Math.min(p[k],q[k]),Math.max(p[k],q[k])])}relevant.push(ss[j])}
+      }
+      if(obstacle)continue;
+      const covered=sides.every((ivs,side)=>{const k=1-Math.floor(side/2);let end=low[k];for(const [a,b]of ivs.sort((a,b)=>a[0]-b[0])){if(a>end+eps)return false;end=Math.max(end,b)}return end>=high[k]-eps});
+      if(!covered)continue;
+      const bx=corners.map(p=>p[0]),by=corners.map(p=>p[1]);
+      const i0=Math.floor((Math.min(...bx)-minx)/cell)-1,i1=Math.ceil((Math.max(...bx)-minx)/cell)+1,j0=Math.floor((Math.min(...by)-miny)/cell)-1,j1=Math.ceil((Math.max(...by)-miny)/cell)+1;
+      if(i0<0||j0<0||i1>=W||j1>=H)continue;
+      // Preserve original segment subdivision and G.raster's exact sampling.
+      // All source segments participate, including nearby outer wall skins.
+      const blocked=new Set();
+      paintSegments(segments,cell,minx,miny,(i,j)=>{if(i>=i0&&i<=i1&&j>=j0&&j<=j1)blocked.add(i+','+j)});
+      let equal=true;
+      for(let j=j0;j<=j1&&equal;j++)for(let i=i0;i<=i1;i++){const p=[minx+(i+.5)*cell,miny+(j+.5)*cell],q=local(p),expected=q.every((x,k)=>x>low[k]&&x<high[k])&&!blocked.has(i+','+j);if(expected!==containsPoint(p)){equal=false;break}}
+      if(!equal)continue;
+      let U=u,V=v,x0=low[0],y0=low[1],L=high[0]-low[0],B=high[1]-low[1];
+      if(B>L){[U,V]=[V,[-U[0],-U[1]]];[x0,y0]=[low[1],-high[0]];[L,B]=[B,L]}
+      if(U[0]<0){U=U.map(x=>-x);V=V.map(x=>-x);x0=-x0-L;y0=-y0-B}
+      const O=[U[0]*x0+V[0]*y0,U[1]*x0+V[1]*y0];
+      const frame={O,u:U,v:V,L,B,toLocal:p=>[(p[0]-O[0])*U[0]+(p[1]-O[1])*U[1],(p[0]-O[0])*V[0]+(p[1]-O[1])*V[1]],toWorld:p=>[O[0]+p[0]*U[0]+p[1]*V[0],O[1]+p[0]*U[1]+p[1]*V[1]]};
+      accepted.push({frame,source:{kind:'slice-segments',segments:sorted(relevant),precision:eps},lengthRange:{min:L-8*eps,max:L+8*eps,radius:8*eps}});
+    }
+    if(!accepted.length)return fail('Исходные границы не подтверждают прямоугольник без внутренних препятствий с той же полной маской.');
+    const first=accepted[0];
+    if(accepted.some(c=>Math.abs(c.frame.L-first.frame.L)>8*eps||Math.abs(c.frame.B-first.frame.B)>8*eps||Math.hypot(c.frame.O[0]-first.frame.O[0],c.frame.O[1]-first.frame.O[1])>8*eps))return fail('Исходные границы дают неоднозначную прямоугольную схему.');
+    return {...first,error:''};
+  }
+  return {certify};
+})();
 /* Explicit short rectangular sections. No normative defaults or room matching. */
 const BimSections = (function () {
   const VERSION = 1;
@@ -2957,25 +3026,29 @@ const BimSections = (function () {
     return {min:Math.sqrt(Math.max(0,diameter**2-(width+2*radius)**2)),max:Math.sqrt((diameter+2*radius)**2-width**2),radius};
   }
   // Exact serialization is intentional: no digest collisions or area-only reuse.
-  function context({scope,runs,cell,cut,grid,containsPoint,openings=[],lanterns=[]}) {
+  function context({scope,runs,cell,cut,grid,containsPoint,openings=[],lanterns=[],boundarySegments,paintSegments}) {
     const sorted=(runs||[]).map(q=>q.slice()).sort((a,b)=>a[2]-b[2]||a[0]-b[0]||a[3]-b[3]||a[1]-b[1]);
     const clean=sorted.length && sorted.every(q=>q.length===4 && q.every(finite) && q[1]>q[0] && q[3]>q[2]);
-    const frame=clean?rectangle(sorted):null;
+    const exact=boundarySegments!==undefined && grid && clean ? BimRectangles.certify({segments:boundarySegments,runs:sorted,grid,containsPoint,paintSegments}) : null;
+    const frame=exact?.frame || (clean?rectangle(sorted):null);
     const snapshot = xs => xs.map(o=>Object.fromEntries(['id','c','t','n','nin','w','d','z0','z1','av','bv','dTop','dBot','H','hsf','tilt','round','shaded'].map(k=>[k,o[k]]))).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
-    const signature=JSON.stringify({v:VERSION,scope,cell,cut,runs:sorted,openings:snapshot(openings),lanterns:snapshot(lanterns)});
-    let error='',lengthRange=null;
+    const signature=JSON.stringify({v:VERSION,scope,cell,cut,runs:sorted,openings:snapshot(openings),lanterns:snapshot(lanterns),rectangleSource:exact?.source});
+    let error='',lengthRange=exact?.lengthRange||null;
     if(!scope || !scope.model || !scope.view || !scope.version) error='Нет устойчивой идентичности версии модели: ручной разрез не сохраняется.';
     else if(!frame || !finite(cell) || cell<=0 || !grid || ![grid.minx,grid.miny,grid.W,grid.H].every(finite) || typeof containsPoint!=='function') error='Нет полной маски пространства для проверки прямоугольной схемы.';
+    else if(exact?.error) error=exact.error;
     else {
       // Only the raster boundary band is uncertain (one cell diagonal).
       // Every deeper cell must belong to this space: holes/notches are not filled.
       const margin=Math.SQRT2*cell;
       const centers=convexHull(sorted.flatMap(q=>[[q[0]+cell/2,q[2]+cell/2],[q[1]-cell/2,q[2]+cell/2],[q[1]-cell/2,q[3]-cell/2],[q[0]+cell/2,q[3]-cell/2]]));
-      lengthRange=lengthBounds(centers,cell);
+      if(!exact?.frame) lengthRange=lengthBounds(centers,cell);
       const xs=sorted.flatMap(q=>[q[0],q[1]]),ys=sorted.flatMap(q=>[q[2],q[3]]);
       const x0=Math.max(0,Math.floor((Math.min(...xs)-grid.minx)/cell)),x1=Math.min(grid.W-1,Math.ceil((Math.max(...xs)-grid.minx)/cell));
       const y0=Math.max(0,Math.floor((Math.min(...ys)-grid.miny)/cell)),y1=Math.min(grid.H-1,Math.ceil((Math.max(...ys)-grid.miny)/cell));
-      for(let y=y0;y<=y1 && !error;y++) for(let x=x0;x<=x1;x++) {
+      // Source certification already proved four covered sides, no interior
+      // source obstacle, and exact raster equality. No mask cells are changed.
+      for(let y=y0;y<=y1 && !error && !exact?.frame;y++) for(let x=x0;x<=x1;x++) {
         const p=[grid.minx+(x+.5)*cell,grid.miny+(y+.5)*cell],q=frame.toLocal(p);
         // Missing cells inside the filled-center hull are real concavities or
         // holes, even in the raster boundary band. Never bridge them.
@@ -2985,7 +3058,7 @@ const BimSections = (function () {
       if(!error && !(+frame.L.toFixed(2)>2 && frame.L<=4+1e-9)) error=+frame.L.toFixed(2)<=2?'L ≤ 2 м: нужна отдельная схема расчёта.':'Ручная настройка доступна только для коротких прямоугольных разрезов 2 < L ≤ 4 м.';
       if(!error && (!lengthRange || !(lengthRange.min>2 && lengthRange.max<=4))) error='Растр не подтверждает, что весь диапазон возможной длины лежит в 2 < L ≤ 4 м. Нужны точные границы или отдельная схема расчёта.';
     }
-    return {scope,signature,frame,runs:sorted,cell,containsPoint,error,lengthRange};
+    return {scope,signature,frame,runs:sorted,cell,containsPoint,error,lengthRange,source:exact?.source};
   }
   function validateRecords(records) {
     if(!records || typeof records!=='object' || Array.isArray(records)) throw Error('Неверный формат ручных разрезов.');
@@ -3004,7 +3077,10 @@ const BimSections = (function () {
     if(!finite(params?.y0) || params.y0<=Math.SQRT2*ctx.cell || params.y0>=fr.B-Math.SQRT2*ctx.cell) errors.push('Разрез должен проходить внутри помещения, вне полосы погрешности границы растра.');
     const points=finite(params?.y0)?KEO.topPoints(st).filter(p=>finite(p.x)&&finite(p.y)).map(p=>fr.toWorld([p.x,p.y])):[];
     if(typeof ctx.containsPoint==='function' && points.some(p=>!ctx.containsPoint(p))) errors.push('Расчётная точка вне полной маски пространства.');
-    if(!errors.length) for(let x=Math.SQRT2*ctx.cell;x<fr.L-Math.SQRT2*ctx.cell;x+=ctx.cell/2) if(!ctx.containsPoint(fr.toWorld([x,params.y0]))) {errors.push('Разрез пересекает разрыв или стену внутри пространства.');break;}
+    // An exact source certificate already excludes every interior barrier
+    // and checks the whole raster, including holes. Boundary raster cells
+    // deliberately removed by G.raster are not physical gaps in that case.
+    if(!errors.length && !ctx.source) for(let x=Math.SQRT2*ctx.cell;x<fr.L-Math.SQRT2*ctx.cell;x+=ctx.cell/2) if(!ctx.containsPoint(fr.toWorld([x,params.y0]))) {errors.push('Разрез пересекает разрыв или стену внутри пространства.');break;}
     return {errors:[...new Set(errors)],points,stateTop:st.top};
   }
   function resolve(ctx,record,KEO) {
@@ -3015,7 +3091,8 @@ const BimSections = (function () {
   }
   function record(ctx,params,KEO) {
     const p=preview(ctx,params,KEO);if(p.errors.length) throw Error(p.errors.join(' '));
-    return {v:VERSION,scope:ctx.scope,signature:ctx.signature,params:{...params,nPtsBasis:params.nPtsBasis.trim()}};
+    const r={v:VERSION,scope:ctx.scope,signature:ctx.signature,params:{...params,nPtsBasis:params.nPtsBasis.trim()}};
+    validateRecords({record:r});return r;
   }
   return {context,preview,resolve,record,validateRecords};
 })();
@@ -3125,7 +3202,8 @@ const KeoBim = (function () {
       const segsP = G.slice(C, cat, bcats, z), segsL = G.slice(C, cat, ['Revit <Room Separation>'], z, [L.floor, 0.6]), segsD = G.doorBoxes(C, cat, z);
       const bx = G.bounds(segsP.concat(segsL));
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
-      L.Rp = G.raster(segsP.concat(segsD), S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
+      L.boundarySegments=segsP.concat(segsD);
+      L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
       SP.matchRooms(L.R, L.rooms);
       G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
       compose(L);
@@ -3254,7 +3332,7 @@ const KeoBim = (function () {
       if (lsCalc.some(l => !l.shaded)) {
         const node = C.m.getDocumentNode();
         const scope = { model: modelKey(), version: node?.getRootNode()?.urn?.() || null, view: node?.data?.guid || null, level: L.name, floor: L.floor, rooms: sp.rooms.map(r=>String(r.eid || r.key)).sort() };
-        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc });
+        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, paintSegments:G.paintSegments });
         env.shortSection = { context: base.sectionContext, record: st.sections[sp.key], pending: st.sectionDrafts[sp.key] };
       }
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
@@ -3762,6 +3840,7 @@ const KeoBim = (function () {
     const error=[...(state.errors||[]),...(draft?preview.errors:[])];
     let h=`<details class="kb-set" data-short-editor${record||draft||!ctx.error&&r.kind==='err'?' open':''}><summary>Короткий прямоугольный разрез: ${esc(label)}</summary><p class="muted">Схема и размеры в предпросмотре получены по полной маске, шаг ${f2(ctx.cell)} м. L=${f2(ctx.frame?.L)} м, B=${f2(ctx.frame?.B)} м. Маска не подтверждает нормативную применимость отражённой составляющей: прямоугольную схему проверяет пользователь по проекту.</p>`;
     if(ctx.lengthRange) h+=`<p class="muted">Для прямоугольной схемы диапазон L с учётом дискретизации: ${f2(ctx.lengthRange.min,3)}…${f2(ctx.lengthRange.max,3)} м. Весь диапазон должен лежать в 2 &lt; L ≤ 4 м.</p>`;
+    if(ctx.source) h+='<p class="muted">Прямоугольник подтверждён исходными отрезками среза: четыре замкнутые стороны, без внутренних препятствий, растр полностью совпадает с маской пространства. Размеры — по геометрии Viewer.</p>';
     if(ctx.error) h+=`<p class="kb-warn">${esc(ctx.error)}</p>`;
     else h+=`<label>y0 от стены y=0 схемы, м <input data-short="y0" type="number" step="0.01" value="${esc(p.y0)}" style="width:85px"></label><label style="display:block">Число РТ <input data-short="nPts" type="number" min="3" max="101" step="1" value="${p.nPts||''}" style="width:70px"></label><label style="display:block">Обоснование числа РТ для 2 &lt; L ≤ 4 м <textarea data-short="nPtsBasis" maxlength="4000" style="width:100%">${esc(p.nPtsBasis)}</textarea></label><label style="display:block"><input data-short="confirmed" type="checkbox"${p.confirmed?' checked':''}> Подтверждаю прямоугольную схему по проекту</label><p class="muted" data-short-message>Изменения полей — черновик. Предпросмотр не рассчитывает КЕО; для расчёта нажмите «Применить».</p><div class="kb-row"><button class="kb-btn" data-short-action="preview">Предпросмотр</button><button class="kb-btn" data-short-action="apply">Применить</button></div>`;
     if(record||draft) h+='<button class="kb-btn" data-short-action="auto">Вернуть авто</button>';

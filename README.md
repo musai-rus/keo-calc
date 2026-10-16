@@ -59,6 +59,7 @@ node bim/test-calculation-limits.js # отказ при неподдержанн
 node bim/test-lifecycle.js # закрытие/замена панели, обработчики и таймеры Viewer
 node bim/test-sections.js # ручной короткий прямоугольный разрез, маска и инвалидация
 node bim/test-sections-app.js # сохранение/сброс профиля в настоящей оркестрации приложения
+node bim/test-rectangles.js # исходные границы, повёрнутые растры, выемки и отверстия
 node bim/verify-side.js  # независимая проверка бокового света (интегрирование по небу МКО); с bim/verify/1226-L01.json — помещения модели 1226
 node bim/verify-top.js   # границы прямой составляющей верхнего света (пом. 71 модели 1226)
 python3 build.py    # собрать dist/ и docs/index.html
