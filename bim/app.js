@@ -793,7 +793,7 @@ const KeoBim = (function () {
     if (r.mode === 'comb') {
       const c = r.comb;
       return `<h3>Расчётные точки (Б.4: e = eв + eб)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th><th class="num">eб, %</th><th class="num">e, %</th></tr>${c.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(c.eTop[j], 3)}</td><td class="num">${f2(c.eSide[j], 3)}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table>
-        <p class="muted" style="font-size:12px">eср (Б.10) = ${f2(c.eAvgR)} %, eмин = ${f2(c.eMin, 3)} %, равномерность eмин/eср = ${f2(c.uni, 3)} (не менее 1/3, п. 5.6 СП 52) — ${c.uniOk ? 'выполняется' : '<b>не выполняется</b>'}. eб в каждой точке — по формуле Б.1 через видимые из точки участки окон.</p>`;
+        <p class="muted" style="font-size:12px">eср (Б.10) = ${f2(c.eAvgR)} %, eмин = ${f2(c.eMin, 3)} %, равномерность eмин/eср = ${f2(c.uni, 3)} (не менее 1/3, п. 5.13 СП 52) — ${c.uniOk ? 'выполняется' : '<b>не выполняется</b>'}. eб в каждой точке — по формуле Б.1 через видимые из точки участки окон.</p>`;
     }
     if (r.mode === 'top') { const R = r.C.res; return `<h3>Расчётные точки (Б.3)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th></tr>${R.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table><p class="muted" style="font-size:12px">eср (Б.10) = ${f2(R.eAvgR)} %, равномерность eмин/eср = ${f2(R.uni, 3)} (не менее 1/3) — ${r.C.uniOk ? 'выполняется' : '<b>не выполняется</b>'}.</p>`; }
     return '';

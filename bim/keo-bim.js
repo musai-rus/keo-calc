@@ -1006,7 +1006,14 @@ const KEO = (function () {
   function hpOf(st) { const r = room(st); if (st.hpManual !== null && st.hpManual !== '' && !isNaN(st.hpManual)) return +st.hpManual; return r && r.h !== null ? r.h : 0.8; }
   function rtOf(st) {
     if (st.rtManual) return st.rtManual;
-    if (st.mode === 'side' && st.side.walls.length > 1) return 'center';
+    // In this discrete input model an identical known orientation adds no
+    // second direction; splitting one facade must not move the point. Keep
+    // the inherited choice for different/unknown directions. Adjacent walls
+    // remain a separate, unresolved interpretation.
+    if (st.mode === 'side' && st.side.walls.length > 1) {
+      const walls = st.side.walls, orient = walls[0].orient;
+      if (!ORIENTS.includes(orient) || !walls.every(w => w.orient === orient)) return 'center';
+    }
     const r = room(st); return r ? r.rt : 'center';
   }
   function ltAuto(rule, dp) { return rule === 'far1' ? dp - 1 : rule === 'far1.2' ? dp - 1.2 : dp / 2; }
@@ -4103,7 +4110,7 @@ const KeoBim = (function () {
     if (r.mode === 'comb') {
       const c = r.comb;
       return `<h3>Расчётные точки (Б.4: e = eв + eб)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th><th class="num">eб, %</th><th class="num">e, %</th></tr>${c.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(c.eTop[j], 3)}</td><td class="num">${f2(c.eSide[j], 3)}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table>
-        <p class="muted" style="font-size:12px">eср (Б.10) = ${f2(c.eAvgR)} %, eмин = ${f2(c.eMin, 3)} %, равномерность eмин/eср = ${f2(c.uni, 3)} (не менее 1/3, п. 5.6 СП 52) — ${c.uniOk ? 'выполняется' : '<b>не выполняется</b>'}. eб в каждой точке — по формуле Б.1 через видимые из точки участки окон.</p>`;
+        <p class="muted" style="font-size:12px">eср (Б.10) = ${f2(c.eAvgR)} %, eмин = ${f2(c.eMin, 3)} %, равномерность eмин/eср = ${f2(c.uni, 3)} (не менее 1/3, п. 5.13 СП 52) — ${c.uniOk ? 'выполняется' : '<b>не выполняется</b>'}. eб в каждой точке — по формуле Б.1 через видимые из точки участки окон.</p>`;
     }
     if (r.mode === 'top') { const R = r.C.res; return `<h3>Расчётные точки (Б.3)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th></tr>${R.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table><p class="muted" style="font-size:12px">eср (Б.10) = ${f2(R.eAvgR)} %, равномерность eмин/eср = ${f2(R.uni, 3)} (не менее 1/3) — ${r.C.uniOk ? 'выполняется' : '<b>не выполняется</b>'}.</p>`; }
     return '';

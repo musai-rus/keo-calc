@@ -1469,7 +1469,14 @@ const KEO = (function () {
   function hpOf(st) { const r = room(st); if (st.hpManual !== null && st.hpManual !== '' && !isNaN(st.hpManual)) return +st.hpManual; return r && r.h !== null ? r.h : 0.8; }
   function rtOf(st) {
     if (st.rtManual) return st.rtManual;
-    if (st.mode === 'side' && st.side.walls.length > 1) return 'center';
+    // In this discrete input model an identical known orientation adds no
+    // second direction; splitting one facade must not move the point. Keep
+    // the inherited choice for different/unknown directions. Adjacent walls
+    // remain a separate, unresolved interpretation.
+    if (st.mode === 'side' && st.side.walls.length > 1) {
+      const walls = st.side.walls, orient = walls[0].orient;
+      if (!ORIENTS.includes(orient) || !walls.every(w => w.orient === orient)) return 'center';
+    }
     const r = room(st); return r ? r.rt : 'center';
   }
   function ltAuto(rule, dp) { return rule === 'far1' ? dp - 1 : rule === 'far1.2' ? dp - 1.2 : dp / 2; }
