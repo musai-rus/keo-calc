@@ -1,0 +1,95 @@
+<!doctype html><meta charset="utf-8"><title>КЕО: проверка назначения здания</title>
+<style>body{font:14px system-ui;background:#edf1f4;color:#223;margin:20px}#log{max-width:55%;white-space:pre-wrap}#viewer{position:fixed;inset:0;pointer-events:none}#log,.note{position:relative;z-index:10}h1{font-size:20px}</style>
+<h1>Проверка панели на синтетической модели</h1><p class="note">Два уровня, по два помещения с проходом, окна и зенитные фонари. Извлечение из Autodesk и 3D-отрисовка заменены стендом; состав пространств, расчёт, панель и сохранение — код приложения.</p><pre id="log"></pre><div id="viewer"></div>
+<script>
+class Vec { constructor(x=0,y=0,z=0,w=0){Object.assign(this,{x,y,z,w})} set(x,y,z){Object.assign(this,{x,y,z});return this} }
+class Box { constructor(){this.min=new Vec(Infinity,Infinity,Infinity);this.max=new Vec(-Infinity,-Infinity,-Infinity)} expandByPoint(p){for(const k of ['x','y','z']){this.min[k]=Math.min(this.min[k],p[k]);this.max[k]=Math.max(this.max[k],p[k])}return this} getCenter(v){return v.set((this.min.x+this.max.x)/2,(this.min.y+this.max.y)/2,(this.min.z+this.max.z)/2)}getSize(v){return v.set(this.max.x-this.min.x,this.max.y-this.min.y,this.max.z-this.min.z)}expandByScalar(){return this} }
+window.THREE={Vector3:Vec,Vector4:Vec,Box3:Box,Color:class{},BufferGeometry:class{setAttribute(){}},Float32BufferAttribute:class{},Mesh:class{constructor(){this.position=new Vec()}},MeshBasicMaterial:class{},SphereGeometry:class{}};
+window.Autodesk={Viewing:{CAMERA_CHANGE_EVENT:'camera',CUTPLANES_CHANGE_EVENT:'cuts',Document:{getAecModelData:async()=>({refPointTransformation:[1,0,0,0,1],levels:[{name:'L01',elevation:0},{name:'L02',elevation:5}]})}}};
+const makeModel=urn=>({is2d:()=>false,getData:()=>({urn}),getDocumentNode:()=>({getRootNode:()=>({urn:()=>urn})}),getBoundingBox:()=>({min:{x:0,y:0},max:{x:13,y:8}})});
+let cutPlanes=[];
+window.NOP_VIEWER={areAllVisible:()=>true,model:makeModel('test-purpose:A'),container:document.querySelector('#viewer'),getCutPlanes:()=>cutPlanes,setCutPlanes:p=>cutPlanes=p,overlays:{hasScene:()=>false,removeScene(){},addScene(){},addMesh(){}},impl:{invalidate(){}},addEventListener(){},removeEventListener(){},worldToClient:()=>({x:100,y:100}),navigation:{setView(){},setCameraUpVector(){},fitBounds(){}},fitToView(){},clearThemingColors(){},setThemingColor(){}};
+</script>
+<script src="keo-bim.js"></script>
+<script>
+const {BimGeom:G,BimCalc:Cc}=KeoBimLib;
+const group=id=>DATA.rooms.find(r=>r.id===id).g;
+const rooms=()=>[0,5].flatMap((floor,j)=>[['Групповая',48,28],['Спальня',56,30]].map(([name,area,per],i)=>({id:j*10+i+1,key:String(j*10+i+1),eid:String(j*10+i+1),level:'L0'+(j+1),name,num:String(j*10+i+1),area,per,h:3.6,warn:[]})));
+const box=[[0,0,13,0],[13,0,13,8],[13,8,0,8],[0,8,0,0]];
+let sliceCount=0;
+Object.assign(G,{
+ ctx:v=>({v,m:v.model,S:1,GZ:0}),catalog:async()=>({byCat:{},info:{}}),rooms:async()=>rooms(),
+ openings:()=>[0,5].flatMap((floor,j)=>[
+  ...[3,10].map((x,i)=>({id:100+j*10+i,cat:'Revit Windows',c:[x,0],t:[1,0],n:[0,1],w:1.5,d:0.05,z0:floor+0.8,z1:floor+2.6})),
+  {id:200+j,cat:'Revit Windows',roof:true,auto:true,type:'Зенитный фонарь',label:'Зенитный фонарь',c:[10,4],t:[1,0],n:[0,1],av:1.5,bv:1.5,z0:floor+4.2,z1:floor+4.4,tilt:0}
+ ]),
+ heightMap:()=>({}),slice:(c,cat,cats)=>{sliceCount++;return cats[0]==='Revit <Room Separation>'?[[6,0,6,1.2]]:[...box,[6,8,6,1.2]]},doorBoxes:()=>[],
+ markExterior:(c,r)=>r.regs.forEach(x=>x&&x.border&&r.ext.add(x.id)),lanternParams:async()=>({}),
+ hitUpEl:()=>null,hitUp:(c,x,y,z)=>z<5?3.6:8.6,hitDir:()=>null,overhang:()=>0,skyline:()=>[]
+});
+const log=document.querySelector('#log');let total=0;
+function check(name,ok){if(!ok)throw Error(name);total++;log.textContent+='✓ '+name+'\n'}
+const wait=()=>new Promise(r=>setTimeout(r,30));
+async function apply(g){document.querySelector('[data-purpose]').value=g;document.querySelector('[data-a=purpose]').click();while(KeoBim.st().busy)await wait()}
+window.testDone=(async()=>{
+ for(const k of ['test-purpose:A','test-purpose:B','test-purpose:legacy','test-purpose:blocked'])localStorage.removeItem('keo-bim:decisions:'+k);
+ await KeoBim.run();
+ check('Регион не подставляется автоматически',KeoBim.S.group===null&&KeoBim.st().res.every(r=>r.kind==='err'));
+ await KeoBim.run({region:'г. Москва'});
+ check('Автоматический первый прогон: ДОО, два уровня',KeoBim.st().group===group('A57')&&KeoBim.st().res.length===2);
+ check('Есть вычисленные результаты и верхний свет',KeoBim.st().res.every(r=>r.kind==='calc'&&r.C.ok&&r.mode==='comb'&&r.comb.eTop.some(e=>e>0)&&r.comb.eSide.some(e=>e>0)&&r.lans.length===1));
+ check('Вывод и основания видны в панели',document.querySelector('.kb-purpose').textContent.includes('Групповая')&&document.querySelector('.kb-purpose').textContent.includes('Определено автоматически'));
+ const count=sliceCount, original=KeoBim.st().res.map(r=>(r.comb ? r.comb.eAvgR : r.C.res.eFinal));
+ check('Контрольные значения КЕО — конечные числа',original.every(Number.isFinite));
+ await apply(group('A108'));
+ check('Ручной выбор сразу применён ко всем уровням',KeoBim.st().group===group('A108')&&KeoBim.S.bGroup===group('A108')&&KeoBim.st().res.length===4);
+ check('Повторный прогон использует готовые контуры',sliceCount===count);
+ check('Фонари перепривязаны к спальням после разделения пространств',KeoBim.st().res.filter(r=>r.lans.length).every(r=>r.rooms.length===1&&r.rooms[0].name==='Спальня')&&KeoBim.st().res.filter(r=>r.lans.length).length===2);
+ check('Нераспознанное назначение не показано как отсутствие нормы',document.querySelector('#kb-main').textContent.includes('уточните назначение'));
+ const r=KeoBim.st().res.find(r=>r.level==='L02'&&r.rooms[0].name==='Групповая');KeoBim.select(r,false);
+ const select=document.querySelector('[data-norm]');check('Можно уточнить назначение отдельного пространства',!!select);
+ select.value='A113';select.dispatchEvent(new Event('change'));
+ check('Ручная норма помещения участвует в расчёте',KeoBim.st().res.find(x=>x.key===r.key).row.id==='A113');
+ const saved=JSON.parse(localStorage.getItem('keo-bim:decisions:test-purpose:A'));
+ check('Назначение здания сохранено вместе с решениями',saved.bGroup===group('A108')&&saved.normOv[r.key]==='A113');
+ const oldCreate=URL.createObjectURL,oldRevoke=URL.revokeObjectURL,oldClick=HTMLAnchorElement.prototype.click;let exportedBlob;
+ URL.createObjectURL=b=>{exportedBlob=b;return 'blob:test'};URL.revokeObjectURL=()=>{};HTMLAnchorElement.prototype.click=function(){};
+ const blobJSON=()=>new Promise((resolve,reject)=>{const f=new FileReader();f.onload=()=>resolve(JSON.parse(f.result));f.onerror=reject;f.readAsText(exportedBlob)});
+ document.querySelector('[data-a=dexp]').click();const exported=await blobJSON();
+ check('Экспорт решений содержит назначение и идентификатор модели',exported.bGroup===saved.bGroup&&exported.model==='test-purpose:A');
+ document.querySelector('[data-a=json]').click();const all=await blobJSON();
+ check('Полный JSON содержит назначение и основание выбора',all.purpose.source==='manual'&&all.purpose.effective===saved.bGroup&&all.purpose.analysis.total===4);
+ URL.createObjectURL=oldCreate;URL.revokeObjectURL=oldRevoke||(()=>{});HTMLAnchorElement.prototype.click=oldClick;
+ async function importJSON(value){const click=HTMLInputElement.prototype.click;HTMLInputElement.prototype.click=function(){Object.defineProperty(this,'files',{value:[{text:async()=>JSON.stringify(value)}]});this.onchange()};document.querySelector('[data-a=dimp]').click();HTMLInputElement.prototype.click=click;await wait()}
+ await apply('');await importJSON(exported);
+ check('Импорт решений восстанавливает выбор и пересчитывает',KeoBim.st().group===group('A108')&&KeoBim.st().res.length===4);
+ await importJSON({...exported,model:'test-purpose:other',bGroup:group('A1')});
+ check('Файл другой модели не применяет чужое назначение',KeoBim.st().group===group('A108')&&document.querySelector('#kb-status').textContent.includes('другой модели'));
+
+ await KeoBim.run();check('Полный повторный анализ сохраняет ручное назначение',KeoBim.st().group===group('A108'));
+ const reload=async()=>{await new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='keo-bim.js?reload='+Date.now();s.onload=resolve;s.onerror=reject;document.head.appendChild(s)});Object.assign(KeoBimLib.BimGeom,G)};
+ await reload();await KeoBim.run({bGroup:group('A1')});
+ check('Повторный запуск закладки: сохранённый выбор важнее стартового',KeoBim.st().group===group('A108'));
+ NOP_VIEWER.model=makeModel('test-purpose:B');await KeoBim.run();
+ check('Другая модель не наследует ручной выбор и решения',KeoBim.S.bGroup===''&&KeoBim.st().group===group('A57')&&Object.keys(KeoBim.st().normOv).length===0);
+ NOP_VIEWER.model=makeModel('test-purpose:A');await KeoBim.run();
+ check('Возврат к модели восстанавливает её назначение',KeoBim.st().group===group('A108'));
+ await apply('');check('Возврат к авто пересчитывает модель',KeoBim.st().group===group('A57')&&KeoBim.S.bGroup==='');
+ check('При смене здания не теряется ручное уточнение помещения',KeoBim.st().normOv[r.key]==='A113');
+ await reload();await KeoBim.run({bGroup:group('A1')});
+ check('Сохранённое авто имеет приоритет над стартовым типом',KeoBim.S.bGroup===''&&KeoBim.st().group===group('A57'));
+ localStorage.setItem('keo-bim:decisions:test-purpose:legacy',JSON.stringify({merge:[],split:[],normOv:{'1':'A57'}}));
+ NOP_VIEWER.model=makeModel('test-purpose:legacy');await KeoBim.run();
+ check('Старые решения без назначения здания совместимы',KeoBim.st().normOv['1']==='A57'&&KeoBim.st().group===group('A57'));
+ const savedSet=Storage.prototype.setItem;Storage.prototype.setItem=function(){throw Error('blocked')};
+ await apply(group('A108'));
+ check('Ошибка сохранения видна пользователю, текущий выбор работает',KeoBim.st().group===group('A108')&&document.querySelector('.kb-purpose').textContent.includes('Не удалось сохранить'));
+ Storage.prototype.setItem=savedSet;
+ NOP_VIEWER.model=makeModel(null);await KeoBim.run();await apply(group('A1'));
+ check('Без URN решения не попадают в общий ключ страницы',KeoBim.st().storageWarning.includes('Идентификатор модели')&&!localStorage.getItem('keo-bim:decisions:null'));
+ // Оставляем чистый первый прогон для визуального осмотра.
+ NOP_VIEWER.model=makeModel('test-purpose:B');await KeoBim.run({region:'г. Москва'});
+ check('Возврат к авто воспроизводит исходные результаты',KeoBim.st().res.every((r,i)=>(r.comb ? r.comb.eAvgR : r.C.res.eFinal)===original[i]));
+ log.textContent+=`\n${total}/${total} пройдено`;window.testResult={ok:true,total};return window.testResult;
+})().catch(e=>{log.textContent+='\nОШИБКА: '+e.stack;window.testResult={ok:false,error:e.message};return window.testResult});
+</script>
