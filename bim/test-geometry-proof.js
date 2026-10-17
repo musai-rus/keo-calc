@@ -100,4 +100,16 @@ for(const L of [1.95,2,2.05,3.95,4,4.05])test('exact length range at normative b
 test('exact root bounds do not inherit candidate epsilon at large translations',()=>{
  const f=fixture({matrix:[1,0,0,1,1e6,-1e6]});assert.equal(f.ctx.geometryProof.state,'confirmed');assert.equal(f.ctx.lengthRange.min,f.ctx.frame.L);assert.equal(f.ctx.lengthRange.max,f.ctx.frame.L);
 });
+
+test('all 65536 unorm16 cells outwardly enclose exact nearest and directed rational endpoints',()=>{
+ const bytes=new DataView(new ArrayBuffer(8)),unit=1n<<1074n,denominator=131070n;
+ const scaled=x=>{bytes.setFloat64(0,x);const bits=bytes.getBigUint64(0),e=Number((bits>>52n)&2047n),mant=(bits&((1n<<52n)-1n))+(e?1n<<52n:0n);return (bits>>63n?-1n:1n)*(mant<<BigInt(e?e-1:0));};
+ for(const rule of ['nearest','directed'])for(let code=0;code<=65535;code++){
+  const c=P.decodeCell(code,'unorm16-centered',rule),offset=rule==='nearest'?1n:2n,k=BigInt(code),a=2n*k-offset-65535n,b=2n*k+offset-65535n,lo=a< -65535n?-65535n:a,hi=b>65535n?65535n:b;
+  assert.ok(scaled(c.input[0])*denominator<=lo*unit,'lower rational bound code='+code+' '+rule);
+  assert.ok(scaled(c.input[1])*denominator>=hi*unit,'upper rational bound code='+code+' '+rule);
+  assert.ok(c.input[0]>=-.5&&c.input[1]<=.5);assert.equal(P.decodeCell(code,'unorm16-centered').input,null);
+ }
+ const sample=P.decodeCell(32768,'unorm16-centered','nearest');assert.ok(scaled(sample.input[1])*65535n>=unit,'reported 32768 counterexample');
+});
 console.log(`${n}/${n} production geometry-proof groups passed`);

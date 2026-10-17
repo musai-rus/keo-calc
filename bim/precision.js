@@ -19,8 +19,11 @@ const BimPrecision = (() => {
     if(format==='unorm16-centered'&&Number.isInteger(code)&&code>=0&&code<=65535){
       const value=code/65535-.5,arithmetic=sub(div(box(code),box(65535)),box(.5));
       if(!['nearest','directed'].includes(rule))return {value,arithmetic,input:null,step:1/65535};
-      const radius=(rule==='nearest'?.5:1)/65535;
-      return {value,arithmetic,input:outward(Math.max(-.5,value-radius),Math.min(.5,value+radius)),step:1/65535};
+      // Centered integer numerators avoid cancellation in rounded value±radius.
+      // Every operation affecting a rational endpoint is rounded outward.
+      const offset=rule==='nearest'?1:2,denominator=box(131070);
+      const low=div(box(2*code-offset-65535),denominator),high=div(box(2*code+offset-65535),denominator);
+      return {value,arithmetic,input:[Math.max(-.5,low[0]),Math.min(.5,high[1])],step:1/65535};
     }
     if(format==='float32'&&finite(code)&&Math.fround(code)===code){
       if(rule==='exact')return {value:code,arithmetic:box(code),input:box(code)};

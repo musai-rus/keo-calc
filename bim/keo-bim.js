@@ -1780,6 +1780,31 @@ const BimSpaces = (function () {
   }
 
   /* ---------- помещения ↔ области растра R ---------- */
+  function perimeterMetric(region) {
+    const r=region&&typeof region==='object'?region:{per:region},e=r.perimeterEvidence;
+    const raster={source:'raster',value:r.per,...(e?{proof:{state:e.state,reason:e.reason}}:{})};
+    if(!e)return raster;
+    if(['insufficient','contradicted'].includes(e.state))return raster;
+    const q=e.range;
+    if(e.state!=='confirmed'||e.source!=='R-slice-boundary'||e.region!==r.id||e.rasterPerimeter!==r.per||!q||![q.min,q.max].every(Number.isFinite)||q.min<=0||q.min>q.max)return {source:'invalid-certificate',rasterPerimeter:r.per,reason:'invalid-or-stale-R-perimeter'};
+    return {source:'confirmed-R-boundary',range:{min:q.min,max:q.max},rasterPerimeter:r.per,region:r.id,proof:{state:e.state,reason:e.reason}};
+  }
+  // One predicate serves direct/loose matching, balance and their diagnostics.
+  // The raster branch preserves the historical comparisons and missing-data
+  // behavior. A declared but invalid certificate never falls back to a scalar.
+  function perimeterCheck(region,rooms,balance=false) {
+    const metric=perimeterMetric(region),limits=rooms.length===1?[.75,1.45]:[.45,1.15],result={metric,limits,ratio:null,ratioRange:null,ok:false};
+    if(metric.source==='invalid-certificate')return result;
+    if(metric.source==='confirmed-R-boundary'&&rooms.some(r=>r.per!=null&&(typeof r.per!=='number'||!Number.isFinite(r.per))))return result;
+    if((balance&&metric.source==='raster'&&!(metric.value>0))||rooms.some(r=>!(r.per>0)))return {...result,ok:true};
+    const sum=rooms.reduce((a,r)=>a+r.per,0);
+    if(metric.source==='raster'){const ratio=metric.value/sum;return {...result,ratio,ok:balance?ratio>=limits[0]&&ratio<=limits[1]:!(ratio<limits[0]||ratio>limits[1])};}
+    if(typeof BimPrecision==='undefined'||rooms.some(r=>!Number.isFinite(r.per)))return result;
+    let denominator=[0,0];for(const r of rooms)denominator=BimPrecision.add(denominator,[r.per,r.per]);
+    const ratioRange=BimPrecision.div([metric.range.min,metric.range.max],denominator);
+    if(!ratioRange||!ratioRange.every(Number.isFinite))return result;
+    return {...result,ratioRange,ok:ratioRange[0]>=limits[0]&&ratioRange[1]<=limits[1]};
+  }
   // площадь Revit сравнивается с площадью области в чистоте (areaC) и до осей стен (areaV) — зависит от настройки расчёта площадей в Revit
   function matchRooms(R, rooms, tol = 0.04) {
     R.matchTolerance = tol;
@@ -1790,7 +1815,7 @@ const BimSpaces = (function () {
       regs.forEach(rg => {
         const dd = Math.min(Math.abs(rg.areaC - rm.area), Math.abs((rg.areaV || rg.areaC) - rm.area));
         if (!(dd / rm.area < tol || dd < 0.4)) return;
-        if (rm.per > 0) { const k = rg.per / rm.per; if (k < 0.75 || k > 1.45) return; } // периметр отсекает узкие полости той же площади
+        if (!perimeterCheck(rg,[rm]).ok) return; // периметр отсекает узкие полости той же площади
         pairs.push([dd / rm.area, rm, rg]);
       });
     });
@@ -1818,7 +1843,7 @@ const BimSpaces = (function () {
         if (rg.room || rg.areaC < 4) return;
         const dd = Math.min(Math.abs(rg.areaC - rm.area), Math.abs((rg.areaV || rg.areaC) - rm.area));
         if (dd / rm.area >= tol2) return;
-        if (rm.per > 0) { const k = rg.per / rm.per; if (k < 0.75 || k > 1.45) return; }
+        if (!perimeterCheck(rg,[rm]).ok) return;
         (cand.get(rm) || cand.set(rm, []).get(rm)).push([dd / rm.area, rg]); (back.get(rg) || back.set(rg, []).get(rg)).push(rm);
       });
     });
@@ -1877,7 +1902,7 @@ const BimSpaces = (function () {
     // can also belong to another contour.
     const proposals = [...subsOf.values()].flat().filter(r => free(r) && r.areaC >= 3).map(rg => {
       const tol = Math.max(0.6, 0.03 * rg.areaC);
-      return { rg, c: combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg.per) };
+      return { rg, c: combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg) };
     });
     const owners = new Map();
     proposals.forEach(({rg,c}) => c.forEach(v => v.sel.forEach(rm => { if (!owners.has(rm)) owners.set(rm,new Set()); owners.get(rm).add(rg); })));
@@ -1886,7 +1911,7 @@ const BimSpaces = (function () {
       else if (c.length) { rg.cands = c.slice(0, 6); rg.balanceReason = c.length > 1 ? 'multiple_combinations' : c[0].sel.some(rm => owners.get(rm).size > 1) ? 'competing_contours' : 'mixed_auxiliary'; }
     });
     const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k)), LK = links(R, Rp);
-    const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, reason: s.balanceReason || 'no_candidate', cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum })) });
+    const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, reason: s.balanceReason || 'no_candidate', cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum,...(c.perimeter?{perimeter:c.perimeter}:{}) })) });
     [...subsOf.keys()].sort((a, b) => a - b).forEach(P => {
       const subs = subsOf.get(P), subOf = new Map(), units = [];
       const big = subs.filter(s => free(s) && (s.areaC >= 8 || s.cands && s.cands.length)).map(unk); unknown.push(...big.map(u => ({ ...u, P })));
@@ -1946,10 +1971,10 @@ const BimSpaces = (function () {
         const delta = Math.min(Math.abs(rg.areaC-rm.area),Math.abs((rg.areaV||rg.areaC)-rm.area));
         const tight = delta/rm.area < (R.matchTolerance ?? .04) || delta < .4, relaxed = rg.areaC >= 4 && delta/rm.area < .10;
         if (!tight && !relaxed) return;
-        const ratio = rm.per > 0 ? rg.per/rm.per : null;
+        const perimeter=perimeterCheck(rg,[rm]),ratio=perimeter.ratio;
         const owners = rg.room ? [rg.room] : rg.rooms || [];
-        const evidence = {id:rg.id, relativeAreaError:delta/rm.area, perimeterRatio:ratio, areaC:rg.areaC, areaV:rg.areaV||rg.areaC, claimedBy:owners.map(r=>r.key), claimSource:rg.room ? 'direct' : owners.length ? owners.some(r=>r.byUser) ? 'manual' : 'balance' : null};
-        if (ratio !== null && (ratio < .75 || ratio > 1.45)) rejected.push(evidence);
+        const evidence = {id:rg.id, relativeAreaError:delta/rm.area, perimeterRatio:ratio,...(rg.perimeterEvidence?{perimeterMetric:perimeter.metric,perimeterRatioRange:perimeter.ratioRange}:{}), areaC:rg.areaC, areaV:rg.areaV||rg.areaC, claimedBy:owners.map(r=>r.key), claimSource:rg.room ? 'direct' : owners.length ? owners.some(r=>r.byUser) ? 'manual' : 'balance' : null};
+        if (!perimeter.ok) rejected.push(evidence);
         else { if(tight) strict.push(evidence); if(relaxed) loose.push(evidence); }
       });
       let reason = null;
@@ -1974,8 +1999,7 @@ const BimSpaces = (function () {
     const maxArea = Math.max(...targets) + tol;
     list = list.filter(r => Number.isFinite(r.area) && r.area > 0 && r.area <= maxArea).slice().sort((a, b) => a.area - b.area || String(a.key).localeCompare(String(b.key)));
     const out = [], n = list.length;
-    const perOk = sel => { if (!(per > 0) || sel.some(r => !(r.per > 0))) return true; const k = per / sel.reduce((a, r) => a + r.per, 0); return sel.length === 1 ? k >= 0.75 && k <= 1.45 : k >= 0.45 && k <= 1.15; };
-    const consider = sel => { const s = sel.reduce((a, r) => a + r.area, 0), d = Math.min(...targets.map(t => Math.abs(s - t))); if (d <= tol && perOk(sel)) out.push({ sel, d, sum: s }); };
+    const consider = sel => { const s = sel.reduce((a, r) => a + r.area, 0), d = Math.min(...targets.map(t => Math.abs(s - t)));if(!(d<=tol))return;const p=perimeterCheck(per,sel,true);if(p.ok)out.push({sel,d,sum:s,...(per?.perimeterEvidence?{perimeter:p}:{})}); };
     for (let i = 0; i < n; i++) { consider([list[i]]); for (let j = i + 1; j < n; j++) { if (list[i].area + list[j].area > maxArea) break; consider([list[i], list[j]]); for (let k = j + 1; k < n; k++) { if (list[i].area + list[j].area + list[k].area > maxArea) break; consider([list[i], list[j], list[k]]); } } }
     return out.sort((a, b) => a.d - b.d);
   }
@@ -2039,7 +2063,7 @@ const BimSpaces = (function () {
     return [go(1), go(-1)];
   }
 
-  return { conv, unitOf, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
+  return { conv, unitOf, perimeterMetric, perimeterCheck, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
 })();
 /* Outward-rounded intervals for the decoded mesh. No exporter accuracy is inferred. */
 const BimPrecision = (() => {
@@ -2062,8 +2086,11 @@ const BimPrecision = (() => {
     if(format==='unorm16-centered'&&Number.isInteger(code)&&code>=0&&code<=65535){
       const value=code/65535-.5,arithmetic=sub(div(box(code),box(65535)),box(.5));
       if(!['nearest','directed'].includes(rule))return {value,arithmetic,input:null,step:1/65535};
-      const radius=(rule==='nearest'?.5:1)/65535;
-      return {value,arithmetic,input:outward(Math.max(-.5,value-radius),Math.min(.5,value+radius)),step:1/65535};
+      // Centered integer numerators avoid cancellation in rounded value±radius.
+      // Every operation affecting a rational endpoint is rounded outward.
+      const offset=rule==='nearest'?1:2,denominator=box(131070);
+      const low=div(box(2*code-offset-65535),denominator),high=div(box(2*code+offset-65535),denominator);
+      return {value,arithmetic,input:[Math.max(-.5,low[0]),Math.min(.5,high[1])],step:1/65535};
     }
     if(format==='float32'&&finite(code)&&Math.fround(code)===code){
       if(rule==='exact')return {value:code,arithmetic:box(code),input:box(code)};
@@ -2208,7 +2235,7 @@ const BimGeom = (function () {
     });
   }
 
-  // Viewer может хранить half-float позиции внутри Float32Array: vbstride не означает xyz Float32.
+  // Viewer может хранить упакованные позиции внутри Float32Array: vbstride не означает xyz Float32.
   // Декодирование доверяем Viewer; запасной путь — только явно обычные Float32 позиции.
   function positionReader(g, e, S = 1, withPrecision=false) {
     const pos = g.attributes && g.attributes.position;
@@ -3080,16 +3107,19 @@ const BimRectangles = (function () {
     }
     return {span:high.map((x,k)=>x-low[k]),norm:dot(axis,axis)};
   }
-  function exactLengthRange(certificate,guess) {
-    if(typeof BimPrecision==='undefined'||!finite(guess)||guess<=0)return null;
-    const span=certificate.span.reduce((a,b)=>a>b?a:b),squared=span*span,compare=x=>{const q=integer(x);return q*q*certificate.norm-squared;};
-    let lo=guess,hi=guess;
-    // The guess is only a starting point. Exact integer comparisons validate
-    // both endpoints; inability to bracket in 64 adjacent floats fails closed.
-    for(let n=0;compare(lo)>0n&&n<64;n++)lo=BimPrecision.next(lo,false);
-    for(let n=0;compare(hi)<0n&&n<64;n++)hi=BimPrecision.next(hi,true);
-    if(compare(lo)>0n||compare(hi)<0n)return null;
-    return {min:lo,max:hi,radius:BimPrecision.next(hi-lo,true),method:'exact integer square comparison'};
+  function exactLengthRange(certificate) {
+    if(typeof BimPrecision==='undefined'||!certificate||typeof certificate.norm!=='bigint'||certificate.norm<=0n||!Array.isArray(certificate.span)||certificate.span.length!==2||certificate.span.some(x=>typeof x!=='bigint'||x<0n))return null;
+    const span=certificate.span.reduce((a,b)=>a>b?a:b);if(span===0n)return null;
+    const squared=span*span,dv=new DataView(new ArrayBuffer(8)),value=bits=>{dv.setBigUint64(0,bits);return dv.getFloat64(0);};
+    const compare=bits=>{const q=integer(value(bits));return q*q*certificate.norm-squared;};
+    // Positive finite binary64 bit patterns have exactly the same order as
+    // their values. Bisect that entire finite set; no fitted guess or step cap.
+    let low=0n,high=0x7fefffffffffffffn;
+    if(compare(high)<0n)return null; // The exact length exceeds finite binary64.
+    while(high-low>1n){const mid=(low+high)>>1n,c=compare(mid);if(c===0n){const x=value(mid);return {min:x,max:x,radius:0,method:'exact integer square comparison'};}if(c<0n)low=mid;else high=mid;}
+    const min=value(low),max=value(high);
+    if(compare(high)===0n)return {min:max,max,radius:0,method:'exact integer square comparison'};
+    return {min,max,radius:BimPrecision.next(max-min,true),method:'exact integer square comparison'};
   }
   function hull(points){const ps=[...new Map(points.map(p=>[p.join(','),p])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]),cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);const half=xs=>{const h=[];for(const p of xs){while(h.length>1&&cross(h.at(-2),h.at(-1),p)<=0)h.pop();h.push(p);}return h;};return half(ps).slice(0,-1).concat(half(ps.slice().reverse()).slice(0,-1));}
   function provenanceSummary(p) {
@@ -3118,12 +3148,36 @@ const BimRectangles = (function () {
     if(fit.error){proof.reason='no-complete-rectangle-certificate';return refuse(fit.error);}
     const certificate=exactRectangle(args.segments,fit.source.segments);
     if(!certificate){proof.reason='floating-fit-not-exact-proof';return refuse('Недостаточно данных: приблизительное совпадение сторон не является точным доказательством прямоугольника.');}
-    const lengthRange=exactLengthRange(certificate,fit.frame.L);
+    const lengthRange=exactLengthRange(certificate);
     if(!lengthRange){proof.reason='length-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы длины.');}
+    const small=certificate.span.reduce((a,b)=>a<b?a:b),widthRange=exactLengthRange({...certificate,span:[small,small]});
+    if(!widthRange){proof.reason='width-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы ширины.');}
+    const perimeterInterval=BimPrecision.mul([2,2],BimPrecision.add([lengthRange.min,lengthRange.max],[widthRange.min,widthRange.max]));
+    const perimeterRange=perimeterInterval.every(finite)&&perimeterInterval[0]>0&&perimeterInterval[0]<=perimeterInterval[1]?{min:perimeterInterval[0],max:perimeterInterval[1]}:null;
+    if(!perimeterRange){proof.reason='perimeter-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы периметра.');}
     proof.state='confirmed';proof.reason='exact-dyadic-rectangle-and-full-raster';
-    return {...fit,lengthRange,geometryProof:proof,source:{...fit.source,proof:'exact-dyadic-predicates',inputPrecision:p}};
+    return {...fit,lengthRange,widthRange,perimeterRange,geometryProof:proof,source:{...fit.source,proof:'exact-dyadic-predicates',inputPrecision:args.precision}};
   }
-  return {certify,nominalDiagnostics:nominal,exactRectangle,exactLengthRange};
+  function certifyRegionPerimeters(R,segments,precision,paintSegments) {
+    const status={confirmed:0,contradicted:0,insufficient:0,reason:''};
+    if(!R||!Array.isArray(R.regs))return {...status,reason:'invalid-R-grid'};
+    R.regs.forEach(r=>{if(r)delete r.perimeterEvidence;});
+    // Most Viewer exports have unknown reconstruction precision. Do not scan
+    // their full raster or substitute an inferred perimeter in that case.
+    if(!precision||precision.v!==1||precision.reconstruction!=='exact'||precision.complete!==true)return R.perimeterStatus={...status,reason:'unknown-R-source-precision'};
+    if(!Array.isArray(segments)||!segments.length||!Array.isArray(precision.entries)||precision.entries.length!==segments.length||segments.some((s,i)=>!Array.isArray(s)||s.length!==4||!s.every(finite)||!precision.entries[i]?.provenance||!Array.isArray(precision.entries[i].bounds)||precision.entries[i].bounds.length!==4||precision.entries[i].bounds.some((b,k)=>!Array.isArray(b)||b.length!==2||b[0]!==s[k]||b[1]!==s[k])))return R.perimeterStatus={...status,reason:'invalid-R-source-precision'};
+    const {W,H,cell,minx,miny,lab}=R;
+    if(!Number.isSafeInteger(W)||!Number.isSafeInteger(H)||W<=0||H<=0||!Number.isSafeInteger(W*H)||!lab||lab.length!==W*H||![cell,minx,miny].every(finite)||cell<=0||typeof paintSegments!=='function')return R.perimeterStatus={...status,reason:'invalid-R-grid'};
+    const targets=R.regs.filter(r=>r&&!r.border&&r.areaC>=.8),runs=new Map(targets.map(r=>[r.id,[]]));
+    for(let j=0;j<H;j++){let current=0,start=0;for(let i=0;i<=W;i++){const id=i<W?lab[j*W+i]:0;if(id!==current){if(runs.has(current))runs.get(current).push([minx+start*cell,minx+i*cell,miny+j*cell,miny+(j+1)*cell]);current=id;start=i;}}}
+    for(const r of targets){
+      const containsPoint=p=>{const i=Math.floor((p[0]-minx)/cell),j=Math.floor((p[1]-miny)/cell);return i>=0&&i<W&&j>=0&&j<H&&lab[j*W+i]===r.id;};
+      const proof=certify({segments,runs:runs.get(r.id),grid:R,containsPoint,paintSegments,precision}),state=proof.geometryProof.state;
+      status[state]++;r.perimeterEvidence={source:'R-slice-boundary',region:r.id,rasterPerimeter:r.per,state,reason:proof.geometryProof.reason,...(state==='confirmed'?{range:proof.perimeterRange}: {})};
+    }
+    return R.perimeterStatus=status;
+  }
+  return {certify,certifyRegionPerimeters,nominalDiagnostics:nominal,exactRectangle,exactLengthRange};
 })();
 /* Explicit short rectangular sections. No normative defaults or room matching. */
 const BimSections = (function () {
@@ -3362,7 +3416,9 @@ const KeoBim = (function () {
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
       L.boundarySegments=segsP.concat(segsD);
       L.boundaryPrecision=BimPrecision.combine([segsP,segsD]);
-      L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
+      const matchingSegments=segsP.concat(segsL);
+      L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(matchingSegments, S.cell, bx); L.doors = segsD.length / 4;
+      BimRectangles.certifyRegionPerimeters(L.R,matchingSegments,BimPrecision.combine([segsP,segsL]),G.paintSegments);
       SP.matchRooms(L.R, L.rooms);
       G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
       compose(L);

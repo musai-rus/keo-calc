@@ -18,6 +18,31 @@ const BimSpaces = (function () {
   }
 
   /* ---------- помещения ↔ области растра R ---------- */
+  function perimeterMetric(region) {
+    const r=region&&typeof region==='object'?region:{per:region},e=r.perimeterEvidence;
+    const raster={source:'raster',value:r.per,...(e?{proof:{state:e.state,reason:e.reason}}:{})};
+    if(!e)return raster;
+    if(['insufficient','contradicted'].includes(e.state))return raster;
+    const q=e.range;
+    if(e.state!=='confirmed'||e.source!=='R-slice-boundary'||e.region!==r.id||e.rasterPerimeter!==r.per||!q||![q.min,q.max].every(Number.isFinite)||q.min<=0||q.min>q.max)return {source:'invalid-certificate',rasterPerimeter:r.per,reason:'invalid-or-stale-R-perimeter'};
+    return {source:'confirmed-R-boundary',range:{min:q.min,max:q.max},rasterPerimeter:r.per,region:r.id,proof:{state:e.state,reason:e.reason}};
+  }
+  // One predicate serves direct/loose matching, balance and their diagnostics.
+  // The raster branch preserves the historical comparisons and missing-data
+  // behavior. A declared but invalid certificate never falls back to a scalar.
+  function perimeterCheck(region,rooms,balance=false) {
+    const metric=perimeterMetric(region),limits=rooms.length===1?[.75,1.45]:[.45,1.15],result={metric,limits,ratio:null,ratioRange:null,ok:false};
+    if(metric.source==='invalid-certificate')return result;
+    if(metric.source==='confirmed-R-boundary'&&rooms.some(r=>r.per!=null&&(typeof r.per!=='number'||!Number.isFinite(r.per))))return result;
+    if((balance&&metric.source==='raster'&&!(metric.value>0))||rooms.some(r=>!(r.per>0)))return {...result,ok:true};
+    const sum=rooms.reduce((a,r)=>a+r.per,0);
+    if(metric.source==='raster'){const ratio=metric.value/sum;return {...result,ratio,ok:balance?ratio>=limits[0]&&ratio<=limits[1]:!(ratio<limits[0]||ratio>limits[1])};}
+    if(typeof BimPrecision==='undefined'||rooms.some(r=>!Number.isFinite(r.per)))return result;
+    let denominator=[0,0];for(const r of rooms)denominator=BimPrecision.add(denominator,[r.per,r.per]);
+    const ratioRange=BimPrecision.div([metric.range.min,metric.range.max],denominator);
+    if(!ratioRange||!ratioRange.every(Number.isFinite))return result;
+    return {...result,ratioRange,ok:ratioRange[0]>=limits[0]&&ratioRange[1]<=limits[1]};
+  }
   // площадь Revit сравнивается с площадью области в чистоте (areaC) и до осей стен (areaV) — зависит от настройки расчёта площадей в Revit
   function matchRooms(R, rooms, tol = 0.04) {
     R.matchTolerance = tol;
@@ -28,7 +53,7 @@ const BimSpaces = (function () {
       regs.forEach(rg => {
         const dd = Math.min(Math.abs(rg.areaC - rm.area), Math.abs((rg.areaV || rg.areaC) - rm.area));
         if (!(dd / rm.area < tol || dd < 0.4)) return;
-        if (rm.per > 0) { const k = rg.per / rm.per; if (k < 0.75 || k > 1.45) return; } // периметр отсекает узкие полости той же площади
+        if (!perimeterCheck(rg,[rm]).ok) return; // периметр отсекает узкие полости той же площади
         pairs.push([dd / rm.area, rm, rg]);
       });
     });
@@ -56,7 +81,7 @@ const BimSpaces = (function () {
         if (rg.room || rg.areaC < 4) return;
         const dd = Math.min(Math.abs(rg.areaC - rm.area), Math.abs((rg.areaV || rg.areaC) - rm.area));
         if (dd / rm.area >= tol2) return;
-        if (rm.per > 0) { const k = rg.per / rm.per; if (k < 0.75 || k > 1.45) return; }
+        if (!perimeterCheck(rg,[rm]).ok) return;
         (cand.get(rm) || cand.set(rm, []).get(rm)).push([dd / rm.area, rg]); (back.get(rg) || back.set(rg, []).get(rg)).push(rm);
       });
     });
@@ -115,7 +140,7 @@ const BimSpaces = (function () {
     // can also belong to another contour.
     const proposals = [...subsOf.values()].flat().filter(r => free(r) && r.areaC >= 3).map(rg => {
       const tol = Math.max(0.6, 0.03 * rg.areaC);
-      return { rg, c: combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg.per) };
+      return { rg, c: combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg) };
     });
     const owners = new Map();
     proposals.forEach(({rg,c}) => c.forEach(v => v.sel.forEach(rm => { if (!owners.has(rm)) owners.set(rm,new Set()); owners.get(rm).add(rg); })));
@@ -124,7 +149,7 @@ const BimSpaces = (function () {
       else if (c.length) { rg.cands = c.slice(0, 6); rg.balanceReason = c.length > 1 ? 'multiple_combinations' : c[0].sel.some(rm => owners.get(rm).size > 1) ? 'competing_contours' : 'mixed_auxiliary'; }
     });
     const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k)), LK = links(R, Rp);
-    const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, reason: s.balanceReason || 'no_candidate', cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum })) });
+    const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, reason: s.balanceReason || 'no_candidate', cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum,...(c.perimeter?{perimeter:c.perimeter}:{}) })) });
     [...subsOf.keys()].sort((a, b) => a - b).forEach(P => {
       const subs = subsOf.get(P), subOf = new Map(), units = [];
       const big = subs.filter(s => free(s) && (s.areaC >= 8 || s.cands && s.cands.length)).map(unk); unknown.push(...big.map(u => ({ ...u, P })));
@@ -184,10 +209,10 @@ const BimSpaces = (function () {
         const delta = Math.min(Math.abs(rg.areaC-rm.area),Math.abs((rg.areaV||rg.areaC)-rm.area));
         const tight = delta/rm.area < (R.matchTolerance ?? .04) || delta < .4, relaxed = rg.areaC >= 4 && delta/rm.area < .10;
         if (!tight && !relaxed) return;
-        const ratio = rm.per > 0 ? rg.per/rm.per : null;
+        const perimeter=perimeterCheck(rg,[rm]),ratio=perimeter.ratio;
         const owners = rg.room ? [rg.room] : rg.rooms || [];
-        const evidence = {id:rg.id, relativeAreaError:delta/rm.area, perimeterRatio:ratio, areaC:rg.areaC, areaV:rg.areaV||rg.areaC, claimedBy:owners.map(r=>r.key), claimSource:rg.room ? 'direct' : owners.length ? owners.some(r=>r.byUser) ? 'manual' : 'balance' : null};
-        if (ratio !== null && (ratio < .75 || ratio > 1.45)) rejected.push(evidence);
+        const evidence = {id:rg.id, relativeAreaError:delta/rm.area, perimeterRatio:ratio,...(rg.perimeterEvidence?{perimeterMetric:perimeter.metric,perimeterRatioRange:perimeter.ratioRange}:{}), areaC:rg.areaC, areaV:rg.areaV||rg.areaC, claimedBy:owners.map(r=>r.key), claimSource:rg.room ? 'direct' : owners.length ? owners.some(r=>r.byUser) ? 'manual' : 'balance' : null};
+        if (!perimeter.ok) rejected.push(evidence);
         else { if(tight) strict.push(evidence); if(relaxed) loose.push(evidence); }
       });
       let reason = null;
@@ -212,8 +237,7 @@ const BimSpaces = (function () {
     const maxArea = Math.max(...targets) + tol;
     list = list.filter(r => Number.isFinite(r.area) && r.area > 0 && r.area <= maxArea).slice().sort((a, b) => a.area - b.area || String(a.key).localeCompare(String(b.key)));
     const out = [], n = list.length;
-    const perOk = sel => { if (!(per > 0) || sel.some(r => !(r.per > 0))) return true; const k = per / sel.reduce((a, r) => a + r.per, 0); return sel.length === 1 ? k >= 0.75 && k <= 1.45 : k >= 0.45 && k <= 1.15; };
-    const consider = sel => { const s = sel.reduce((a, r) => a + r.area, 0), d = Math.min(...targets.map(t => Math.abs(s - t))); if (d <= tol && perOk(sel)) out.push({ sel, d, sum: s }); };
+    const consider = sel => { const s = sel.reduce((a, r) => a + r.area, 0), d = Math.min(...targets.map(t => Math.abs(s - t)));if(!(d<=tol))return;const p=perimeterCheck(per,sel,true);if(p.ok)out.push({sel,d,sum:s,...(per?.perimeterEvidence?{perimeter:p}:{})}); };
     for (let i = 0; i < n; i++) { consider([list[i]]); for (let j = i + 1; j < n; j++) { if (list[i].area + list[j].area > maxArea) break; consider([list[i], list[j]]); for (let k = j + 1; k < n; k++) { if (list[i].area + list[j].area + list[k].area > maxArea) break; consider([list[i], list[j], list[k]]); } } }
     return out.sort((a, b) => a.d - b.d);
   }
@@ -277,5 +301,5 @@ const BimSpaces = (function () {
     return [go(1), go(-1)];
   }
 
-  return { conv, unitOf, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
+  return { conv, unitOf, perimeterMetric, perimeterCheck, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
 })();

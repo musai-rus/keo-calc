@@ -96,7 +96,7 @@ const BimGeom = (function () {
     });
   }
 
-  // Viewer может хранить half-float позиции внутри Float32Array: vbstride не означает xyz Float32.
+  // Viewer может хранить упакованные позиции внутри Float32Array: vbstride не означает xyz Float32.
   // Декодирование доверяем Viewer; запасной путь — только явно обычные Float32 позиции.
   function positionReader(g, e, S = 1, withPrecision=false) {
     const pos = g.attributes && g.attributes.position;

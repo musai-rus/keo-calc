@@ -15,7 +15,7 @@ const plain = G.slice(context(geom(false)),cat,['Revit Windows'],15.5);
 assert.equal(plain.length,2); assert.deepEqual(plain[0],[7,10,6,10]);
 const windowPlain = G.openings(context(geom(false)),cat);
 const roofPlain = G.openings(context(geom(false,true)),cat);
-// Контракт официального декодера; реальный декодер дополнительно проверяется в Viewer.
+// Контракт адаптера: декодер выбирает Viewer. Здесь синтетический half-float fixture; реальный decoder проверяется отдельно.
 global.Autodesk = {Viewing:{Private:{VertexEnumerator:{makeReadPositionFunc:g => {
   const raw = new Uint16Array(g.vb.buffer,g.vb.byteOffset,g.vb.byteLength/2);
   const half = x => (x & 0x8000 ? -1 : 1) * (x & 1023 ? 1+(x&1023)/1024 : 1) * 2**(((x>>10)&31)-15);
@@ -30,4 +30,4 @@ delete global.Autodesk;
 assert.throws(()=>G.slice(context(geom(true)),cat,['Revit Windows'],15.5),/декодера/);
 const bad=geom(false);bad.vb[0]=NaN;
 assert.throws(()=>G.slice(context(bad),cat,['Revit Windows'],15.5),/некорректные координаты/);
-console.log('OK: Float32, half-float, матрица и масштаб, срез, линии, окна, фонари, отказ при неверных координатах');
+console.log('OK: Float32, синтетический half-float, матрица и масштаб, срез, линии, окна, фонари, отказ при неверных координатах');

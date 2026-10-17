@@ -86,16 +86,19 @@ const BimRectangles = (function () {
     }
     return {span:high.map((x,k)=>x-low[k]),norm:dot(axis,axis)};
   }
-  function exactLengthRange(certificate,guess) {
-    if(typeof BimPrecision==='undefined'||!finite(guess)||guess<=0)return null;
-    const span=certificate.span.reduce((a,b)=>a>b?a:b),squared=span*span,compare=x=>{const q=integer(x);return q*q*certificate.norm-squared;};
-    let lo=guess,hi=guess;
-    // The guess is only a starting point. Exact integer comparisons validate
-    // both endpoints; inability to bracket in 64 adjacent floats fails closed.
-    for(let n=0;compare(lo)>0n&&n<64;n++)lo=BimPrecision.next(lo,false);
-    for(let n=0;compare(hi)<0n&&n<64;n++)hi=BimPrecision.next(hi,true);
-    if(compare(lo)>0n||compare(hi)<0n)return null;
-    return {min:lo,max:hi,radius:BimPrecision.next(hi-lo,true),method:'exact integer square comparison'};
+  function exactLengthRange(certificate) {
+    if(typeof BimPrecision==='undefined'||!certificate||typeof certificate.norm!=='bigint'||certificate.norm<=0n||!Array.isArray(certificate.span)||certificate.span.length!==2||certificate.span.some(x=>typeof x!=='bigint'||x<0n))return null;
+    const span=certificate.span.reduce((a,b)=>a>b?a:b);if(span===0n)return null;
+    const squared=span*span,dv=new DataView(new ArrayBuffer(8)),value=bits=>{dv.setBigUint64(0,bits);return dv.getFloat64(0);};
+    const compare=bits=>{const q=integer(value(bits));return q*q*certificate.norm-squared;};
+    // Positive finite binary64 bit patterns have exactly the same order as
+    // their values. Bisect that entire finite set; no fitted guess or step cap.
+    let low=0n,high=0x7fefffffffffffffn;
+    if(compare(high)<0n)return null; // The exact length exceeds finite binary64.
+    while(high-low>1n){const mid=(low+high)>>1n,c=compare(mid);if(c===0n){const x=value(mid);return {min:x,max:x,radius:0,method:'exact integer square comparison'};}if(c<0n)low=mid;else high=mid;}
+    const min=value(low),max=value(high);
+    if(compare(high)===0n)return {min:max,max,radius:0,method:'exact integer square comparison'};
+    return {min,max,radius:BimPrecision.next(max-min,true),method:'exact integer square comparison'};
   }
   function hull(points){const ps=[...new Map(points.map(p=>[p.join(','),p])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]),cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);const half=xs=>{const h=[];for(const p of xs){while(h.length>1&&cross(h.at(-2),h.at(-1),p)<=0)h.pop();h.push(p);}return h;};return half(ps).slice(0,-1).concat(half(ps.slice().reverse()).slice(0,-1));}
   function provenanceSummary(p) {
@@ -124,10 +127,34 @@ const BimRectangles = (function () {
     if(fit.error){proof.reason='no-complete-rectangle-certificate';return refuse(fit.error);}
     const certificate=exactRectangle(args.segments,fit.source.segments);
     if(!certificate){proof.reason='floating-fit-not-exact-proof';return refuse('Недостаточно данных: приблизительное совпадение сторон не является точным доказательством прямоугольника.');}
-    const lengthRange=exactLengthRange(certificate,fit.frame.L);
+    const lengthRange=exactLengthRange(certificate);
     if(!lengthRange){proof.reason='length-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы длины.');}
+    const small=certificate.span.reduce((a,b)=>a<b?a:b),widthRange=exactLengthRange({...certificate,span:[small,small]});
+    if(!widthRange){proof.reason='width-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы ширины.');}
+    const perimeterInterval=BimPrecision.mul([2,2],BimPrecision.add([lengthRange.min,lengthRange.max],[widthRange.min,widthRange.max]));
+    const perimeterRange=perimeterInterval.every(finite)&&perimeterInterval[0]>0&&perimeterInterval[0]<=perimeterInterval[1]?{min:perimeterInterval[0],max:perimeterInterval[1]}:null;
+    if(!perimeterRange){proof.reason='perimeter-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы периметра.');}
     proof.state='confirmed';proof.reason='exact-dyadic-rectangle-and-full-raster';
-    return {...fit,lengthRange,geometryProof:proof,source:{...fit.source,proof:'exact-dyadic-predicates',inputPrecision:p}};
+    return {...fit,lengthRange,widthRange,perimeterRange,geometryProof:proof,source:{...fit.source,proof:'exact-dyadic-predicates',inputPrecision:args.precision}};
   }
-  return {certify,nominalDiagnostics:nominal,exactRectangle,exactLengthRange};
+  function certifyRegionPerimeters(R,segments,precision,paintSegments) {
+    const status={confirmed:0,contradicted:0,insufficient:0,reason:''};
+    if(!R||!Array.isArray(R.regs))return {...status,reason:'invalid-R-grid'};
+    R.regs.forEach(r=>{if(r)delete r.perimeterEvidence;});
+    // Most Viewer exports have unknown reconstruction precision. Do not scan
+    // their full raster or substitute an inferred perimeter in that case.
+    if(!precision||precision.v!==1||precision.reconstruction!=='exact'||precision.complete!==true)return R.perimeterStatus={...status,reason:'unknown-R-source-precision'};
+    if(!Array.isArray(segments)||!segments.length||!Array.isArray(precision.entries)||precision.entries.length!==segments.length||segments.some((s,i)=>!Array.isArray(s)||s.length!==4||!s.every(finite)||!precision.entries[i]?.provenance||!Array.isArray(precision.entries[i].bounds)||precision.entries[i].bounds.length!==4||precision.entries[i].bounds.some((b,k)=>!Array.isArray(b)||b.length!==2||b[0]!==s[k]||b[1]!==s[k])))return R.perimeterStatus={...status,reason:'invalid-R-source-precision'};
+    const {W,H,cell,minx,miny,lab}=R;
+    if(!Number.isSafeInteger(W)||!Number.isSafeInteger(H)||W<=0||H<=0||!Number.isSafeInteger(W*H)||!lab||lab.length!==W*H||![cell,minx,miny].every(finite)||cell<=0||typeof paintSegments!=='function')return R.perimeterStatus={...status,reason:'invalid-R-grid'};
+    const targets=R.regs.filter(r=>r&&!r.border&&r.areaC>=.8),runs=new Map(targets.map(r=>[r.id,[]]));
+    for(let j=0;j<H;j++){let current=0,start=0;for(let i=0;i<=W;i++){const id=i<W?lab[j*W+i]:0;if(id!==current){if(runs.has(current))runs.get(current).push([minx+start*cell,minx+i*cell,miny+j*cell,miny+(j+1)*cell]);current=id;start=i;}}}
+    for(const r of targets){
+      const containsPoint=p=>{const i=Math.floor((p[0]-minx)/cell),j=Math.floor((p[1]-miny)/cell);return i>=0&&i<W&&j>=0&&j<H&&lab[j*W+i]===r.id;};
+      const proof=certify({segments,runs:runs.get(r.id),grid:R,containsPoint,paintSegments,precision}),state=proof.geometryProof.state;
+      status[state]++;r.perimeterEvidence={source:'R-slice-boundary',region:r.id,rasterPerimeter:r.per,state,reason:proof.geometryProof.reason,...(state==='confirmed'?{range:proof.perimeterRange}: {})};
+    }
+    return R.perimeterStatus=status;
+  }
+  return {certify,certifyRegionPerimeters,nominalDiagnostics:nominal,exactRectangle,exactLengthRange};
 })();

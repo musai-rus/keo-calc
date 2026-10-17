@@ -95,7 +95,23 @@ await vm.runInContext(`(async()=>{
   await KeoBim.run(opts);const changed=KeoBim.st().res.find(r=>r.key==='rotated');assert.equal(changed.section.mode,'stale');assert.equal(changed.st,undefined);assert.equal(KeoBim.st().sections.rotated.signature,oldSignature);
   KeoBim._json();assert.equal(downloaded.spaces.length,0);assert.equal(downloaded.calculationErrors[0].section.mode,'stale');
  }
+ // Before matching, certify the actual R source. A door AABB inside Rp
+ // deliberately contradicts the manual physical rectangle, but cannot pollute R.
+ for(const sign of [1,-1]){
+  const ps=[[0,0],[2.5,2.5*sign],[2.5-1.5*sign,2.5*sign+1.5],[-1.5*sign,1.5]],center=[(2.5-1.5*sign)/2,(2.5*sign+1.5)/2],segments=ps.map((p,j)=>[...p,...ps[(j+1)%4]]);
+  Object.assign(KeoBimLib.BimGeom,{
+   rooms:async()=>[{id:1,key:'certified45',eid:'certified45',level:'L01',name:'Раздевальная',num:'synthetic45',area:7.5,per:8*Math.SQRT2,h:3.6,warn:[]}],
+   slice:(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:segments,
+   doorBoxes:()=>{const [x,y]=center;return [[x-.1,y-.1,x+.1,y-.1],[x+.1,y-.1,x+.1,y+.1],[x+.1,y+.1,x-.1,y+.1],[x-.1,y+.1,x-.1,y-.1]];},
+   openings:()=>[{id:200,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:center,t:[1,0],n:[0,1],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}]
+  });
+  NOP_VIEWER.model=model('short:certified45:'+sign);await KeoBim.run(opts);
+  const room=KeoBim.st().rooms.find(r=>r.key==='certified45');assert.ok(room.reg,'automatic matching at 45 degrees needs no explicit assign');
+  const L=KeoBim.st().levels.find(l=>l.name==='L01'),rg=L.R.regs[room.reg];assert.equal(rg.perimeterEvidence.state,'confirmed');assert.ok(rg.per<.75*room.per);assert.ok(rg.perimeterEvidence.range.min<=room.per&&rg.perimeterEvidence.range.max>=room.per);
+  const r=KeoBim.st().res.find(r=>r.key==='certified45');assert.notEqual(r.kind,'nogeo');assert.equal(r.sectionContext.geometryProof.state,'contradicted','manual source retains physical door closure');assert.equal(r.st,undefined);
+  KeoBim._json();const d=downloaded.roomDiagnostics.rooms.find(d=>d.key==='certified45');assert.equal(d.identification,'direct');assert.equal(d.candidates.strict[0].perimeterMetric.source,'confirmed-R-boundary');
+ }
  KeoBim.destroy();
 })()`,context);
-console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis, exact source positive flow at 0 degrees, floating rotated geometry fails closed at 30/±45 degrees, subcell notch invalidation');
+console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis, exact source positive flow at 0 degrees, floating rotated geometry fails closed at 30/±45 degrees, subcell notch invalidation, certified R matching at ±45 degrees before assignment with an independent Rp door obstacle');
 })().catch(e=>{console.error(e);process.exitCode=1});

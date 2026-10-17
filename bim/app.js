@@ -106,7 +106,9 @@ const KeoBim = (function () {
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
       L.boundarySegments=segsP.concat(segsD);
       L.boundaryPrecision=BimPrecision.combine([segsP,segsD]);
-      L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
+      const matchingSegments=segsP.concat(segsL);
+      L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(matchingSegments, S.cell, bx); L.doors = segsD.length / 4;
+      BimRectangles.certifyRegionPerimeters(L.R,matchingSegments,BimPrecision.combine([segsP,segsL]),G.paintSegments);
       SP.matchRooms(L.R, L.rooms);
       G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
       compose(L);
