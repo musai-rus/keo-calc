@@ -114,6 +114,44 @@ const BimCalc = (function () {
   }
   const oriOf = az => ORI[Math.round(az / 45) % 8];
 
+  // This is the inherited centroid of the supplied samples, not a normative
+  // definition of the room centre. Keep ALL nearest samples within a numerical
+  // round-off band; no record order or world-axis tie-break chooses one.
+  function centerCandidates(pts, precision) {
+    if (!Array.isArray(pts) || !pts.length || pts.some(p => !Array.isArray(p) || p.length < 2 || !p.every(Number.isFinite)))
+      return { status: 'insufficient-data', candidates: [], reason: 'invalid-points' };
+    if (!precision || precision.unit!=='m' || !Number.isFinite(precision.coordinateTolerance) || precision.coordinateTolerance<0 || !precision.source)
+      return {status:'insufficient-data',candidates:[],reason:'sample-precision-unconfirmed',normativeConfirmed:false};
+    pts = [...new Map(pts.map(p=>[JSON.stringify(p.slice(0,2)),p.slice(0,2)])).values()];
+    const origin = pts[0], offsets = pts.map(p => sub(p, origin));
+    const insufficient=()=>({status:'insufficient-data',candidates:[],reason:'numeric-range',normativeConfirmed:false});
+    if(offsets.some(p=>!p.every(Number.isFinite)))return insufficient();
+    const mean = axis => {
+      const values = offsets.map(p => p[axis]).sort((a,b)=>a-b);
+      let sum=0, correction=0;
+      values.forEach(v=>{const y=v-correction,t=sum+y;correction=(t-sum)-y;sum=t;});
+      return sum / pts.length;
+    };
+    const local = [mean(0),mean(1)], centroid=[origin[0]+local[0],origin[1]+local[1]];
+    if(!local.every(Number.isFinite)||!centroid.every(Number.isFinite))return insufficient();
+    const distances=offsets.map(p=>(p[0]-local[0])**2+(p[1]-local[1])**2), nearest=distances.reduce((a,b)=>Math.min(a,b),Infinity);
+    // Only local Euclidean distances set the round-off band. World-coordinate
+    // magnitude must not expand a candidate set after an exact translation.
+    const scale=distances.reduce((v,d)=>Math.max(v,d),1);
+    const tolerance=128*Number.EPSILON*scale;
+    // Given Euclidean input error <= e, error of point minus sample centroid
+    // is <= 2e. Retain every sample whose distance interval can be minimal.
+    const error=2*precision.coordinateTolerance;
+    const lower=distances.map(d=>Math.max(0,Math.sqrt(d)-error)**2-tolerance);
+    const upper=distances.map(d=>(Math.sqrt(d)+error)**2+tolerance);
+    if(![...distances,...lower,...upper,tolerance].every(Number.isFinite))return insufficient();
+    const minUpper=upper.reduce((a,b)=>Math.min(a,b),Infinity);
+    const candidates=pts.filter((p,i)=>lower[i]<=minUpper).map(p=>p.slice(0,2));
+    candidates.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+    const unique=candidates.filter((p,i)=>!i||p[0]!==candidates[i-1][0]||p[1]!==candidates[i-1][1]);
+    return { status:unique.length===1?'unique':'ambiguous', candidates:unique, centroid, squaredDistance:nearest, numericalTolerance:tolerance, basis:'possible-nearest-samples-to-inherited-centroid', precision:{...precision}, normativeConfirmed:false };
+  }
+
   /* ---------- проёмы помещения: объединение панелей в окна, окна — в плоскости стен ---------- */
   function clusters(ops) {
     const n = ops.length, par = [...Array(n).keys()], f = i => par[i] === i ? i : (par[i] = f(par[i]));
@@ -264,44 +302,29 @@ const BimCalc = (function () {
     const gp = gov && sp.rooms.length > 1 && env.roomPts ? env.roomPts(gov) : null, base = gp && gp.length >= 4 ? gp : pts;
     if (base !== pts) notes.push(`расчётная точка — в помещении ${gov.num} «${gov.name}», определяющем норму пространства`);
     const H = (Math.max(...sp.rooms.map(r => r.h || 0)) || 3);
-    let F = hasSide ? facets(clusters(ops)) : [];
-    // основная стена — с наибольшей площадью остекления, видимого из центра помещения, определяющего норму
-    // (проёмы объёма, закрытые от него перегородкой, основной стеной не становятся)
-    if (F.length > 1 && env.Rp) {
-      const cx = base.reduce((s, p) => s + p[0], 0) / base.length, cy = base.reduce((s, p) => s + p[1], 0) / base.length;
-      const Ac = base.reduce((b, p) => { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; return !b || d < b.d ? { p, d } : b; }, null).p;
-      F.forEach(f => { f.visA = f.cls.reduce((s, c) => { const face = [c.c[0] + c.nin[0] * c.dIn, c.c[1] + c.nin[1] * c.dIn]; const parts = BimSpaces.visibleParts(env.Rp, Ac, face, f.t, c.bo); return s + parts.reduce((a, q) => a + q.b - q.a, 0) * (c.z1 - c.z0); }, 0); });
-      F = F.slice().sort((a, b) => (b.visA - a.visA) || (b.area - a.area));
+    if (hasSide && ops.length > 1) {
+      // Live input does not supply a certified coordinate error contract.
+      const center = centerCandidates(base);
+      const pointChoice = { status:'insufficient-data', reason:'unverified-opening-geometry', center, classification:'unconfirmed' };
+      const err = 'Недостаточно данных: общая физическая фасада и принадлежность фрагментов не подтверждены геометрией с известными единицами и допусками. Автоматическое объединение проёмов и выбор расчётной точки не выполнены.';
+      notes.push('Климатические румбы, близость плоскостей и пороги 135°/25% не являются доказательством классификации.');
+      if(center.status==='ambiguous') notes.push(`Ближайших к центру дискретных кандидатов: ${center.candidates.length}; единственная точка не выбрана.`);
+      return { mode, row, err, notes, pointChoice, pts:center.candidates };
     }
-
+    // A single opening needs no inter-record geometric grouping. Multiple
+    // records stay unresolved until a verified geometry contract is available.
+    let F = hasSide ? facets(clusters(ops)) : [];
     if (mode === 'side') {
-      // Расчётная точка бокового света (принятое правило, 09.10.2026):
-      // 1) двустороннее освещение — световые проёмы в противоположных стенах (угол между наружными нормалями ≥ 135°)
-      //    помещения, определяющего норму: точка в центре помещения (СП 52.13330.2016, п. 5.3, абз. 1);
-      //    проём противоположной стены учитывается, если его остекление ≥ 25 % основного и видно из центра этого помещения
-      //    (остекление за перегородкой, в соседнем помещении того же объёма, двусторонним освещение не делает: 83 + 91);
-      // 2) проёмы в смежных стенах (угловое помещение) и малые проёмы — освещение одностороннее: точка по правилу п. 5.3
-      //    (перечисления а)–ж), для групповых ДОО — 1 м от стены, наиболее удалённой от световых проёмов) от основной стены
-      //    (наибольшая площадь остекления); вклады проёмов других ориентаций суммируются (СП 367.1325800.2025, п. 8.4.1, примечание).
       const f = F[0], uvOf = P => P.map(p => { const d = sub(p, f.O); return [dot(d, f.nin), dot(d, f.t)]; }), uv = uvOf(pts), ub = uvOf(base);
       const vmid = (Math.min(...ub.map(x => x[1])) + Math.max(...ub.map(x => x[1]))) / 2;
       const line = uv.filter(x => Math.abs(x[1] - vmid) < 0.3); const dp = Math.max(...(line.length ? line : uv).map(x => x[0]));
       const lt = env.KEO.ltAuto(rule, dp);
-      let A = [f.O[0] + f.t[0] * vmid + f.nin[0] * lt, f.O[1] + f.t[1] * vmid + f.nin[1] * lt], multi = false;
-      const opp = F.slice(1).filter(g => dot(g.nin, f.nin) <= -Math.SQRT1_2), oppSig = opp.filter(g => g.area >= 0.25 * f.area);
-      if (oppSig.length) {
-        const cx = base.reduce((s, p) => s + p[0], 0) / base.length, cy = base.reduce((s, p) => s + p[1], 0) / base.length;
-        const Ac = base.reduce((b, p) => { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; return !b || d < b.d ? { p, d } : b; }, null).p;
-        if (sideWalls(oppSig, Ac, env, pts, [], true, rule).length) { multi = true; A = Ac; notes.push('двустороннее боковое освещение (проёмы в противоположных стенах) — расчётная точка в центре помещения (СП 52.13330.2016, п. 5.3)'); }
-        else notes.push('остекление противоположной стены из центра помещения не видно (за перегородкой) — освещение одностороннее, точка по п. 5.3 СП 52 от основной стены');
-      } else if (F.length > 1) notes.push(`расчётная точка — по п. 5.3 СП 52 от основной стены; ${opp.length ? 'остекление противоположной стены < 25 % основного' : 'проёмы других стен — в смежных стенах (не двустороннее освещение)'}, их вклад суммируется (СП 367, п. 8.4.1, прим.)`);
-      const walls = sideWalls(F, A, env, pts, notes, F.length > 1, rule);
+      const A = [f.O[0] + f.t[0] * vmid + f.nin[0] * lt, f.O[1] + f.t[1] * vmid + f.nin[1] * lt];
+      const walls = sideWalls(F, A, env, pts, notes, false, rule);
       if (!walls.length) return { err: 'остекление не видно из расчётной точки', notes, A };
       const st = baseState(env, sp, row); st.mode = 'side';
-      // если после проверки видимости осталась одна стена, а точка ставилась как центр — фиксируем её положение вручную
-      st.rtManual = (multi || walls.length > 1) ? 'manual' : null;
       const ws = walls.map(w => wallState(w, env, A, H)); st.side.walls = ws.map(x => x.st);
-      return { mode, row, st, C: env.KEO.compute(st), A, pts: [A], geo: ws.map(x => x.geo), notes, multi };
+      return { mode, row, st, C: env.KEO.compute(st), A, pts: [A], geo: ws.map(x => x.geo), notes, multi:false };
     }
 
     // верхний свет (Б.3) — фонари в системе координат главных осей пространства
@@ -392,5 +415,5 @@ const BimCalc = (function () {
     }).filter(b => b.Hp > 0.5 && b.l > 0);
   }
 
-  return { climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
+  return { climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, centerCandidates, words, title };
 })();

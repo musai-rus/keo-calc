@@ -57,6 +57,13 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   assert.equal(KeoBim.S.group,null);assert.ok(KeoBim.st().res.every(r=>r.kind==='err'&&/Регион/.test(r.err)));
   assert.equal(JSON.stringify(NOP_VIEWER.getCutPlanes()),JSON.stringify(cuts));
   await KeoBim.run({region:'г. Москва'});
+  assert.ok(KeoBim.st().res.every(r=>r.kind==='err'&&r.pointChoice?.status==='insufficient-data'&&!r.C&&!r.st&&!r.A));
+  KeoBim._exportJSON();const unverified=JSON.parse(capturedDownload.text);assert.equal(unverified.spaces.length,0);assert.ok(unverified.calculationErrors.every(r=>r.pointChoice.classification==='unconfirmed'&&r.state===undefined&&r.pass===undefined));
+  KeoBim._exportCSV();assert.equal(capturedDownload.text.includes('соответствует'),false);
+  // Positive lifecycle/climate controls use one opening per space: they do not
+  // bypass the geometry gate for the original two-opening fixture.
+  const allOpenings=G.openings;G.openings=(...a)=>allOpenings(...a).filter(o=>o.roof||o.c[0]===3);
+  await KeoBim.run();
   assert.ok(KeoBim.st().res.every(r=>r.kind==='calc'&&r.C.ok));
   const roomDiag=KeoBim._roomDiagnosticData();assert.equal(roomDiag.rooms.length,KeoBim.st().rooms.length);assert.equal(Object.values(roomDiag.counts.placement).reduce((a,b)=>a+b,0),roomDiag.rooms.length);assert.deepEqual(Object.keys(roomDiag.unplacedReasons),[]);
   const actual=KeoBim.st().res[0];assert.equal(actual.env.containsPoint(actual.env.pts[0]),true);assert.equal(actual.env.containsPoint([1e9,1e9]),false);

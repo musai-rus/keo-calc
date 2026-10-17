@@ -2,7 +2,7 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const root=require('node:path').resolve(__dirname,'..');
 const {load,manualState}=require(root+'/test-side-point-policy.js');
-const L=load(),C=L.BimCalc,K=L.KEO,copy=x=>JSON.parse(JSON.stringify(x));
+const L=load(undefined,'fe653f3'),C=L.BimCalc,K=L.KEO,copy=x=>JSON.parse(JSON.stringify(x));
 const cases=[];function test(name,fn){try{cases.push({name,pass:true,data:fn()})}catch(e){cases.push({name,pass:false,error:e.message})}}
 const rad=x=>x*Math.PI/180,rot=(p,a)=>[p[0]*Math.cos(rad(a))-p[1]*Math.sin(rad(a)),p[0]*Math.sin(rad(a))+p[1]*Math.cos(rad(a))];
 const near=(a,b,e=1e-8)=>assert.ok(Math.abs(a-b)<=e,`${a} != ${b} (tolerance ${e})`);
@@ -67,7 +67,7 @@ test('room isolation A60 and explicit manual overrides',()=>{
  for(const rule of ['center','far1','manual']){const s=copy(a);s.rtManual=rule;s.side.walls.forEach(w=>w.lt=5.5);assert.equal(K.rtOf(s),rule)}
  return {alternations:20,A60:b0,A57:a0,note:'No room cross-contamination observed. This does not prove geometric provenance of imported walls.'};
 });
-const baseline=load(require('node:child_process').execFileSync('git',['show','5b56e2d:model.js'],{cwd:root,encoding:'utf8'}));
+const baseline=load(undefined,'5b56e2d');
 test('all transformed adapter observations reproduce exact main model',()=>{let checks=0;for(const id of ['A57','A60'])for(const mf of [false,true])for(const kind of ['one','split','opposite','adjacent'])for(const a of [-90,-15,0,17,90,180,360])for(const shift of [[0,0],[123.4,-987.6]]){const current=sample(id,kind,a,shift,mf),prior=sample(id,kind,a,shift,mf,baseline);assert.deepEqual(current.A,prior.A);assert.equal(current.multi,prior.multi);assert.deepEqual(current.C.res,prior.C.res);checks++}return {checks,note:'Observed nearest-point tie instability also occurs using the exact main model source.'}});
 const report={commit:'fe653f3a93ee96adb89c1a1b516d7e009fcd1108',published:false,scope:'Read-only synthetic audit; no source or bundle edits',cases};
 console.log(JSON.stringify(report,null,2));if(cases.some(x=>!x.pass))process.exitCode=1;
