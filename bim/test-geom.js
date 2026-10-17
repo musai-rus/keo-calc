@@ -15,6 +15,12 @@ const plain = G.slice(context(geom(false)),cat,['Revit Windows'],15.5);
 assert.equal(plain.length,2); assert.deepEqual(plain[0],[7,10,6,10]);
 const windowPlain = G.openings(context(geom(false)),cat);
 const roofPlain = G.openings(context(geom(false,true)),cat);
+const tracedContext=context(geom(false));tracedContext.diagnostics={enabled:true};
+const windowTraced=G.openings(tracedContext,cat);
+assert.deepEqual(windowTraced,windowPlain); // provenance is observational, non-enumerable
+assert.equal(windowTraced[0].source.dbId,1);
+assert.equal(windowTraced[0].source.fragments[0].fragment,0);
+assert.equal(windowTraced[0].source.fragments[0].glass,true);
 // Контракт адаптера: декодер выбирает Viewer. Здесь синтетический half-float fixture; реальный decoder проверяется отдельно.
 global.Autodesk = {Viewing:{Private:{VertexEnumerator:{makeReadPositionFunc:g => {
   const raw = new Uint16Array(g.vb.buffer,g.vb.byteOffset,g.vb.byteLength/2);
@@ -26,6 +32,9 @@ assert.deepEqual(G.openings(context(geom(true)),cat),windowPlain);
 assert.deepEqual(G.openings(context(geom(true,true)),cat),roofPlain);
 const line = geom(true); line.isLines=true; line.ib=new Uint16Array([0,1]);
 assert.deepEqual(G.slice(context(line),cat,['Revit Windows'],15,[15,0.1]),[[5,10,7,10]]);
+const lineEvidence=G.slice(context(line),cat,['Revit Windows'],15,[15,0.1]);
+assert.equal(lineEvidence.precision.entries[0].provenance.dbId,1);
+assert.equal(lineEvidence.precision.entries[0].provenance.fragment,0);
 delete global.Autodesk;
 assert.throws(()=>G.slice(context(geom(true)),cat,['Revit Windows'],15.5),/декодера/);
 const bad=geom(false);bad.vb[0]=NaN;
