@@ -98,7 +98,7 @@ const BimGeom = (function () {
 
   // Viewer может хранить half-float позиции внутри Float32Array: vbstride не означает xyz Float32.
   // Декодирование доверяем Viewer; запасной путь — только явно обычные Float32 позиции.
-  function positionReader(g, e, S = 1) {
+  function positionReader(g, e, S = 1, withPrecision=false) {
     const pos = g.attributes && g.attributes.position;
     const ve = typeof Autodesk !== 'undefined' && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.VertexEnumerator;
     let read;
@@ -109,37 +109,51 @@ const BimGeom = (function () {
       const vb = g.vb || pos.array, st = g.vb ? g.vbstride : pos.itemSize, off = g.vb ? (pos.offset ?? pos.itemOffset ?? 0) : 0;
       read = (i, p) => { p.x = vb[i * st + off]; p.y = vb[i * st + off + 1]; p.z = vb[i * st + off + 2]; };
     }
-    const p = new THREE.Vector3();
+    const p = new THREE.Vector3(),cache=withPrecision?new Map():null;
     return i => {
+      if(cache?.has(i))return cache.get(i);
       read(i, p);
       const q = [(e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12]) * S, (e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13]) * S, (e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14]) * S];
       if (!q.every(Number.isFinite)) throw new Error('КЕО: некорректные координаты геометрии Viewer. Расчёт остановлен.');
+      if(withPrecision&&typeof BimPrecision!=='undefined') Object.defineProperty(q,'precision',{value:BimPrecision.vertex(g,e,i,[p.x,p.y,p.z])});
+      if(cache)cache.set(i,q);
       return q;
     };
   }
 
   // перебор треугольников / линий элемента в мировых координатах (единицы модели)
-  function eachGeom(C, dbId, onTri, onLine, fragFilter) {
+  function eachGeom(C, dbId, onTri, onLine, fragFilter, withPrecision=false) {
     const mat = new THREE.Matrix4();
     C.it.enumNodeFragments(dbId, f => {
       if (fragFilter && !fragFilter(f)) return;
       const g = C.fl.getGeometry(f); if (!g || !g.vb) return; C.fl.getWorldMatrix(f, mat); const e = mat.elements;
-      const P = positionReader(g, e);
+      const P = positionReader(g, e, 1, withPrecision);
       const ib = g.ib || (g.index && g.index.array);
       if (g.isLines) { if (!onLine) return; if (ib) for (let i = 0; i + 1 < ib.length; i += 2) onLine(P(ib[i]), P(ib[i + 1])); return; }
       if (!onTri || !ib) return;
-      for (let i = 0; i + 2 < ib.length; i += 3) onTri(P(ib[i]), P(ib[i + 1]), P(ib[i + 2]));
+      for (let i = 0; i + 2 < ib.length; i += 3) onTri(P(ib[i]), P(ib[i + 1]), P(ib[i + 2]), {fragment:f,dbId});
     }, true);
   }
 
   // горизонтальный срез на отметке zM (м) → отрезки [x1,y1,x2,y2] в метрах
   function slice(C, cat, cats, zM, lineZ) {
-    const S = C.S, z = zM / S, segs = [];
-    cats.forEach(c => (cat.byCat[c] || []).forEach(id => eachGeom(C, id, (a, b, cc) => {
-      const p = [a, b, cc], d = p.map(q => q[2] - z), pts = [];
-      for (let i = 0; i < 3; i++) { const j = (i + 1) % 3; if ((d[i] > 0) !== (d[j] > 0)) { const t = d[i] / (d[i] - d[j]); pts.push([(p[i][0] + t * (p[j][0] - p[i][0])) * S, (p[i][1] + t * (p[j][1] - p[i][1])) * S]); } }
-      if (pts.length === 2) segs.push([pts[0][0], pts[0][1], pts[1][0], pts[1][1]]);
-    }, lineZ ? (a, b) => { const z0 = lineZ[0] / S, tol = lineZ[1] / S; if (Math.abs(a[2] - z0) < tol && Math.abs(b[2] - z0) < tol) segs.push([a[0] * S, a[1] * S, b[0] * S, b[1] * S]); } : null)));
+    const S = C.S, z = zM / S, segs = [], entries=[], reasons=new Set(['exporter-accuracy-unknown']);
+    cats.forEach(c => (cat.byCat[c] || []).forEach(id => eachGeom(C, id, (a, b, cc, meta) => {
+      const p = [a, b, cc], d = p.map(q => q[2] - z), pts = [], bounds=[];
+      for (let i = 0; i < 3; i++) { const j = (i + 1) % 3;
+        if(typeof BimPrecision!=='undefined'){
+          const q=p[i].precision?.bounds?.[2],zz=BimPrecision.div([zM,zM],[S,S]);
+          if(!q||!zz||q[0]<=zz[1]&&q[1]>=zz[0])reasons.add('slice-topology-uncertain');
+        }
+        if ((d[i] > 0) !== (d[j] > 0)) {
+          const t = d[i] / (d[i] - d[j]); pts.push([(p[i][0] + t * (p[j][0] - p[i][0])) * S, (p[i][1] + t * (p[j][1] - p[i][1])) * S]);
+          const bound=typeof BimPrecision!=='undefined'?BimPrecision.intersection(p[i].precision,p[j].precision,zM,S):{bounds:null,reason:'precision-module-unavailable'};
+          bounds.push(bound.bounds);if(bound.reason)reasons.add(bound.reason);
+        }
+      }
+      if (pts.length === 2) {segs.push([pts[0][0], pts[0][1], pts[1][0], pts[1][1]]);entries.push({bounds:bounds.every(Boolean)?bounds.flat():null,provenance:{...meta,category:c,zM,unitScale:S,vertices:p.map(q=>q.precision?.provenance||{decoder:'unknown'}),operation:'triangle-plane interval intersection',reconstruction:'unknown'}});}
+    }, lineZ ? (a, b) => { const z0 = lineZ[0] / S, tol = lineZ[1] / S; if (Math.abs(a[2] - z0) < tol && Math.abs(b[2] - z0) < tol) {segs.push([a[0] * S, a[1] * S, b[0] * S, b[1] * S]);entries.push({bounds:null,provenance:{reason:'line-selection-precision-unknown'}});} } : null, undefined, true)));
+    Object.defineProperty(segs,'precision',{value:{v:1,reference:'source-model',reconstruction:'unknown',complete:!reasons.has('slice-topology-uncertain'),entries,reasons:[...reasons].sort()}});
     return segs;
   }
 
@@ -305,6 +319,7 @@ const BimGeom = (function () {
       if (x1 - x0 > 4 || y1 - y0 > 4) return; // ворота, витражные блоки — не трогаем
       segs.push([x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]);
     });
+    Object.defineProperty(segs,'precision',{value:{v:1,reference:'source-model',reconstruction:segs.length?'unknown':'exact',complete:true,entries:segs.map(()=>({bounds:null,provenance:{operation:'Viewer getWorldBounds; closed opaque door AABB',reconstruction:'unknown'}})),reasons:segs.length?['door-bounds-accuracy-unknown']:[]}});
     return segs;
   }
 

@@ -8,7 +8,11 @@ vm.runInContext(scripts[0],context);
 let source=fs.readFileSync(__dirname+'/keo-bim.js','utf8').replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){}};};draw=()=>{};renderList=()=>{};\n  return {_html:shortSectionHTML,_bind:bindShortSection,_json:exportJSON,_csv:exportCSV,_one:exportOne,_dec:exportDec, run, st: () => st, S,');
 source=source.replace(/  function download\(name, text, type\) \{[^\n]+\}/,'  function download(name,text,type){window.downloadedText=text;if(type===\'application/json\')window.downloaded=JSON.parse(text);}');
 vm.runInContext(source,context);vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
-context.reloadApp=()=>{const methods={...context.KeoBimLib.BimGeom};vm.runInContext(source,context);Object.assign(context.KeoBimLib.BimGeom,methods);};
+// Explicit, authoritative binary64 source contract for this synthetic fixture only.
+function annotateGeometry(g){for(const name of ['slice','doorBoxes']){let fn=g[name];Object.defineProperty(g,name,{configurable:true,enumerable:true,get(){return (...args)=>{const ss=fn(...args);Object.defineProperty(ss,'precision',{configurable:true,value:{v:1,reference:'synthetic-authoritative',reconstruction:context.fixtureUnknownPrecision?'unknown':'exact',complete:true,reasons:context.fixtureUnknownPrecision?['synthetic unknown encoder']:[],entries:ss.map(s=>({bounds:s.map(x=>[x,x]),provenance:{source:'synthetic fixture coordinates'}}))}});return ss;};},set(value){fn=value;}});}}
+annotateGeometry(context.KeoBimLib.BimGeom);
+context.fixtureUnknownPrecision=false;
+context.reloadApp=()=>{const methods={...context.KeoBimLib.BimGeom};vm.runInContext(source,context);annotateGeometry(context.KeoBimLib.BimGeom);Object.assign(context.KeoBimLib.BimGeom,methods);};
 (async()=>{
 await vm.runInContext(`(async()=>{
  let width=3.6;const height=2.4;
@@ -37,6 +41,8 @@ await vm.runInContext(`(async()=>{
   KeoBim._bind({querySelector:()=>editor},current());apply.onclick();
   assert.match(message.textContent,/Укажите|Число|обоснование|Разрез/);assert.equal(current().C.res.eFinal,initial);assert.equal(localStorage.getItem('keo-bim:decisions:short:A'),storedBeforeInvalid);
  }
+ fixtureUnknownPrecision=true;await KeoBim.run(opts);assert.equal(current().sectionContext.geometryProof.state,'insufficient');assert.equal(current().section.mode,'stale');assert.equal(current().st,undefined);assert.equal(current().C,undefined);assert.throws(()=>KeoBim.setShortSection('room',p),/Недостаточно/);KeoBim._json();assert.equal(downloaded.spaces.length,0);assert.equal(downloaded.calculationErrors[0].section.geometryProof.state,'insufficient');
+ fixtureUnknownPrecision=false;await KeoBim.run(opts);assert.equal(current().C.res.eFinal,initial);
  const html=KeoBim._html(current());assert.ok(html.includes('data-short-preview'));assert.ok(html.includes('data-short-action="auto"'));assert.ok(html.includes('Synthetic project section selection'));
  NOP_VIEWER.model=model('short:B');assert.throws(()=>KeoBim._json(),/Модель изменилась/);assert.throws(()=>KeoBim.setShortSection('room',p),/Модель изменилась/);await KeoBim.run(opts);assert.equal(Object.keys(KeoBim.st().sections).length,0);assert.equal(current().section.mode,'auto');assert.match(current().err,/L ≤ 4/);
  NOP_VIEWER.model=model('short:A');await KeoBim.run(opts);assert.equal(current().C.res.eFinal,initial);
@@ -80,7 +86,7 @@ await vm.runInContext(`(async()=>{
   // Existing raster perimeter matching rejects this known synthetic Room at ±45°.
   // Exercise the public explicit assignment, without changing matcher tolerances.
   if(KeoBim.st().res.find(r=>r.key==='rotated')?.kind==='nogeo')KeoBim.decide('assign',['rotated'],'L01',world([1.8,1.2]));
-  const r=KeoBim.st().res.find(r=>r.key==='rotated');assert.ok(r);assert.ok(r.sectionContext);assert.equal(r.sectionContext.error,'');assert.equal(r.sectionContext.source.kind,'slice-segments');
+  const r=KeoBim.st().res.find(r=>r.key==='rotated');assert.ok(r);assert.ok(r.sectionContext);if(angle!==0){assert.equal(r.sectionContext.geometryProof.state,'insufficient');assert.ok(r.sectionContext.error);assert.throws(()=>KeoBim.setShortSection('rotated',p));assert.equal(r.st,undefined);continue;}assert.equal(r.sectionContext.geometryProof.state,'confirmed');assert.equal(r.sectionContext.error,'');assert.equal(r.sectionContext.source.kind,'slice-segments');
   KeoBim.setShortSection('rotated',p);const calculated=KeoBim.st().res.find(r=>r.key==='rotated');assert.equal(calculated.C.ok,true);assert.equal(calculated.st.top.L,3.6);assert.equal(calculated.section.geometrySource,'slice-segments');
   KeoBim._json();assert.equal(downloaded.spaces[0].section.geometrySource,'slice-segments');
   const oldSignature=KeoBim.st().sections.rotated.signature;
@@ -91,5 +97,5 @@ await vm.runInContext(`(async()=>{
  }
  KeoBim.destroy();
 })()`,context);
-console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis, physical source wiring at 0/30/±45 degrees (explicit synthetic Room assignment where needed), subcell notch invalidation');
+console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis, exact source positive flow at 0 degrees, floating rotated geometry fails closed at 30/±45 degrees, subcell notch invalidation');
 })().catch(e=>{console.error(e);process.exitCode=1});

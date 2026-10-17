@@ -1,8 +1,8 @@
-/* Exact source-boundary path through the real raster; synthetic data only. */
+/* Historical floating nominal fit diagnostics, not production certification. Source-boundary path through the real raster; synthetic data only. */
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const G=new Function(fs.readFileSync(__dirname+'/geom.js','utf8')+';return BimGeom')();
-const Rectangles=new Function(fs.readFileSync(__dirname+'/rectangles.js','utf8')+';return BimRectangles')();
-const Sections=new Function('BimRectangles',fs.readFileSync(__dirname+'/sections.js','utf8')+';return BimSections')(Rectangles);
+const Rectangles=new Function(fs.readFileSync(__dirname+'/rectangles.js','utf8')+';return {...BimRectangles,certify:BimRectangles.nominalDiagnostics}')();
+const Sections=new Function('BimRectangles',fs.readFileSync(__dirname+'/sections.js','utf8')+';return {...BimSections,context:BimSections.rasterDiagnostics}')(Rectangles);
 const Cc=new Function('BimSections',fs.readFileSync(__dirname+'/calc.js','utf8')+';return BimCalc')(Sections);
 const base=fs.readFileSync(__dirname+'/test-bim.js','utf8').replace('process.exit(fails ? 1 : 0);','if(fails)throw Error("baseline fixture");');
 const {env,SPC,win}=new Function('require','__dirname','console',base+';return {env,SPC,win}')(require,__dirname,{log(){}});
@@ -46,4 +46,4 @@ for(const [dx,dy] of [[0,0],[-20,-15],[1500,-2000]])test('translated source coor
 for(const outline of [[[0,0],[3.6,0],[3.6,2.2],[0,2.4]],[[0,0],[3.6,0],[3.7,2.4],[.1,2.4]]])test('convex nonrectangle is not certified',()=>{const f=fixture({outline,angle:Math.PI/6});assert.ok(f.ctx.error);});
 test('unrelated distant source segments do not invalidate this space',()=>{const f=fixture({angle:Math.PI/6}),ctx=Sections.context({...f.args,boundarySegments:[...f.segments,[10,10,11,11]]});assert.equal(ctx.error,'');assert.equal(ctx.signature,f.ctx.signature);});
 test('an interior degenerate source obstacle is rejected conservatively',()=>{const f=fixture({extra:[[1.4,.5,1.4,.5]]});assert.ok(f.ctx.error);});
-console.log(`${total}/${total} source-rectangle groups passed`);
+console.log(`${total}/${total} nominal-fit diagnostic groups passed`);

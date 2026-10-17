@@ -2041,6 +2041,75 @@ const BimSpaces = (function () {
 
   return { conv, unitOf, matchRooms, compose, links, combos, spaceLabel, lineFree, visibleParts, sectionWidth };
 })();
+/* Outward-rounded intervals for the decoded mesh. No exporter accuracy is inferred. */
+const BimPrecision = (() => {
+  const buf=new ArrayBuffer(8),dv=new DataView(buf),finite=Number.isFinite;
+  function next(x,up) {
+    if(Number.isNaN(x)||x===(up?Infinity:-Infinity))return x;
+    if(x===0)return up?Number.MIN_VALUE:-Number.MIN_VALUE;
+    dv.setFloat64(0,x);let b=dv.getBigUint64(0);b+=(x>0)===up?1n:-1n;dv.setBigUint64(0,b);return dv.getFloat64(0);
+  }
+  const box=x=>[x,x],valid=a=>Array.isArray(a)&&a.length===2&&a.every(finite)&&a[0]<=a[1];
+  const outward=(a,b)=>[next(a,false),next(b,true)];
+  const add=(a,b)=>outward(a[0]+b[0],a[1]+b[1]);
+  const sub=(a,b)=>outward(a[0]-b[1],a[1]-b[0]);
+  function mul(a,b){const q=[a[0]*b[0],a[0]*b[1],a[1]*b[0],a[1]*b[1]];return outward(Math.min(...q),Math.max(...q));}
+  function div(a,b){if(b[0]<=0&&b[1]>=0)return null;return mul(a,outward(1/b[1],1/b[0]));}
+  function transform(p,m,S=1){return [0,1,2].map(k=>mul(add(add(add(mul(box(m[k]),p[0]),mul(box(m[k+4]),p[1])),mul(box(m[k+8]),p[2])),box(m[k+12])),box(S)));}
+  // This describes a decoder cell, not an assumed encoder rounding rule.
+  // A supplied rounding rule asserts an unsaturated, in-range quantizer.
+  function decodeCell(code,format,rule) {
+    if(format==='unorm16-centered'&&Number.isInteger(code)&&code>=0&&code<=65535){
+      const value=code/65535-.5,arithmetic=sub(div(box(code),box(65535)),box(.5));
+      if(!['nearest','directed'].includes(rule))return {value,arithmetic,input:null,step:1/65535};
+      const radius=(rule==='nearest'?.5:1)/65535;
+      return {value,arithmetic,input:outward(Math.max(-.5,value-radius),Math.min(.5,value+radius)),step:1/65535};
+    }
+    if(format==='float32'&&finite(code)&&Math.fround(code)===code){
+      if(rule==='exact')return {value:code,arithmetic:box(code),input:box(code)};
+      // Float32's adjacent spacing changes at powers of two and near zero.
+      const b=new ArrayBuffer(4),v=new DataView(b);v.setFloat32(0,code);const bits=v.getUint32(0);
+      const adjacent=up=>{if(code===0)return up?2**-149:-(2**-149);v.setUint32(0,bits+((code>0)===up?1:-1));return v.getFloat32(0);};
+      if(!['nearest','directed'].includes(rule))return {value:code,arithmetic:box(code),input:null};
+      const lo=adjacent(false),hi=adjacent(true),f=rule==='nearest'?.5:1;
+      if(!finite(lo)||!finite(hi))return {value:code,arithmetic:box(code),input:null};
+      return {value:code,arithmetic:box(code),input:outward(code-(code-lo)*f,code+(hi-code)*f)};
+    }
+    return {value:null,arithmetic:null,input:null};
+  }
+  function vertex(g,e,index,decoded) {
+    const a=g.vblayout?.position||g.attributes?.position,raw=g.vb||a?.array;
+    let cells,format='unknown';
+    if(a&&raw&&a.bytesPerItem===2&&a.itemSize===4&&a.normalized&&g.vb&&!(a.offset||a.itemOffset)){
+      const u=new Uint16Array(raw.buffer,raw.byteOffset,raw.byteLength/2),i=index*g.vbstride*2;
+      format='unorm16-centered';cells=[0,1,2].map(k=>decodeCell(u[i+k],format));
+    } else if(a&&raw instanceof Float32Array&&(!a.bytesPerItem||a.bytesPerItem===4)&&!a.normalized&&a.itemSize===3){
+      const i=index*(g.vb?g.vbstride:3)+(a.offset||0);format='float32';cells=[0,1,2].map(k=>decodeCell(raw[i+k],format));
+    }
+    const matches=cells?.every((c,k)=>c.value===decoded[k]&&valid(c.arithmetic));
+    const computed=matches&&e.length===16&&Array.from(e).every(finite)&&e[3]===0&&e[7]===0&&e[11]===0&&e[15]===1?transform(cells.map(c=>c.arithmetic),e):null;
+    const bounds=computed?.every(valid)?computed:null;
+    return {bounds,provenance:{decoder:matches?format:'unverified',decoderVerified:!!matches,decoderFormula:format==='unorm16-centered'?'uint16/65535 - 0.5':'stored binary32',reference:'decoded-mesh',matrix:Array.from(e),matrixReference:'runtime coefficients treated as exact; exporter transform accuracy unknown',encodingRule:'unknown',reconstruction:'unknown'}};
+  }
+  function intersection(a,b,zM,S) {
+    if(!a?.bounds?.every(valid)||!b?.bounds?.every(valid)||!finite(S)||!(S>0))return {bounds:null,reason:'unknown-coordinate-precision'};
+    const z=div(box(zM),box(S)),da=sub(a.bounds[2],z),db=sub(b.bounds[2],z);
+    if((da[0]<=0&&da[1]>=0)||(db[0]<=0&&db[1]>=0))return {bounds:null,reason:'slice-vertex-sign-uncertain'};
+    const t=div(da,sub(da,db));if(!t)return {bounds:null,reason:'slice-denominator-contains-zero'};
+    const bounds=[0,1].map(k=>mul(add(a.bounds[k],mul(t,sub(b.bounds[k],a.bounds[k]))),box(S)));
+    return bounds.every(valid)?{bounds,reason:''}:{bounds:null,reason:'nonfinite-slice-bound'};
+  }
+  function combine(collections) {
+    const entries=[],reasons=new Set();let reconstruction='exact',complete=true;
+    for(const ss of collections){const p=ss.precision;
+      if(!p||p.entries?.length!==ss.length){complete=false;reconstruction='unknown';reasons.add('missing-collection-provenance');entries.push(...ss.map(()=>({bounds:null,provenance:{reason:'missing-collection-provenance'}})));continue;}
+      entries.push(...p.entries);if(p.reconstruction!=='exact')reconstruction=p.reconstruction==='unknown'?'unknown':reconstruction==='unknown'?'unknown':'bounded';
+      if(p.complete!==true)complete=false;for(const r of p.reasons||[])reasons.add(r);
+    }
+    return {v:1,reference:'source-model',reconstruction,complete,entries,reasons:[...reasons].sort()};
+  }
+  return {next,box,valid,add,sub,mul,div,transform,decodeCell,vertex,intersection,combine};
+})();
 /* КЕО по модели Autodesk Viewer — геометрия: срезы, растр помещений, проёмы, карта высот.
    Работает внутри страницы с уже загруженной моделью (NOP_VIEWER). Единицы — метры, координаты — мировые координаты Viewer × масштаб единиц. */
 const BimGeom = (function () {
@@ -2141,7 +2210,7 @@ const BimGeom = (function () {
 
   // Viewer может хранить half-float позиции внутри Float32Array: vbstride не означает xyz Float32.
   // Декодирование доверяем Viewer; запасной путь — только явно обычные Float32 позиции.
-  function positionReader(g, e, S = 1) {
+  function positionReader(g, e, S = 1, withPrecision=false) {
     const pos = g.attributes && g.attributes.position;
     const ve = typeof Autodesk !== 'undefined' && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.VertexEnumerator;
     let read;
@@ -2152,37 +2221,51 @@ const BimGeom = (function () {
       const vb = g.vb || pos.array, st = g.vb ? g.vbstride : pos.itemSize, off = g.vb ? (pos.offset ?? pos.itemOffset ?? 0) : 0;
       read = (i, p) => { p.x = vb[i * st + off]; p.y = vb[i * st + off + 1]; p.z = vb[i * st + off + 2]; };
     }
-    const p = new THREE.Vector3();
+    const p = new THREE.Vector3(),cache=withPrecision?new Map():null;
     return i => {
+      if(cache?.has(i))return cache.get(i);
       read(i, p);
       const q = [(e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12]) * S, (e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13]) * S, (e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14]) * S];
       if (!q.every(Number.isFinite)) throw new Error('КЕО: некорректные координаты геометрии Viewer. Расчёт остановлен.');
+      if(withPrecision&&typeof BimPrecision!=='undefined') Object.defineProperty(q,'precision',{value:BimPrecision.vertex(g,e,i,[p.x,p.y,p.z])});
+      if(cache)cache.set(i,q);
       return q;
     };
   }
 
   // перебор треугольников / линий элемента в мировых координатах (единицы модели)
-  function eachGeom(C, dbId, onTri, onLine, fragFilter) {
+  function eachGeom(C, dbId, onTri, onLine, fragFilter, withPrecision=false) {
     const mat = new THREE.Matrix4();
     C.it.enumNodeFragments(dbId, f => {
       if (fragFilter && !fragFilter(f)) return;
       const g = C.fl.getGeometry(f); if (!g || !g.vb) return; C.fl.getWorldMatrix(f, mat); const e = mat.elements;
-      const P = positionReader(g, e);
+      const P = positionReader(g, e, 1, withPrecision);
       const ib = g.ib || (g.index && g.index.array);
       if (g.isLines) { if (!onLine) return; if (ib) for (let i = 0; i + 1 < ib.length; i += 2) onLine(P(ib[i]), P(ib[i + 1])); return; }
       if (!onTri || !ib) return;
-      for (let i = 0; i + 2 < ib.length; i += 3) onTri(P(ib[i]), P(ib[i + 1]), P(ib[i + 2]));
+      for (let i = 0; i + 2 < ib.length; i += 3) onTri(P(ib[i]), P(ib[i + 1]), P(ib[i + 2]), {fragment:f,dbId});
     }, true);
   }
 
   // горизонтальный срез на отметке zM (м) → отрезки [x1,y1,x2,y2] в метрах
   function slice(C, cat, cats, zM, lineZ) {
-    const S = C.S, z = zM / S, segs = [];
-    cats.forEach(c => (cat.byCat[c] || []).forEach(id => eachGeom(C, id, (a, b, cc) => {
-      const p = [a, b, cc], d = p.map(q => q[2] - z), pts = [];
-      for (let i = 0; i < 3; i++) { const j = (i + 1) % 3; if ((d[i] > 0) !== (d[j] > 0)) { const t = d[i] / (d[i] - d[j]); pts.push([(p[i][0] + t * (p[j][0] - p[i][0])) * S, (p[i][1] + t * (p[j][1] - p[i][1])) * S]); } }
-      if (pts.length === 2) segs.push([pts[0][0], pts[0][1], pts[1][0], pts[1][1]]);
-    }, lineZ ? (a, b) => { const z0 = lineZ[0] / S, tol = lineZ[1] / S; if (Math.abs(a[2] - z0) < tol && Math.abs(b[2] - z0) < tol) segs.push([a[0] * S, a[1] * S, b[0] * S, b[1] * S]); } : null)));
+    const S = C.S, z = zM / S, segs = [], entries=[], reasons=new Set(['exporter-accuracy-unknown']);
+    cats.forEach(c => (cat.byCat[c] || []).forEach(id => eachGeom(C, id, (a, b, cc, meta) => {
+      const p = [a, b, cc], d = p.map(q => q[2] - z), pts = [], bounds=[];
+      for (let i = 0; i < 3; i++) { const j = (i + 1) % 3;
+        if(typeof BimPrecision!=='undefined'){
+          const q=p[i].precision?.bounds?.[2],zz=BimPrecision.div([zM,zM],[S,S]);
+          if(!q||!zz||q[0]<=zz[1]&&q[1]>=zz[0])reasons.add('slice-topology-uncertain');
+        }
+        if ((d[i] > 0) !== (d[j] > 0)) {
+          const t = d[i] / (d[i] - d[j]); pts.push([(p[i][0] + t * (p[j][0] - p[i][0])) * S, (p[i][1] + t * (p[j][1] - p[i][1])) * S]);
+          const bound=typeof BimPrecision!=='undefined'?BimPrecision.intersection(p[i].precision,p[j].precision,zM,S):{bounds:null,reason:'precision-module-unavailable'};
+          bounds.push(bound.bounds);if(bound.reason)reasons.add(bound.reason);
+        }
+      }
+      if (pts.length === 2) {segs.push([pts[0][0], pts[0][1], pts[1][0], pts[1][1]]);entries.push({bounds:bounds.every(Boolean)?bounds.flat():null,provenance:{...meta,category:c,zM,unitScale:S,vertices:p.map(q=>q.precision?.provenance||{decoder:'unknown'}),operation:'triangle-plane interval intersection',reconstruction:'unknown'}});}
+    }, lineZ ? (a, b) => { const z0 = lineZ[0] / S, tol = lineZ[1] / S; if (Math.abs(a[2] - z0) < tol && Math.abs(b[2] - z0) < tol) {segs.push([a[0] * S, a[1] * S, b[0] * S, b[1] * S]);entries.push({bounds:null,provenance:{reason:'line-selection-precision-unknown'}});} } : null, undefined, true)));
+    Object.defineProperty(segs,'precision',{value:{v:1,reference:'source-model',reconstruction:'unknown',complete:!reasons.has('slice-topology-uncertain'),entries,reasons:[...reasons].sort()}});
     return segs;
   }
 
@@ -2348,6 +2431,7 @@ const BimGeom = (function () {
       if (x1 - x0 > 4 || y1 - y0 > 4) return; // ворота, витражные блоки — не трогаем
       segs.push([x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]);
     });
+    Object.defineProperty(segs,'precision',{value:{v:1,reference:'source-model',reconstruction:segs.length?'unknown':'exact',complete:true,entries:segs.map(()=>({bounds:null,provenance:{operation:'Viewer getWorldBounds; closed opaque door AABB',reconstruction:'unknown'}})),reasons:segs.length?['door-bounds-accuracy-unknown']:[]}});
     return segs;
   }
 
@@ -2820,10 +2904,10 @@ const BimCalc = (function () {
 
     // верхний свет (Б.3) — фонари в системе координат главных осей пространства
     const choice = env.shortSection ? BimSections.resolve(env.shortSection.context, env.shortSection.record, env.KEO) : null;
-    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors, lengthRange: env.shortSection.context.lengthRange, geometrySource: env.shortSection.context.source?.kind || 'raster' } : undefined;
+    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors, lengthRange: env.shortSection.context.lengthRange, geometrySource: env.shortSection.context.source?.kind || 'unconfirmed', geometryProof:env.shortSection.context.geometryProof } : undefined;
     if (env.shortSection?.pending || choice?.errors.length) {
       const err = env.shortSection.pending ? 'Ручной разрез ещё не применён. Примените проверенные параметры или верните авто.' : choice.errors.join(' ');
-      notes.push(err); return { err, notes, section: env.shortSection.pending ? { mode: 'draft', params: env.shortSection.pending, errors: [err] } : section };
+      notes.push(err); return { err, notes, section: env.shortSection.pending ? { ...section, mode: 'draft', params: env.shortSection.pending, errors: [err] } : section };
     }
     const manual = choice?.mode === 'manual', fr = manual ? env.shortSection.context.frame : planFrame(pts);
     const types = [], typeIds = [];
@@ -2913,7 +2997,7 @@ const BimRectangles = (function () {
   const finite=Number.isFinite;
   const normalized=s=>s[0]<s[2]||s[0]===s[2]&&s[1]<=s[3]?s.slice():[s[2],s[3],s[0],s[1]];
   const sorted=ss=>ss.map(normalized).sort((a,b)=>{for(let k=0;k<4;k++)if(a[k]!==b[k])return a[k]-b[k];return 0});
-  function certify({segments,runs,grid,containsPoint,paintSegments}) {
+  function nominal({segments,runs,grid,containsPoint,paintSegments}) {
     const fail=error=>({error,frame:null});
     if(!Array.isArray(segments)||!segments.length||segments.some(s=>!Array.isArray(s)||s.length!==4||!s.every(finite))||!Array.isArray(runs)||!runs.length||!grid||typeof containsPoint!=='function'||typeof paintSegments!=='function') return fail('Нет исходных отрезков для подтверждения прямоугольника.');
     const {cell,minx,miny,W,H}=grid;
@@ -2966,18 +3050,84 @@ const BimRectangles = (function () {
       if(U[0]<0){U=U.map(x=>-x);V=V.map(x=>-x);x0=-x0-L;y0=-y0-B}
       const O=[U[0]*x0+V[0]*y0,U[1]*x0+V[1]*y0];
       const frame={O,u:U,v:V,L,B,toLocal:p=>[(p[0]-O[0])*U[0]+(p[1]-O[1])*U[1],(p[0]-O[0])*V[0]+(p[1]-O[1])*V[1]],toWorld:p=>[O[0]+p[0]*U[0]+p[1]*V[0],O[1]+p[0]*U[1]+p[1]*V[1]]};
-      accepted.push({frame,source:{kind:'slice-segments',segments:sorted(relevant),precision:eps},lengthRange:{min:L-8*eps,max:L+8*eps,radius:8*eps}});
+      accepted.push({frame,source:{kind:'slice-segments',segments:sorted(relevant),candidateSearchEpsilon:eps},lengthRange:{min:L-8*eps,max:L+8*eps,radius:8*eps}});
     }
     if(!accepted.length)return fail('Исходные границы не подтверждают прямоугольник без внутренних препятствий с той же полной маской.');
     const first=accepted[0];
     if(accepted.some(c=>Math.abs(c.frame.L-first.frame.L)>8*eps||Math.abs(c.frame.B-first.frame.B)>8*eps||Math.hypot(c.frame.O[0]-first.frame.O[0],c.frame.O[1]-first.frame.O[1])>8*eps))return fail('Исходные границы дают неоднозначную прямоугольную схему.');
     return {...first,error:''};
   }
-  return {certify};
+  // An exact dyadic predicate closes the floating-point epsilon loophole.
+  // Every finite JS number is an integer / 2^1074. No tolerance is used here.
+  function integer(x){const d=new DataView(new ArrayBuffer(8));d.setFloat64(0,x);const b=d.getBigUint64(0),exp=Number((b>>52n)&2047n),mant=(b&((1n<<52n)-1n))+(exp?1n<<52n:0n);return (b>>63n?-1n:1n)*(mant<<BigInt(exp?exp-1:0));}
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1],minus=(a,b)=>a.map((x,k)=>x-b[k]);
+  const frac=(n,d)=>d<0n?[-n,-d]:[n,d],cmp=(a,b)=>a[0]*b[1]-b[0]*a[1];
+  function exactRectangle(segments,relevant) {
+    const rs=relevant.map(s=>[[integer(s[0]),integer(s[1])],[integer(s[2]),integer(s[3])]]),axis=rs.map(([a,b])=>minus(b,a)).find(d=>d.some(x=>x!==0n));
+    if(!axis)return false;const normal=[-axis[1],axis[0]],local=p=>[dot(p,axis),dot(p,normal)],lines=rs.map(s=>s.map(local));
+    const low=[0,1].map(k=>lines.flat().reduce((m,p)=>p[k]<m?p[k]:m,lines[0][0][k])),high=[0,1].map(k=>lines.flat().reduce((m,p)=>p[k]>m?p[k]:m,lines[0][0][k]));
+    if(low.some((x,k)=>high[k]<=x))return false;
+    const sides=[[],[],[],[]];
+    for(const [a,b]of lines){let found=false;for(let k=0;k<2;k++)for(let side=0;side<2;side++){const pos=side?high[k]:low[k];if(a[k]===pos&&b[k]===pos){const j=1-k;sides[k*2+side].push(a[j]<b[j]?[a[j],b[j]]:[b[j],a[j]]);found=true;}}if(!found)return false;}
+    if(!sides.every((ss,i)=>{const k=1-Math.floor(i/2);let end=low[k];for(const [a,b]of ss.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)){if(a>end)return false;if(b>end)end=b;}return end===high[k];}))return false;
+    // Exclude every original source segment, including points and epsilon-sized
+    // features omitted by the nominal fit. Rational open clipping is exact.
+    for(const s of segments){const a=local([integer(s[0]),integer(s[1])]),b=local([integer(s[2]),integer(s[3])]);
+      if([a,b].some(p=>p.every((x,k)=>x>low[k]&&x<high[k])))return false;
+      let left=[0n,1n],right=[1n,1n],possible=true;
+      for(let k=0;k<2;k++){const d=b[k]-a[k];if(d===0n){if(a[k]<=low[k]||a[k]>=high[k]){possible=false;break;}}else{let p=frac(low[k]-a[k],d),q=frac(high[k]-a[k],d);if(cmp(p,q)>0n)[p,q]=[q,p];if(cmp(p,left)>0n)left=p;if(cmp(q,right)<0n)right=q;}}
+      if(possible&&cmp(left,right)<0n)return false;
+    }
+    return {span:high.map((x,k)=>x-low[k]),norm:dot(axis,axis)};
+  }
+  function exactLengthRange(certificate,guess) {
+    if(typeof BimPrecision==='undefined'||!finite(guess)||guess<=0)return null;
+    const span=certificate.span.reduce((a,b)=>a>b?a:b),squared=span*span,compare=x=>{const q=integer(x);return q*q*certificate.norm-squared;};
+    let lo=guess,hi=guess;
+    // The guess is only a starting point. Exact integer comparisons validate
+    // both endpoints; inability to bracket in 64 adjacent floats fails closed.
+    for(let n=0;compare(lo)>0n&&n<64;n++)lo=BimPrecision.next(lo,false);
+    for(let n=0;compare(hi)<0n&&n<64;n++)hi=BimPrecision.next(hi,true);
+    if(compare(lo)>0n||compare(hi)<0n)return null;
+    return {min:lo,max:hi,radius:BimPrecision.next(hi-lo,true),method:'exact integer square comparison'};
+  }
+  function hull(points){const ps=[...new Map(points.map(p=>[p.join(','),p])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]),cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);const half=xs=>{const h=[];for(const p of xs){while(h.length>1&&cross(h.at(-2),h.at(-1),p)<=0)h.pop();h.push(p);}return h;};return half(ps).slice(0,-1).concat(half(ps.slice().reverse()).slice(0,-1));}
+  function provenanceSummary(p) {
+    if(!p)return null;
+    const es=Array.isArray(p.entries)?p.entries.filter(e=>e&&typeof e==='object'):[],vertices=es.flatMap(e=>Array.isArray(e.provenance?.vertices)?e.provenance.vertices.filter(Boolean):[]);
+    const known=es.filter(e=>Array.isArray(e.bounds)&&e.bounds.length===4&&e.bounds.every(b=>Array.isArray(b)&&b.length===2&&b.every(finite)&&b[0]<=b[1]));
+    return {v:p.v,reference:p.reference,reconstruction:p.reconstruction,complete:p.complete,reasons:p.reasons,segmentCount:es.length,
+      decoders:[...new Set(vertices.map(v=>v.decoder).filter(Boolean))].sort(),decoderFormulas:[...new Set(vertices.map(v=>v.decoderFormula).filter(Boolean))].sort(),
+      computationalBoundsKnown:known.length,computationalBoundsReference:'decoded positions and runtime transform/unit coefficients; excludes exporter reconstruction',
+      unitScales:[...new Set(es.map(e=>e.provenance?.unitScale).filter(finite))],cutHeights:[...new Set(es.map(e=>e.provenance?.zM).filter(finite))],
+      maxKnownCoordinateIntervalWidth:[0,1,2,3].map(k=>known.length?known.reduce((m,e)=>Math.max(m,e.bounds[k][1]-e.bounds[k][0]),0):null)};
+  }
+  function certify(args={}) {
+    const p=args.precision,proof={state:'insufficient',reference:'source-model slice; rectangle containing all mask centers',reason:'unknown-precision',provenance:provenanceSummary(p)};
+    const refuse=reason=>({error:reason,frame:null,source:undefined,lengthRange:null,geometryProof:proof});
+    if(!args.grid||!Array.isArray(args.runs)||!args.runs.length||!Array.isArray(args.segments)||args.segments.some(s=>!Array.isArray(s)||s.length!==4||!s.every(finite))||!p||p.v!==1||p.complete!==true||!['exact','bounded'].includes(p.reconstruction)||!Array.isArray(p.entries)||p.entries.length!==args.segments.length||p.entries.some((e,i)=>!e||!e.provenance||!Array.isArray(e.bounds)||e.bounds.length!==4||e.bounds.some((b,k)=>!Array.isArray(b)||b.length!==2||!b.every(finite)||b[0]>args.segments[i][k]||b[1]<args.segments[i][k])))return refuse('Недостаточно данных: точность исходных границ или полнота среза неизвестна.');
+    const h=args.grid.cell/2,centers=args.runs.flatMap(q=>[[q[0]+h,q[2]+h],[q[1]-h,q[2]+h],[q[1]-h,q[3]-h],[q[0]+h,q[3]-h]]),ch=hull(centers);
+    // A rectangle containing all mask centers contains their convex hull.
+    // A source point strictly inside it is an obstacle for every such rectangle.
+    if(typeof BimPrecision!=='undefined'&&ch.length>=3){const P=BimPrecision;for(let i=0;i<p.entries.length;i++)for(const offset of [0,2]){const b=p.entries[i].bounds,point=[b[offset],b[offset+1]];
+      const inside=ch.every((a,j)=>{const q=ch[(j+1)%ch.length],x=P.sub([q[0],q[0]],[a[0],a[0]]),y=P.sub([q[1],q[1]],[a[1],a[1]]),cross=P.sub(P.mul(x,P.sub(point[1],[a[1],a[1]])),P.mul(y,P.sub(point[0],[a[0],a[0]])));return cross[0]>0;});
+      if(inside){proof.state='contradicted';proof.reason='source-obstacle-inside-center-hull';proof.witness={segment:i,endpoint:offset/2,bounds:point};return refuse('Противоречие: исходная преграда достоверно находится внутри выпуклой оболочки маски.');}
+    }}
+    if(p.reconstruction!=='exact'||p.entries.some((e,i)=>e.bounds.some((b,k)=>b[0]!==args.segments[i][k]||b[1]!==args.segments[i][k]))){proof.reason='nonzero-input-uncertainty';return refuse('Недостаточно данных: ненулевая погрешность совместима с прямоугольником, но не доказывает его.');}
+    const fit=nominal(args);
+    if(fit.error){proof.reason='no-complete-rectangle-certificate';return refuse(fit.error);}
+    const certificate=exactRectangle(args.segments,fit.source.segments);
+    if(!certificate){proof.reason='floating-fit-not-exact-proof';return refuse('Недостаточно данных: приблизительное совпадение сторон не является точным доказательством прямоугольника.');}
+    const lengthRange=exactLengthRange(certificate,fit.frame.L);
+    if(!lengthRange){proof.reason='length-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы длины.');}
+    proof.state='confirmed';proof.reason='exact-dyadic-rectangle-and-full-raster';
+    return {...fit,lengthRange,geometryProof:proof,source:{...fit.source,proof:'exact-dyadic-predicates',inputPrecision:p}};
+  }
+  return {certify,nominalDiagnostics:nominal,exactRectangle,exactLengthRange};
 })();
 /* Explicit short rectangular sections. No normative defaults or room matching. */
 const BimSections = (function () {
-  const VERSION = 1;
+  const VERSION = 2;
   const finite = x => typeof x === 'number' && Number.isFinite(x);
   const cross = (a,b,c) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
   function convexHull(points) {
@@ -3026,13 +3176,13 @@ const BimSections = (function () {
     return {min:Math.sqrt(Math.max(0,diameter**2-(width+2*radius)**2)),max:Math.sqrt((diameter+2*radius)**2-width**2),radius};
   }
   // Exact serialization is intentional: no digest collisions or area-only reuse.
-  function context({scope,runs,cell,cut,grid,containsPoint,openings=[],lanterns=[],boundarySegments,paintSegments}) {
+  function rasterDiagnostics({scope,runs,cell,cut,grid,containsPoint,openings=[],lanterns=[],boundarySegments,boundaryPrecision,paintSegments}) {
     const sorted=(runs||[]).map(q=>q.slice()).sort((a,b)=>a[2]-b[2]||a[0]-b[0]||a[3]-b[3]||a[1]-b[1]);
     const clean=sorted.length && sorted.every(q=>q.length===4 && q.every(finite) && q[1]>q[0] && q[3]>q[2]);
-    const exact=boundarySegments!==undefined && grid && clean ? BimRectangles.certify({segments:boundarySegments,runs:sorted,grid,containsPoint,paintSegments}) : null;
+    const exact=boundarySegments!==undefined && grid && clean ? BimRectangles.certify({segments:boundarySegments,runs:sorted,grid,containsPoint,paintSegments,precision:boundaryPrecision}) : null;
     const frame=exact?.frame || (clean?rectangle(sorted):null);
     const snapshot = xs => xs.map(o=>Object.fromEntries(['id','c','t','n','nin','w','d','z0','z1','av','bv','dTop','dBot','H','hsf','tilt','round','shaded'].map(k=>[k,o[k]]))).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
-    const signature=JSON.stringify({v:VERSION,scope,cell,cut,runs:sorted,openings:snapshot(openings),lanterns:snapshot(lanterns),rectangleSource:exact?.source});
+    const signature=JSON.stringify({v:VERSION,scope,cell,cut,runs:sorted,openings:snapshot(openings),lanterns:snapshot(lanterns),rectangleSource:exact?.source,geometryProof:exact?.geometryProof});
     let error='',lengthRange=exact?.lengthRange||null;
     if(!scope || !scope.model || !scope.view || !scope.version) error='Нет устойчивой идентичности версии модели: ручной разрез не сохраняется.';
     else if(!frame || !finite(cell) || cell<=0 || !grid || ![grid.minx,grid.miny,grid.W,grid.H].every(finite) || typeof containsPoint!=='function') error='Нет полной маски пространства для проверки прямоугольной схемы.';
@@ -3058,7 +3208,13 @@ const BimSections = (function () {
       if(!error && !(+frame.L.toFixed(2)>2 && frame.L<=4+1e-9)) error=+frame.L.toFixed(2)<=2?'L ≤ 2 м: нужна отдельная схема расчёта.':'Ручная настройка доступна только для коротких прямоугольных разрезов 2 < L ≤ 4 м.';
       if(!error && (!lengthRange || !(lengthRange.min>2 && lengthRange.max<=4))) error='Растр не подтверждает, что весь диапазон возможной длины лежит в 2 < L ≤ 4 м. Нужны точные границы или отдельная схема расчёта.';
     }
-    return {scope,signature,frame,runs:sorted,cell,containsPoint,error,lengthRange,source:exact?.source};
+    return {scope,signature,frame,runs:sorted,cell,containsPoint,error,lengthRange,source:exact?.source,geometryProof:exact?.geometryProof};
+  }
+  function context(args) {
+    const ctx=rasterDiagnostics(args);
+    if(!ctx.geometryProof)ctx.geometryProof={state:'insufficient',reason:'missing-source-precision',reference:'source-model slice',provenance:null};
+    if(ctx.geometryProof.state!=='confirmed'&&!ctx.error)ctx.error='Недостаточно данных: растр без доказанных исходных границ не подтверждает прямоугольность.';
+    return ctx;
   }
   function validateRecords(records) {
     if(!records || typeof records!=='object' || Array.isArray(records)) throw Error('Неверный формат ручных разрезов.');
@@ -3094,7 +3250,9 @@ const BimSections = (function () {
     const r={v:VERSION,scope:ctx.scope,signature:ctx.signature,params:{...params,nPtsBasis:params.nPtsBasis.trim()}};
     validateRecords({record:r});return r;
   }
-  return {context,preview,resolve,record,validateRecords};
+  // rasterDiagnostics retains the historical discretisation experiment only.
+  // The application always uses context, which gates every manual profile.
+  return {context,rasterDiagnostics,preview,resolve,record,validateRecords};
 })();
 /* КЕО по модели — запуск в окне Autodesk Viewer: анализ, подсветка помещений на плане, метки, таблица и разбор. */
 const KeoBim = (function () {
@@ -3203,6 +3361,7 @@ const KeoBim = (function () {
       const bx = G.bounds(segsP.concat(segsL));
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
       L.boundarySegments=segsP.concat(segsD);
+      L.boundaryPrecision=BimPrecision.combine([segsP,segsD]);
       L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
       SP.matchRooms(L.R, L.rooms);
       G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
@@ -3332,7 +3491,7 @@ const KeoBim = (function () {
       if (lsCalc.some(l => !l.shaded)) {
         const node = C.m.getDocumentNode();
         const scope = { model: modelKey(), version: node?.getRootNode()?.urn?.() || null, view: node?.data?.guid || null, level: L.name, floor: L.floor, rooms: sp.rooms.map(r=>String(r.eid || r.key)).sort() };
-        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, paintSegments:G.paintSegments });
+        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, boundaryPrecision:L.boundaryPrecision, paintSegments:G.paintSegments });
         env.shortSection = { context: base.sectionContext, record: st.sections[sp.key], pending: st.sectionDrafts[sp.key] };
       }
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
@@ -3840,7 +3999,8 @@ const KeoBim = (function () {
     const error=[...(state.errors||[]),...(draft?preview.errors:[])];
     let h=`<details class="kb-set" data-short-editor${record||draft||!ctx.error&&r.kind==='err'?' open':''}><summary>Короткий прямоугольный разрез: ${esc(label)}</summary><p class="muted">Схема и размеры в предпросмотре получены по полной маске, шаг ${f2(ctx.cell)} м. L=${f2(ctx.frame?.L)} м, B=${f2(ctx.frame?.B)} м. Маска не подтверждает нормативную применимость отражённой составляющей: прямоугольную схему проверяет пользователь по проекту.</p>`;
     if(ctx.lengthRange) h+=`<p class="muted">Для прямоугольной схемы диапазон L с учётом дискретизации: ${f2(ctx.lengthRange.min,3)}…${f2(ctx.lengthRange.max,3)} м. Весь диапазон должен лежать в 2 &lt; L ≤ 4 м.</p>`;
-    if(ctx.source) h+='<p class="muted">Прямоугольник подтверждён исходными отрезками среза: четыре замкнутые стороны, без внутренних препятствий, растр полностью совпадает с маской пространства. Размеры — по геометрии Viewer.</p>';
+    if(ctx.geometryProof){const gp=ctx.geometryProof;h+='<p class="muted">Геометрическое доказательство: '+esc({confirmed:'подтверждено',contradicted:'противоречие',insufficient:'недостаточно'}[gp.state]||'недостаточно')+'.</p><details><summary>Точность и происхождение геометрии</summary><pre>'+esc(JSON.stringify(gp,null,2))+'</pre></details>';}
+    if(ctx.source) h+='<p class="muted">Прямоугольник подтверждён точными предикатами исходных отрезков и всей маской среза. Доказательство относится к явно указанной геометрии; нормативную схему по проекту подтверждает пользователь.</p>';
     if(ctx.error) h+=`<p class="kb-warn">${esc(ctx.error)}</p>`;
     else h+=`<label>y0 от стены y=0 схемы, м <input data-short="y0" type="number" step="0.01" value="${esc(p.y0)}" style="width:85px"></label><label style="display:block">Число РТ <input data-short="nPts" type="number" min="3" max="101" step="1" value="${p.nPts||''}" style="width:70px"></label><label style="display:block">Обоснование числа РТ для 2 &lt; L ≤ 4 м <textarea data-short="nPtsBasis" maxlength="4000" style="width:100%">${esc(p.nPtsBasis)}</textarea></label><label style="display:block"><input data-short="confirmed" type="checkbox"${p.confirmed?' checked':''}> Подтверждаю прямоугольную схему по проекту</label><p class="muted" data-short-message>Изменения полей — черновик. Предпросмотр не рассчитывает КЕО; для расчёта нажмите «Применить».</p><div class="kb-row"><button class="kb-btn" data-short-action="preview">Предпросмотр</button><button class="kb-btn" data-short-action="apply">Применить</button></div>`;
     if(record||draft) h+='<button class="kb-btn" data-short-action="auto">Вернуть авто</button>';
@@ -3999,5 +4159,5 @@ const KeoBim = (function () {
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
-window.KeoBimLib = { BimGeom, BimCalc, BimSpaces };
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision };
 })();

@@ -3,7 +3,7 @@ const BimRectangles = (function () {
   const finite=Number.isFinite;
   const normalized=s=>s[0]<s[2]||s[0]===s[2]&&s[1]<=s[3]?s.slice():[s[2],s[3],s[0],s[1]];
   const sorted=ss=>ss.map(normalized).sort((a,b)=>{for(let k=0;k<4;k++)if(a[k]!==b[k])return a[k]-b[k];return 0});
-  function certify({segments,runs,grid,containsPoint,paintSegments}) {
+  function nominal({segments,runs,grid,containsPoint,paintSegments}) {
     const fail=error=>({error,frame:null});
     if(!Array.isArray(segments)||!segments.length||segments.some(s=>!Array.isArray(s)||s.length!==4||!s.every(finite))||!Array.isArray(runs)||!runs.length||!grid||typeof containsPoint!=='function'||typeof paintSegments!=='function') return fail('Нет исходных отрезков для подтверждения прямоугольника.');
     const {cell,minx,miny,W,H}=grid;
@@ -56,12 +56,78 @@ const BimRectangles = (function () {
       if(U[0]<0){U=U.map(x=>-x);V=V.map(x=>-x);x0=-x0-L;y0=-y0-B}
       const O=[U[0]*x0+V[0]*y0,U[1]*x0+V[1]*y0];
       const frame={O,u:U,v:V,L,B,toLocal:p=>[(p[0]-O[0])*U[0]+(p[1]-O[1])*U[1],(p[0]-O[0])*V[0]+(p[1]-O[1])*V[1]],toWorld:p=>[O[0]+p[0]*U[0]+p[1]*V[0],O[1]+p[0]*U[1]+p[1]*V[1]]};
-      accepted.push({frame,source:{kind:'slice-segments',segments:sorted(relevant),precision:eps},lengthRange:{min:L-8*eps,max:L+8*eps,radius:8*eps}});
+      accepted.push({frame,source:{kind:'slice-segments',segments:sorted(relevant),candidateSearchEpsilon:eps},lengthRange:{min:L-8*eps,max:L+8*eps,radius:8*eps}});
     }
     if(!accepted.length)return fail('Исходные границы не подтверждают прямоугольник без внутренних препятствий с той же полной маской.');
     const first=accepted[0];
     if(accepted.some(c=>Math.abs(c.frame.L-first.frame.L)>8*eps||Math.abs(c.frame.B-first.frame.B)>8*eps||Math.hypot(c.frame.O[0]-first.frame.O[0],c.frame.O[1]-first.frame.O[1])>8*eps))return fail('Исходные границы дают неоднозначную прямоугольную схему.');
     return {...first,error:''};
   }
-  return {certify};
+  // An exact dyadic predicate closes the floating-point epsilon loophole.
+  // Every finite JS number is an integer / 2^1074. No tolerance is used here.
+  function integer(x){const d=new DataView(new ArrayBuffer(8));d.setFloat64(0,x);const b=d.getBigUint64(0),exp=Number((b>>52n)&2047n),mant=(b&((1n<<52n)-1n))+(exp?1n<<52n:0n);return (b>>63n?-1n:1n)*(mant<<BigInt(exp?exp-1:0));}
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1],minus=(a,b)=>a.map((x,k)=>x-b[k]);
+  const frac=(n,d)=>d<0n?[-n,-d]:[n,d],cmp=(a,b)=>a[0]*b[1]-b[0]*a[1];
+  function exactRectangle(segments,relevant) {
+    const rs=relevant.map(s=>[[integer(s[0]),integer(s[1])],[integer(s[2]),integer(s[3])]]),axis=rs.map(([a,b])=>minus(b,a)).find(d=>d.some(x=>x!==0n));
+    if(!axis)return false;const normal=[-axis[1],axis[0]],local=p=>[dot(p,axis),dot(p,normal)],lines=rs.map(s=>s.map(local));
+    const low=[0,1].map(k=>lines.flat().reduce((m,p)=>p[k]<m?p[k]:m,lines[0][0][k])),high=[0,1].map(k=>lines.flat().reduce((m,p)=>p[k]>m?p[k]:m,lines[0][0][k]));
+    if(low.some((x,k)=>high[k]<=x))return false;
+    const sides=[[],[],[],[]];
+    for(const [a,b]of lines){let found=false;for(let k=0;k<2;k++)for(let side=0;side<2;side++){const pos=side?high[k]:low[k];if(a[k]===pos&&b[k]===pos){const j=1-k;sides[k*2+side].push(a[j]<b[j]?[a[j],b[j]]:[b[j],a[j]]);found=true;}}if(!found)return false;}
+    if(!sides.every((ss,i)=>{const k=1-Math.floor(i/2);let end=low[k];for(const [a,b]of ss.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)){if(a>end)return false;if(b>end)end=b;}return end===high[k];}))return false;
+    // Exclude every original source segment, including points and epsilon-sized
+    // features omitted by the nominal fit. Rational open clipping is exact.
+    for(const s of segments){const a=local([integer(s[0]),integer(s[1])]),b=local([integer(s[2]),integer(s[3])]);
+      if([a,b].some(p=>p.every((x,k)=>x>low[k]&&x<high[k])))return false;
+      let left=[0n,1n],right=[1n,1n],possible=true;
+      for(let k=0;k<2;k++){const d=b[k]-a[k];if(d===0n){if(a[k]<=low[k]||a[k]>=high[k]){possible=false;break;}}else{let p=frac(low[k]-a[k],d),q=frac(high[k]-a[k],d);if(cmp(p,q)>0n)[p,q]=[q,p];if(cmp(p,left)>0n)left=p;if(cmp(q,right)<0n)right=q;}}
+      if(possible&&cmp(left,right)<0n)return false;
+    }
+    return {span:high.map((x,k)=>x-low[k]),norm:dot(axis,axis)};
+  }
+  function exactLengthRange(certificate,guess) {
+    if(typeof BimPrecision==='undefined'||!finite(guess)||guess<=0)return null;
+    const span=certificate.span.reduce((a,b)=>a>b?a:b),squared=span*span,compare=x=>{const q=integer(x);return q*q*certificate.norm-squared;};
+    let lo=guess,hi=guess;
+    // The guess is only a starting point. Exact integer comparisons validate
+    // both endpoints; inability to bracket in 64 adjacent floats fails closed.
+    for(let n=0;compare(lo)>0n&&n<64;n++)lo=BimPrecision.next(lo,false);
+    for(let n=0;compare(hi)<0n&&n<64;n++)hi=BimPrecision.next(hi,true);
+    if(compare(lo)>0n||compare(hi)<0n)return null;
+    return {min:lo,max:hi,radius:BimPrecision.next(hi-lo,true),method:'exact integer square comparison'};
+  }
+  function hull(points){const ps=[...new Map(points.map(p=>[p.join(','),p])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]),cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);const half=xs=>{const h=[];for(const p of xs){while(h.length>1&&cross(h.at(-2),h.at(-1),p)<=0)h.pop();h.push(p);}return h;};return half(ps).slice(0,-1).concat(half(ps.slice().reverse()).slice(0,-1));}
+  function provenanceSummary(p) {
+    if(!p)return null;
+    const es=Array.isArray(p.entries)?p.entries.filter(e=>e&&typeof e==='object'):[],vertices=es.flatMap(e=>Array.isArray(e.provenance?.vertices)?e.provenance.vertices.filter(Boolean):[]);
+    const known=es.filter(e=>Array.isArray(e.bounds)&&e.bounds.length===4&&e.bounds.every(b=>Array.isArray(b)&&b.length===2&&b.every(finite)&&b[0]<=b[1]));
+    return {v:p.v,reference:p.reference,reconstruction:p.reconstruction,complete:p.complete,reasons:p.reasons,segmentCount:es.length,
+      decoders:[...new Set(vertices.map(v=>v.decoder).filter(Boolean))].sort(),decoderFormulas:[...new Set(vertices.map(v=>v.decoderFormula).filter(Boolean))].sort(),
+      computationalBoundsKnown:known.length,computationalBoundsReference:'decoded positions and runtime transform/unit coefficients; excludes exporter reconstruction',
+      unitScales:[...new Set(es.map(e=>e.provenance?.unitScale).filter(finite))],cutHeights:[...new Set(es.map(e=>e.provenance?.zM).filter(finite))],
+      maxKnownCoordinateIntervalWidth:[0,1,2,3].map(k=>known.length?known.reduce((m,e)=>Math.max(m,e.bounds[k][1]-e.bounds[k][0]),0):null)};
+  }
+  function certify(args={}) {
+    const p=args.precision,proof={state:'insufficient',reference:'source-model slice; rectangle containing all mask centers',reason:'unknown-precision',provenance:provenanceSummary(p)};
+    const refuse=reason=>({error:reason,frame:null,source:undefined,lengthRange:null,geometryProof:proof});
+    if(!args.grid||!Array.isArray(args.runs)||!args.runs.length||!Array.isArray(args.segments)||args.segments.some(s=>!Array.isArray(s)||s.length!==4||!s.every(finite))||!p||p.v!==1||p.complete!==true||!['exact','bounded'].includes(p.reconstruction)||!Array.isArray(p.entries)||p.entries.length!==args.segments.length||p.entries.some((e,i)=>!e||!e.provenance||!Array.isArray(e.bounds)||e.bounds.length!==4||e.bounds.some((b,k)=>!Array.isArray(b)||b.length!==2||!b.every(finite)||b[0]>args.segments[i][k]||b[1]<args.segments[i][k])))return refuse('Недостаточно данных: точность исходных границ или полнота среза неизвестна.');
+    const h=args.grid.cell/2,centers=args.runs.flatMap(q=>[[q[0]+h,q[2]+h],[q[1]-h,q[2]+h],[q[1]-h,q[3]-h],[q[0]+h,q[3]-h]]),ch=hull(centers);
+    // A rectangle containing all mask centers contains their convex hull.
+    // A source point strictly inside it is an obstacle for every such rectangle.
+    if(typeof BimPrecision!=='undefined'&&ch.length>=3){const P=BimPrecision;for(let i=0;i<p.entries.length;i++)for(const offset of [0,2]){const b=p.entries[i].bounds,point=[b[offset],b[offset+1]];
+      const inside=ch.every((a,j)=>{const q=ch[(j+1)%ch.length],x=P.sub([q[0],q[0]],[a[0],a[0]]),y=P.sub([q[1],q[1]],[a[1],a[1]]),cross=P.sub(P.mul(x,P.sub(point[1],[a[1],a[1]])),P.mul(y,P.sub(point[0],[a[0],a[0]])));return cross[0]>0;});
+      if(inside){proof.state='contradicted';proof.reason='source-obstacle-inside-center-hull';proof.witness={segment:i,endpoint:offset/2,bounds:point};return refuse('Противоречие: исходная преграда достоверно находится внутри выпуклой оболочки маски.');}
+    }}
+    if(p.reconstruction!=='exact'||p.entries.some((e,i)=>e.bounds.some((b,k)=>b[0]!==args.segments[i][k]||b[1]!==args.segments[i][k]))){proof.reason='nonzero-input-uncertainty';return refuse('Недостаточно данных: ненулевая погрешность совместима с прямоугольником, но не доказывает его.');}
+    const fit=nominal(args);
+    if(fit.error){proof.reason='no-complete-rectangle-certificate';return refuse(fit.error);}
+    const certificate=exactRectangle(args.segments,fit.source.segments);
+    if(!certificate){proof.reason='floating-fit-not-exact-proof';return refuse('Недостаточно данных: приблизительное совпадение сторон не является точным доказательством прямоугольника.');}
+    const lengthRange=exactLengthRange(certificate,fit.frame.L);
+    if(!lengthRange){proof.reason='length-interval-not-certified';return refuse('Недостаточно данных: не удалось доказать границы длины.');}
+    proof.state='confirmed';proof.reason='exact-dyadic-rectangle-and-full-raster';
+    return {...fit,lengthRange,geometryProof:proof,source:{...fit.source,proof:'exact-dyadic-predicates',inputPrecision:p}};
+  }
+  return {certify,nominalDiagnostics:nominal,exactRectangle,exactLengthRange};
 })();

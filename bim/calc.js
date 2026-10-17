@@ -306,10 +306,10 @@ const BimCalc = (function () {
 
     // верхний свет (Б.3) — фонари в системе координат главных осей пространства
     const choice = env.shortSection ? BimSections.resolve(env.shortSection.context, env.shortSection.record, env.KEO) : null;
-    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors, lengthRange: env.shortSection.context.lengthRange, geometrySource: env.shortSection.context.source?.kind || 'raster' } : undefined;
+    const section = choice ? { mode: choice.mode, params: env.shortSection.record?.params, errors: choice.errors, lengthRange: env.shortSection.context.lengthRange, geometrySource: env.shortSection.context.source?.kind || 'unconfirmed', geometryProof:env.shortSection.context.geometryProof } : undefined;
     if (env.shortSection?.pending || choice?.errors.length) {
       const err = env.shortSection.pending ? 'Ручной разрез ещё не применён. Примените проверенные параметры или верните авто.' : choice.errors.join(' ');
-      notes.push(err); return { err, notes, section: env.shortSection.pending ? { mode: 'draft', params: env.shortSection.pending, errors: [err] } : section };
+      notes.push(err); return { err, notes, section: env.shortSection.pending ? { ...section, mode: 'draft', params: env.shortSection.pending, errors: [err] } : section };
     }
     const manual = choice?.mode === 'manual', fr = manual ? env.shortSection.context.frame : planFrame(pts);
     const types = [], typeIds = [];

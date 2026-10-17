@@ -105,6 +105,7 @@ const KeoBim = (function () {
       const bx = G.bounds(segsP.concat(segsL));
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
       L.boundarySegments=segsP.concat(segsD);
+      L.boundaryPrecision=BimPrecision.combine([segsP,segsD]);
       L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(segsP.concat(segsL), S.cell, bx); L.doors = segsD.length / 4;
       SP.matchRooms(L.R, L.rooms);
       G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
@@ -234,7 +235,7 @@ const KeoBim = (function () {
       if (lsCalc.some(l => !l.shaded)) {
         const node = C.m.getDocumentNode();
         const scope = { model: modelKey(), version: node?.getRootNode()?.urn?.() || null, view: node?.data?.guid || null, level: L.name, floor: L.floor, rooms: sp.rooms.map(r=>String(r.eid || r.key)).sort() };
-        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, paintSegments:G.paintSegments });
+        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, boundaryPrecision:L.boundaryPrecision, paintSegments:G.paintSegments });
         env.shortSection = { context: base.sectionContext, record: st.sections[sp.key], pending: st.sectionDrafts[sp.key] };
       }
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
@@ -742,7 +743,8 @@ const KeoBim = (function () {
     const error=[...(state.errors||[]),...(draft?preview.errors:[])];
     let h=`<details class="kb-set" data-short-editor${record||draft||!ctx.error&&r.kind==='err'?' open':''}><summary>Короткий прямоугольный разрез: ${esc(label)}</summary><p class="muted">Схема и размеры в предпросмотре получены по полной маске, шаг ${f2(ctx.cell)} м. L=${f2(ctx.frame?.L)} м, B=${f2(ctx.frame?.B)} м. Маска не подтверждает нормативную применимость отражённой составляющей: прямоугольную схему проверяет пользователь по проекту.</p>`;
     if(ctx.lengthRange) h+=`<p class="muted">Для прямоугольной схемы диапазон L с учётом дискретизации: ${f2(ctx.lengthRange.min,3)}…${f2(ctx.lengthRange.max,3)} м. Весь диапазон должен лежать в 2 &lt; L ≤ 4 м.</p>`;
-    if(ctx.source) h+='<p class="muted">Прямоугольник подтверждён исходными отрезками среза: четыре замкнутые стороны, без внутренних препятствий, растр полностью совпадает с маской пространства. Размеры — по геометрии Viewer.</p>';
+    if(ctx.geometryProof){const gp=ctx.geometryProof;h+='<p class="muted">Геометрическое доказательство: '+esc({confirmed:'подтверждено',contradicted:'противоречие',insufficient:'недостаточно'}[gp.state]||'недостаточно')+'.</p><details><summary>Точность и происхождение геометрии</summary><pre>'+esc(JSON.stringify(gp,null,2))+'</pre></details>';}
+    if(ctx.source) h+='<p class="muted">Прямоугольник подтверждён точными предикатами исходных отрезков и всей маской среза. Доказательство относится к явно указанной геометрии; нормативную схему по проекту подтверждает пользователь.</p>';
     if(ctx.error) h+=`<p class="kb-warn">${esc(ctx.error)}</p>`;
     else h+=`<label>y0 от стены y=0 схемы, м <input data-short="y0" type="number" step="0.01" value="${esc(p.y0)}" style="width:85px"></label><label style="display:block">Число РТ <input data-short="nPts" type="number" min="3" max="101" step="1" value="${p.nPts||''}" style="width:70px"></label><label style="display:block">Обоснование числа РТ для 2 &lt; L ≤ 4 м <textarea data-short="nPtsBasis" maxlength="4000" style="width:100%">${esc(p.nPtsBasis)}</textarea></label><label style="display:block"><input data-short="confirmed" type="checkbox"${p.confirmed?' checked':''}> Подтверждаю прямоугольную схему по проекту</label><p class="muted" data-short-message>Изменения полей — черновик. Предпросмотр не рассчитывает КЕО; для расчёта нажмите «Применить».</p><div class="kb-row"><button class="kb-btn" data-short-action="preview">Предпросмотр</button><button class="kb-btn" data-short-action="apply">Применить</button></div>`;
     if(record||draft) h+='<button class="kb-btn" data-short-action="auto">Вернуть авто</button>';
@@ -901,4 +903,4 @@ const KeoBim = (function () {
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
-window.KeoBimLib = { BimGeom, BimCalc, BimSpaces };
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision };

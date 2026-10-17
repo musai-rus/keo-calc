@@ -1,6 +1,6 @@
 /* Explicit short rectangular sections. No normative defaults or room matching. */
 const BimSections = (function () {
-  const VERSION = 1;
+  const VERSION = 2;
   const finite = x => typeof x === 'number' && Number.isFinite(x);
   const cross = (a,b,c) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
   function convexHull(points) {
@@ -49,13 +49,13 @@ const BimSections = (function () {
     return {min:Math.sqrt(Math.max(0,diameter**2-(width+2*radius)**2)),max:Math.sqrt((diameter+2*radius)**2-width**2),radius};
   }
   // Exact serialization is intentional: no digest collisions or area-only reuse.
-  function context({scope,runs,cell,cut,grid,containsPoint,openings=[],lanterns=[],boundarySegments,paintSegments}) {
+  function rasterDiagnostics({scope,runs,cell,cut,grid,containsPoint,openings=[],lanterns=[],boundarySegments,boundaryPrecision,paintSegments}) {
     const sorted=(runs||[]).map(q=>q.slice()).sort((a,b)=>a[2]-b[2]||a[0]-b[0]||a[3]-b[3]||a[1]-b[1]);
     const clean=sorted.length && sorted.every(q=>q.length===4 && q.every(finite) && q[1]>q[0] && q[3]>q[2]);
-    const exact=boundarySegments!==undefined && grid && clean ? BimRectangles.certify({segments:boundarySegments,runs:sorted,grid,containsPoint,paintSegments}) : null;
+    const exact=boundarySegments!==undefined && grid && clean ? BimRectangles.certify({segments:boundarySegments,runs:sorted,grid,containsPoint,paintSegments,precision:boundaryPrecision}) : null;
     const frame=exact?.frame || (clean?rectangle(sorted):null);
     const snapshot = xs => xs.map(o=>Object.fromEntries(['id','c','t','n','nin','w','d','z0','z1','av','bv','dTop','dBot','H','hsf','tilt','round','shaded'].map(k=>[k,o[k]]))).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
-    const signature=JSON.stringify({v:VERSION,scope,cell,cut,runs:sorted,openings:snapshot(openings),lanterns:snapshot(lanterns),rectangleSource:exact?.source});
+    const signature=JSON.stringify({v:VERSION,scope,cell,cut,runs:sorted,openings:snapshot(openings),lanterns:snapshot(lanterns),rectangleSource:exact?.source,geometryProof:exact?.geometryProof});
     let error='',lengthRange=exact?.lengthRange||null;
     if(!scope || !scope.model || !scope.view || !scope.version) error='Нет устойчивой идентичности версии модели: ручной разрез не сохраняется.';
     else if(!frame || !finite(cell) || cell<=0 || !grid || ![grid.minx,grid.miny,grid.W,grid.H].every(finite) || typeof containsPoint!=='function') error='Нет полной маски пространства для проверки прямоугольной схемы.';
@@ -81,7 +81,13 @@ const BimSections = (function () {
       if(!error && !(+frame.L.toFixed(2)>2 && frame.L<=4+1e-9)) error=+frame.L.toFixed(2)<=2?'L ≤ 2 м: нужна отдельная схема расчёта.':'Ручная настройка доступна только для коротких прямоугольных разрезов 2 < L ≤ 4 м.';
       if(!error && (!lengthRange || !(lengthRange.min>2 && lengthRange.max<=4))) error='Растр не подтверждает, что весь диапазон возможной длины лежит в 2 < L ≤ 4 м. Нужны точные границы или отдельная схема расчёта.';
     }
-    return {scope,signature,frame,runs:sorted,cell,containsPoint,error,lengthRange,source:exact?.source};
+    return {scope,signature,frame,runs:sorted,cell,containsPoint,error,lengthRange,source:exact?.source,geometryProof:exact?.geometryProof};
+  }
+  function context(args) {
+    const ctx=rasterDiagnostics(args);
+    if(!ctx.geometryProof)ctx.geometryProof={state:'insufficient',reason:'missing-source-precision',reference:'source-model slice',provenance:null};
+    if(ctx.geometryProof.state!=='confirmed'&&!ctx.error)ctx.error='Недостаточно данных: растр без доказанных исходных границ не подтверждает прямоугольность.';
+    return ctx;
   }
   function validateRecords(records) {
     if(!records || typeof records!=='object' || Array.isArray(records)) throw Error('Неверный формат ручных разрезов.');
@@ -117,5 +123,7 @@ const BimSections = (function () {
     const r={v:VERSION,scope:ctx.scope,signature:ctx.signature,params:{...params,nPtsBasis:params.nPtsBasis.trim()}};
     validateRecords({record:r});return r;
   }
-  return {context,preview,resolve,record,validateRecords};
+  // rasterDiagnostics retains the historical discretisation experiment only.
+  // The application always uses context, which gates every manual profile.
+  return {context,rasterDiagnostics,preview,resolve,record,validateRecords};
 })();

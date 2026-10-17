@@ -1,6 +1,6 @@
-/* Explicit short-section contract; synthetic geometry only, Node standard library. */
+/* Historical raster diagnostics only (production context fails closed without source proof); synthetic geometry only, Node standard library. */
 const fs=require('node:fs'),assert=require('node:assert/strict');
-const Sections=new Function(fs.readFileSync(__dirname+'/sections.js','utf8')+';return BimSections')();
+const Sections=new Function(fs.readFileSync(__dirname+'/sections.js','utf8')+';return {...BimSections,context:BimSections.rasterDiagnostics}')();
 const Cc=new Function('BimSections',fs.readFileSync(__dirname+'/calc.js','utf8')+';return BimCalc')(Sections);
 const Geom=new Function(fs.readFileSync(__dirname+'/geom.js','utf8')+';return BimGeom')();
 const base=fs.readFileSync(__dirname+'/test-bim.js','utf8').replace('process.exit(fails ? 1 : 0);','if(fails) throw Error("Baseline fixture failed");');
@@ -63,4 +63,4 @@ test('serialization retains the exact model/geometry binding and explanation',()
 test('unknown model identity blocks saving instead of using a global profile',()=>{const f=fixture(),ctx=Sections.context({...f.args,scope:{...scope,model:null}});assert.throws(()=>Sections.record(ctx,params(ctx),f.e.KEO),/идентичности/)});
 test('draft removes a previous numeric result without altering the stored record',()=>{const f=fixture(),record=Sections.record(f.ctx,params(f.ctx),f.e.KEO),snapshot=JSON.stringify(record),r=Cc.space(SPC,[],[f.lantern],{...f.e,shortSection:{context:f.ctx,record,pending:params(f.ctx)}});blocked(r);assert.equal(r.section.mode,'draft');assert.equal(JSON.stringify(record),snapshot)});
 test('same scope and geometry ignore input ordering',()=>{const f=fixture(),record=Sections.record(f.ctx,params(f.ctx),f.e.KEO),ctx=Sections.context({...f.args,runs:f.args.runs.slice().reverse()});assert.deepEqual(Sections.resolve(ctx,record,f.e.KEO).errors,[])});
-console.log(`${n}/${n} short-section groups passed`);
+console.log(`${n}/${n} historical raster-diagnostic groups passed`);
