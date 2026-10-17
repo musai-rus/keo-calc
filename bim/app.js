@@ -122,6 +122,18 @@ const KeoBim = (function () {
     return st.res;
   }
   const tick = () => new Promise(r => setTimeout(r, 0));
+  // A completed geometry pass is not a successful KEO calculation. In a fresh
+  // browser profile the climate choice is deliberately absent, not inferred.
+  function completionText(success) {
+    const count = st.res.filter(r => r.kind === 'calc').length;
+    if (count) return `${success}: рассчитано пространств — ${count}.`;
+    if (!Cc.climate(S, LIB.DATA.regions)) return 'КЕО не рассчитан: подтвердите регион строительства или группу светового климата 1–5. Нажмите «Выбрать регион» ниже.';
+    if (!st.rooms.length) return 'КЕО не рассчитан: помещения Revit не получены из базы свойств. Проверьте 3D-вид и завершение загрузки модели, затем запустите закладку ещё раз.';
+    if (!st.levels.length) return 'КЕО не рассчитан: помещения найдены, но не сопоставлены с уровнями модели. Сведения об уровнях отсутствуют или отличаются от свойств Rooms.';
+    const reasons = [...new Set(st.res.filter(r => r.kind === 'err').map(r => r.err))];
+    if (reasons.length) return `КЕО не рассчитан. Причины: ${reasons.slice(0, 3).join('; ')}${reasons.length > 3 ? '; остальные — в разделе «Без расчёта»' : ''}`;
+    return 'КЕО не рассчитан: нет пространств с подтверждёнными световыми проёмами и достаточными исходными данными. Откройте «Без расчёта» и «Проверить состав» для причин.';
+  }
 
   // состав пространств уровня (по текущим решениям) → разметка клеток → привязка вертикальных проёмов
   function compose(L) {
@@ -296,7 +308,7 @@ const KeoBim = (function () {
     }
     st.sel = st.res.find(r => r.key === selKey) || null;
     draw(); renderList();
-    statusLine(`Пересчёт завершён: рассчитано пространств — ${st.res.filter(r => r.kind === 'calc').length}.`);
+    statusLine(completionText('Пересчёт завершён'));
   }
   async function setBuildingGroup(group) {
     if (!decisionReady()) return;
@@ -306,7 +318,7 @@ const KeoBim = (function () {
     try {
       statusLine('Пересчёт с новым назначением здания…'); await tick(); assertModel();
       S.bGroup = group; refreshPurpose(); saveDec(); rebuild();
-      statusLine('Пересчёт завершён. Назначение здания: ' + (st.group || 'не определено') + '.');
+      statusLine(completionText('Пересчёт завершён') + ' Назначение здания: ' + (st.group || 'не определено') + '.');
     } catch (e) { st.res = []; st.dirty = true; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); console.error(e); }
     finally { st.busy = false; }
   }
@@ -593,6 +605,8 @@ const KeoBim = (function () {
     main.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderList(); labels(); });
     main.querySelectorAll('tr.r').forEach(tr => tr.onclick = () => select(st.res[+tr.dataset.i]));
     main.querySelector('[data-a=csv]').onclick = exportCSV; main.querySelector('[data-a=json]').onclick = exportJSON;
+    const chooseClimate = main.querySelector('[data-a=climate]');
+    if (chooseClimate) chooseClimate.onclick = () => { const select = main.querySelector('[data-s=region]'); select.closest('details').open = true; select.scrollIntoView({block:'center'}); select.focus(); };
     main.querySelector('[data-a=dexp]').onclick = exportDec;
     main.querySelector('[data-a=dimp]').onclick = importDec;
     main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { if (!decisionReady()) return; const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); rebuild(); });
@@ -649,7 +663,8 @@ const KeoBim = (function () {
     for (const k of ['placeName', 'AECplaceName', 'latitude', 'longitude'])
       if (aec[k] !== undefined && aec[k] !== null && aec[k] !== '') evidence.push(`AEC ${k} = ${aec[k]}`);
     return `<section class="kb-set${cl ? '' : ' kb-warn'}" aria-label="Регион строительства"><b>${cl ? `Световой климат: ${esc(cl.region || 'группа задана вручную')}, группа ${cl.group}` : 'Регион не подтверждён — расчёт КЕО остановлен'}</b>
-      <p class="muted">${cl ? 'Выбор пользователя для этой модели.' : 'Выберите регион из справочника или явно задайте группу 1–5 в настройках ниже.'} СП 52.13330.2016, прил. Е. Адрес и координаты модели не определяют группу автоматически; 0/0 могут быть незаданными координатами. Север определяется отдельно.</p>
+      <p class="muted">${cl ? 'Выбор пользователя для этой модели.' : 'Выберите регион из справочника или явно задайте группу 1–5 в настройках ниже. В новом профиле или окне инкогнито прежний выбор может отсутствовать.'} СП 52.13330.2016, прил. Е. Адрес и координаты модели не определяют группу автоматически; 0/0 могут быть незаданными координатами. Север определяется отдельно.</p>
+      ${cl ? '' : '<button class="kb-btn pri" data-a="climate">Выбрать регион</button>'}
       ${evidence.length ? `<details><summary>Местоположение из модели — проверьте</summary><ul>${evidence.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : '<p class="muted">Надёжное местоположение из модели не получено.</p>'}
       ${st.locationWarning ? `<p>${esc(st.locationWarning)}</p>` : ''}</section>`;
   }
@@ -893,8 +908,7 @@ const KeoBim = (function () {
       st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; VOPS = []; LANS = []; HM = null;
       await analyze(statusLine, opts);
       st.dirty = false; saveDec();
-      const calc = st.res.filter(r => r.kind === 'calc');
-      statusLine(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с: рассчитано пространств — ${calc.length}.`);
+      statusLine(completionText(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с`));
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
       draw(); renderList();
     } catch (e) { st.res = []; if (!closed) { clearVisuals(); try { renderList(); } catch (_) { } statusLine('Ошибка: ' + e.message); console.error(e); } }
