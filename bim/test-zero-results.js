@@ -4,9 +4,10 @@ const scripts=[...fs.readFileSync(__dirname+'/test-purpose.html','utf8').matchAl
 const context=vm.createContext({assert,console,setTimeout,clearTimeout,setInterval:()=>0,clearInterval(){},performance});context.window=context;
 const status={textContent:''};context.document={querySelector:()=>({}),getElementById:id=>id==='kb-status'?status:null,body:{contains:()=>true}};
 const storage=new Map();context.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
+require('./fixture-binding-dom.js')(context);
 vm.runInContext(scripts[0],context);
 let bundle=fs.readFileSync(__dirname+'/keo-bim.js','utf8');
-bundle=bundle.replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){}}};draw=()=>{};renderList=()=>{};\n  return { _climateHTML:climateHTML, _bindSettings:bindSettings, run, st: () => st, S,');
+bundle=bundle.replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){},querySelector:s=>document.getElementById(s.slice(1))}};draw=()=>{};renderList=()=>{};\n  return { _climateHTML:climateHTML, _bindSettings:bindSettings, run, st: () => st, S,');
 vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);context.statusElement=status;
 (async()=>{
  await vm.runInContext(`(async()=>{

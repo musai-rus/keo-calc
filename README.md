@@ -60,6 +60,7 @@ node bim/test-lantern-properties.js # синтетические Viewer-shaped r
 node bim/test-lantern-pipeline.js # параметры шахты → входы расчёта, без подмены стеклом
 node bim/test-room-diagnostics.js # причины отсутствия контура и стадии размещения Rooms
 node bim/test-calculation-limits.js # отказ при неподдержанном разрезе или высоте фонаря
+node bim/test-viewer-binding.js # активный подключённый Viewer, URN, загрузка и навигация
 node bim/test-lifecycle.js # закрытие/замена панели, обработчики и таймеры Viewer
 node bim/test-sections.js # ручной короткий прямоугольный разрез, маска и инвалидация
 node bim/test-sections-app.js # сохранение/сброс профиля в настоящей оркестрации приложения

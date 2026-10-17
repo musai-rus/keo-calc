@@ -57,17 +57,34 @@ const KeoBim = (function () {
     st.group = S.bGroup || st.purpose.group;
   }
 
-  let closed = false, closeVersion = 0;
+  let closed = false, closeVersion = 0, binding = null, bindingPoll = null;
+  function stopBindingWatch() { clearInterval(bindingPoll); bindingPoll = null; }
+  function invalidateBinding(message) {
+    stopBindingWatch(); binding = null; st.dirty = true;
+    st.res = []; st.sel = null; st.levels = []; st.rooms = []; st.noLevel = [];
+    st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null;
+    VOPS = []; LANS = []; HM = null; clearVisuals();
+    const main = ui?.querySelector?.('#kb-main'); if (main) main.innerHTML = '';
+    if (!closed) statusLine('Результаты отменены: ' + message);
+  }
+  function bindingValid() { try { BimViewerBinding.assert(binding); return true; } catch (_) { return false; } }
+  function watchBinding() {
+    stopBindingWatch(); bindingPoll = setInterval(() => {
+      if (closed || window.KeoBim?.run !== run) { stopBindingWatch(); return; }
+      try { BimViewerBinding.assert(binding); } catch (e) { invalidateBinding(e.message); }
+    }, 500);
+  }
   function assertModel() {
     if (closed) throw new Error('Анализ отменён: панель закрыта.');
-    if (!C || window.NOP_VIEWER !== C.v || window.NOP_VIEWER.model !== C.m) throw new Error('Модель изменилась — запустите анализ заново.');
+    try { BimViewerBinding.assert(binding); if (!C || C.v !== binding.v || C.m !== binding.m) throw new Error('Модель изменилась — запустите анализ заново.'); }
+    catch (e) { invalidateBinding(e.message); throw e; }
   }
   function decisionReady() { if (st.busy) return false; assertModel(); if (st.dirty) throw new Error('Настройки изменены — запустите полный пересчёт.'); return true; }
 
   /* ---------- анализ ---------- */
   async function analyze(progress, opts) {
-    const v = window.NOP_VIEWER; if (!v || !v.model || v.model.is2d()) throw new Error('Откройте 3D-вид модели');
-    C = G.ctx(v);
+    binding = BimViewerBinding.capture(); const v = binding.v;
+    C = G.ctx(v); assertModel(); watchBinding();
     const key = modelKey();
     if (st.model !== key || (!key && st.modelRef !== C.m)) {
       st.storageWarning = ''; restoreDec(loadDec(), opts && opts.bGroup, opts);
@@ -81,7 +98,7 @@ const KeoBim = (function () {
     const aec = await Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null);
     assertModel(); const T = aec && aec.refPointTransformation;
     st.north = northOf(T); st.aecLoc = aec && aec.locationParameters;
-    try { st.location = await G.location(C); st.locationWarning = ''; }
+    try { const location = await G.location(C); assertModel(); st.location = location; st.locationWarning = ''; }
     catch (e) { st.location = []; st.locationWarning = 'Адрес модели прочитать не удалось; выберите регион вручную.'; }
     assertModel();
     const lv = (aec && aec.levels || []).map(l => ({ name: l.name, floor: (l.elevation - C.GZ) * C.S })).sort((a, b) => a.floor - b.floor);
@@ -113,7 +130,7 @@ const KeoBim = (function () {
       G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
       compose(L);
     }
-    progress('Фонари: привязка к помещениям, шахты, затенение…'); await tick();
+    progress('Фонари: привязка к помещениям, шахты, затенение…'); await tick(); assertModel();
     const LP = await G.lanternParams(C, LANS.map(l => l.id)); assertModel();
     LANS.forEach(l => { const q = LP[l.id]; if (q) { l.dTop = q.dIn || null; l.dBot = q.dBot || null; l.paramNotes = q.notes || []; } });
     lanterns(levels);
@@ -312,8 +329,11 @@ const KeoBim = (function () {
   }
   async function setBuildingGroup(group) {
     if (!decisionReady()) return;
-    if (!C || window.NOP_VIEWER?.model !== C.m) throw new Error('Модель изменилась — запустите анализ заново.');
+    assertModel();
     if (group !== '' && !validGroup(group)) throw new Error('Выберите назначение здания из списка.');
+    running = recalcBuildingGroup(group); return running;
+  }
+  async function recalcBuildingGroup(group) {
     st.busy = true;
     try {
       statusLine('Пересчёт с новым назначением здания…'); await tick(); assertModel();
@@ -374,7 +394,7 @@ const KeoBim = (function () {
     const below = st.levels.filter(l => l.floor < z - 0.01); return below.length ? below[below.length - 1].name : null;
   }
   const shown = r => { const lv = visLevel(); return lv === null || r.level === lv; };
-  const currentView = () => !closed && window.KeoBim?.run === run && C && window.NOP_VIEWER === C.v && C.v.model === C.m && ui && document.body.contains(ui);
+  const currentView = () => !closed && window.KeoBim?.run === run && C && bindingValid() && ui && document.body.contains(ui);
   function draw() {
     if (!currentView()) return;
     const v = C.v, Sx = C.S;
@@ -539,7 +559,6 @@ const KeoBim = (function () {
     const orphaned = document.querySelectorAll('#keo-bim, #keo-bim-css, #keo-labels');
     new Set([...orphaned].map(e => e[OWNER])).forEach(dispose => { if (typeof dispose === 'function' && dispose !== destroy) try { dispose(); } catch (e) { } });
     document.querySelectorAll('#keo-bim, #keo-bim-css, #keo-labels').forEach(e => { e.querySelectorAll('.kl').forEach(b => b.onclick = null); e.remove(); });
-    try { const v = window.NOP_VIEWER; if (v?.overlays?.hasScene(overlay)) v.overlays.removeScene(overlay); } catch (e) { }
     cssEl = document.createElement('style'); cssEl.id = 'keo-bim-css'; cssEl.textContent = CSS; document.head.appendChild(cssEl);
     cssEl[OWNER] = destroy;
     ui = document.createElement('section'); ui.id = 'keo-bim';
@@ -549,8 +568,9 @@ const KeoBim = (function () {
     ui.querySelector('[data-a=min]').onclick = () => ui.classList.toggle('min');
     ui.querySelector('[data-a=close]').onclick = destroy;
   }
-  function destroy() { closeVersion++; closed = true; st.res = []; st.sel = null; clearVisuals(); ui?.remove(); cssEl?.remove(); ui = null; cssEl = null; }
-  const statusLine = t => { const el = document.getElementById('kb-status'); if (el) el.textContent = t; };
+  function destroy() { closeVersion++; closed = true; stopBindingWatch(); binding = null; st.res = []; st.sel = null; clearVisuals(); ui?.remove(); cssEl?.remove(); ui = null; cssEl = null; }
+  const ownsPanel = () => !closed && window.KeoBim?.run === run && ui && document.body.contains(ui);
+  const statusLine = t => { if (!ownsPanel()) return; const el = ui.querySelector('#kb-status'); if (el) el.textContent = t; };
 
   // сводка по помещениям Revit: каждое помещение — ровно в одном пространстве, в списке «без контура» или исключено
   const DIAG_LABEL = {invalid_area:'нет пригодной площади', ambiguous:'равнозначные кандидаты', physical_exterior:'сопоставленный контур связан с наружной областью', physical_unmapped:'нет физической области', composition_unresolved:'состав не разрешён', claimed_candidate:'кандидаты заняты другими Room', unresolved_candidate:'кандидаты не дают однозначной пары', perimeter_rejected:'индивидуальные кандидаты отклонены по периметру', no_area_candidate:'нет индивидуального кандидата по площади'};
@@ -573,7 +593,8 @@ const KeoBim = (function () {
     return { all: all.length, ex, inSp, dup, nogeo, units, noLevel: (st.noLevel || []).length, lans: LANS.length, lansIn: LANS.filter(l => l.lvl).length };
   }
   function renderList() {
-    const main = document.getElementById('kb-main'); if (!main) return;
+    if (!ownsPanel()) return;
+    const main = ui.querySelector('#kb-main'); if (!main) return;
     const calc = st.res.filter(r => r.kind === 'calc' && (st.level === null || r.level === st.level));
     const n = k => calc.filter(r => status(r).k === k).length;
     const other = st.res.filter(r => (st.level === null || r.level === st.level) && r.kind !== 'calc');
@@ -644,16 +665,16 @@ const KeoBim = (function () {
       <table class="kb-t"><tr><th>ID</th><th>Семейство : тип</th><th>отверстие, наклон</th><th>Уровень</th><th>Статус / причина</th></tr>${D.map(row).join('')}</table></details>`;
   }
   function importDec() {
-    if (!decisionReady()) return; const importedModel = C.m;
+    if (!decisionReady()) return; const importedModel = C.m, importedBinding = binding, importedVersion = closeVersion;
     const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
     inp.onchange = () => { const f = inp.files[0]; if (!f) return; f.text().then(t => {
-      if (!decisionReady() || C.m !== importedModel) throw new Error('Анализ или модель изменились во время чтения файла.');
+      if (closeVersion !== importedVersion || binding !== importedBinding || !decisionReady() || C.m !== importedModel) throw new Error('Анализ или модель изменились во время чтения файла.');
       const j = JSON.parse(t);
       validateDec(j);
       if (j.model && modelKey() && j.model !== modelKey()) throw new Error('файл относится к другой модели');
       const north = northOf(st.T, Object.prototype.hasOwnProperty.call(j, 'northDeg') ? j.northDeg : S.northDeg);
       restoreDec(j, S.bGroup, S); st.north = north; refreshPurpose(); saveDec(); rebuild();
-    }).catch(e => statusLine('Не удалось прочитать решения: ' + e.message)); };
+    }).catch(e => { if (closeVersion === importedVersion) statusLine('Не удалось прочитать решения: ' + e.message); }); };
     inp.click();
   }
   function climateHTML() {
@@ -688,7 +709,8 @@ const KeoBim = (function () {
   function bindSettings(root) {
     root.querySelectorAll('[data-s]').forEach(el => el.onchange = () => {
       const k = el.dataset.s;
-      if (st.busy || !C || window.NOP_VIEWER?.model !== C.m) {
+      if (st.busy || !C || !bindingValid()) {
+        if (!st.busy) invalidateBinding('Модель изменилась — запустите анализ заново.');
         el.value = S[k] ?? ''; statusLine(st.busy ? 'Дождитесь завершения расчёта.' : 'Модель изменилась — запустите анализ заново.'); return;
       }
       if (k === 'region') {
@@ -899,19 +921,19 @@ const KeoBim = (function () {
   }
   async function analyzeRun(opts) {
     st.busy = true; closed = false;
-    clearVisuals();
+    stopBindingWatch(); binding = null; clearVisuals();
     const { bGroup, ...otherOpts } = opts || {};
     Object.assign(S, otherOpts);
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {
-      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; VOPS = []; LANS = []; HM = null;
-      await analyze(statusLine, opts);
+      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null; VOPS = []; LANS = []; HM = null;
+      await analyze(statusLine, opts); assertModel();
       st.dirty = false; saveDec();
       statusLine(completionText(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с`));
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
       draw(); renderList();
-    } catch (e) { st.res = []; if (!closed) { clearVisuals(); try { renderList(); } catch (_) { } statusLine('Ошибка: ' + e.message); console.error(e); } }
+    } catch (e) { stopBindingWatch(); st.res = []; if (!closed) { clearVisuals(); try { renderList(); } catch (_) { } statusLine('Ошибка: ' + e.message); console.error(e); } }
     finally { st.busy = false; }
     return st;
   }
@@ -919,4 +941,4 @@ const KeoBim = (function () {
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
-window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision };
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision, BimViewerBinding };

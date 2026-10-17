@@ -4,8 +4,9 @@ const scripts=[...fs.readFileSync(__dirname+'/test-purpose.html','utf8').matchAl
 const storage=new Map(),context=vm.createContext({console:{log(){},error(){}},performance,setTimeout,clearTimeout,setInterval:()=>0,clearInterval(){},assert});context.window=context;
 context.document={querySelector:()=>({}),querySelectorAll:()=>[],getElementById:()=>null,body:{contains:()=>true}};
 context.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
+require('./fixture-binding-dom.js')(context);
 vm.runInContext(scripts[0],context);
-let source=fs.readFileSync(__dirname+'/keo-bim.js','utf8').replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){}};};draw=()=>{};renderList=()=>{};\n  return {_html:shortSectionHTML,_bind:bindShortSection,_json:exportJSON,_csv:exportCSV,_one:exportOne,_dec:exportDec, run, st: () => st, S,');
+let source=fs.readFileSync(__dirname+'/keo-bim.js','utf8').replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){},querySelector:s=>document.getElementById(s.slice(1))};};draw=()=>{};renderList=()=>{};\n  return {_html:shortSectionHTML,_bind:bindShortSection,_json:exportJSON,_csv:exportCSV,_one:exportOne,_dec:exportDec, run, st: () => st, S,');
 source=source.replace(/  function download\(name, text, type\) \{[^\n]+\}/,'  function download(name,text,type){window.downloadedText=text;if(type===\'application/json\')window.downloaded=JSON.parse(text);}');
 vm.runInContext(source,context);vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
 // Explicit, authoritative binary64 source contract for this synthetic fixture only.
