@@ -2137,6 +2137,111 @@ const BimPrecision = (() => {
   }
   return {next,box,valid,add,sub,mul,div,transform,decodeCell,vertex,intersection,combine};
 })();
+/* Revit category identities, not element/family names. The exact same resolver
+   is serialized into the Autodesk property worker (no model-specific rules). */
+const BimCategories = (function () {
+  // Numeric values and symbols: Autodesk Revit API 2026 BuiltInCategory.
+  // https://help.autodesk.com/cloudhelp/2026/ENU/Revit-API-MainReference/files/html/ba1c5b30-242f-5fdc-8ea9-ec3b61e6e722.htm
+  const rows = [
+    ['Rooms',-2000160,'OST_Rooms','Помещения'],
+    ['Spaces',-2003600,'OST_MEPSpaces','Пространства'],
+    ['Areas',-2003200,'OST_Areas','Зоны'],
+    ['Walls',-2000011,'OST_Walls','Стены'],
+    ['Windows',-2000014,'OST_Windows','Окна'],
+    ['Doors',-2000023,'OST_Doors','Двери'],
+    ['Columns',-2000100,'OST_Columns','Колонны'],
+    ['Structural Columns',-2001330,'OST_StructuralColumns','Несущие колонны'],
+    ['<Room Separation>',-2000066,'OST_RoomSeparationLines','<Разделитель помещений>'],
+    ['Curtain Panels',-2000170,'OST_CurtainWallPanels','Панели витража'],
+    ['Curtain Wall Mullions',-2000171,'OST_CurtainWallMullions','Импосты витража'],
+    ['Floors',-2000032,'OST_Floors','Перекрытия'],
+    ['Roofs',-2000035,'OST_Roofs','Крыши'],
+    ['Generic Models',-2000151,'OST_GenericModel','Обобщенные модели'],
+    ['Level',-2000240,'OST_Levels','Уровни'],
+    ['Lines',-2000051,'OST_Lines','Линии'],
+    ['Grids',-2000220,'OST_Grids','Оси'],
+    ['Furniture',-2000080,'OST_Furniture','Мебель'],
+    ['Mechanical Equipment',-2001140,'OST_MechanicalEquipment','Оборудование'],
+    ['Plumbing Fixtures',-2001160,'OST_PlumbingFixtures','Сантехнические приборы'],
+    ['Specialty Equipment',-2001350,'OST_SpecialityEquipment','Специальное оборудование'],
+    ['Planting',-2001360,'OST_Planting','Озеленение'],
+    ['Skylights',null,null,'Световые люки'],
+    ['Sun Path',null,null,'Траектория солнца']
+  ];
+  const config = { ids:{}, names:{}, symbols:{} };
+  const norm = s => typeof s === 'string' ? s.trim().replace(/\s+/g,' ').toLowerCase() : '';
+  rows.forEach(([en,id,symbol,ru]) => {
+    const canonical = 'Revit ' + en;
+    if (id !== null) config.ids[String(id)] = canonical;
+    if (symbol) config.symbols[symbol] = canonical;
+    for (const label of [en,ru]) config.names[norm('Revit '+label)] = canonical;
+    // Explicit bilingual export labels. Never split an arbitrary family/name.
+    for (const pair of [[en,ru],[ru,en]]) {
+      config.names[norm('Revit '+pair[0]+' / '+pair[1])] = canonical;
+      config.names[norm('Revit '+pair[0]+' / Revit '+pair[1])] = canonical;
+    }
+  });
+  function resolve(properties, table) {
+    const normalized = s => typeof s === 'string' ? s.trim().replace(/\s+/g,' ').toLowerCase() : '';
+    const own = (o,k) => Object.prototype.hasOwnProperty.call(o,k);
+    const ids=[], labels=[], stable=[], named=[]; let badIdentity=false, unknownIdentity=false;
+    for (const p of properties || []) {
+      const name = p.attributeName ?? p.name, group = p.displayCategory ?? p.category ?? '';
+      const value = own(p,'displayValue') ? p.displayValue : p.value;
+      if (name === 'CategoryId' || name === 'BuiltInCategory') {
+        ids.push(value);
+        if (group !== '__categoryId__') { badIdentity=true; continue; }
+        let c = null;
+        if (name === 'CategoryId') {
+          const key = typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : typeof value === 'string' && /^-\d+$/.test(value.trim()) ? String(Number(value.trim())) : '';
+          c = own(table.ids,key) ? table.ids[key] : null;
+        } else c = typeof value === 'string' && own(table.symbols,value) ? table.symbols[value] : null;
+        if (c) stable.push(c); else unknownIdentity=true;
+      }
+      if ((name === 'Category' || name === 'Категория') && (group === '__category__' || group === '')) {
+        labels.push(value); const key=normalized(value);
+        named.push(own(table.names,key) ? table.names[key] : null);
+      }
+    }
+    const knownNames=[...new Set(named.filter(Boolean))], knownIds=[...new Set(stable)];
+    const result = (canonical,source,reason) => ({canonical,source,reason,ids,labels});
+    if (badIdentity) return result(null,'unknown','untrusted-category-id-field');
+    if (unknownIdentity) return result(null,'unknown','unsupported-category-id');
+    if (knownIds.length > 1 || knownNames.length > 1 || knownIds.length && knownNames.some(c=>c!==knownIds[0])) return result(null,'unknown','conflicting-category-evidence');
+    if (knownIds.length === 1) return result(knownIds[0],'category-id',null);
+    if (knownNames.length === 1 && named.every(Boolean)) return result(knownNames[0],'controlled-name',null);
+    return result(null,'unknown',labels.length ? 'unsupported-category-name' : 'missing-category');
+  }
+  function readRooms(pdb, table, resolver) {
+    const records=[],counts={rooms:0,spaces:0,areas:0,unknown:0},sources={},unknownExamples=[];
+    pdb.enumObjects(id => {
+      const o={id,u:{}}, categories=[],levels=[];
+      pdb.enumObjectProperties(id,(a,v)=>{
+        const d=pdb.getAttributeDef(a),n=d.name,value=pdb.getAttrValue(a,v);
+        if (n==='Category'||n==='Категория'||n==='CategoryId'||n==='BuiltInCategory') categories.push({name:n,category:d.category,value});
+        if (n==='Level' && d.dataType!==11 && typeof value==='string' && value.trim() && (d.dataType===20 || isNaN(+value))) levels.push(value);
+        if (n==='Name') o.name=value; if(n==='Number') o.num=value; if(n==='ElementId') o.eid=String(value);
+        if (['Area','Perimeter','Unbounded Height','Base Offset'].includes(n)) o.u[n]=[value,d.dataTypeContext||null];
+        if(n==='Department')o.dep=value;if(n==='Occupancy')o.occ=value;
+      });
+      const category=resolver(categories,table);
+      if(category.canonical==='Revit Spaces'){counts.spaces++;return;}
+      if(category.canonical==='Revit Areas'){counts.areas++;return;}
+      if(category.canonical!=='Revit Rooms') {
+        if(!category.canonical && categories.length){counts.unknown++;if(unknownExamples.length<5)unknownExamples.push({id,category});}
+        return;
+      }
+      counts.rooms++;sources[category.source]=(sources[category.source]||0)+1;
+      const names=[...new Set(levels)];o.level=names.length===1?names[0]:null;
+      o.levelWarning=names.length>1?'противоречивые имена уровня':names.length?'':'имя уровня недоступно';
+      o.category=category;records.push(o);
+    });
+    return {records,diagnostics:{counts,sources,unknownExamples}};
+  }
+  const workerSource = () => 'function userFunction(pdb,config){const resolve='+resolve.toString()+';return ('+readRooms.toString()+')(pdb,config,resolve);}';
+  const skipHeight = new Set(['Rooms','Spaces','Areas','Level','Lines','Grids','Furniture','Mechanical Equipment','Plumbing Fixtures','Specialty Equipment','Planting','Sun Path','<Room Separation>'].map(n=>'Revit '+n));
+  return { isHostSlab:c=>c==='Revit Floors'||c==='Revit Roofs', resolve:properties=>resolve(properties,config), config:()=>JSON.parse(JSON.stringify(config)), workerSource, skipHeight:c=>skipHeight.has(c) };
+})();
 /* КЕО по модели Autodesk Viewer — геометрия: срезы, растр помещений, проёмы, карта высот.
    Работает внутри страницы с уже загруженной моделью (NOP_VIEWER). Единицы — метры, координаты — мировые координаты Viewer × масштаб единиц. */
 const BimGeom = (function () {
@@ -2182,37 +2287,33 @@ const BimGeom = (function () {
   // не листовой, но сам несёт стекло — раньше он пропускался.
   async function catalog(C) {
     const ids = []; C.it.enumNodeChildren(C.it.getRootId(), id => { if (C.it.getChildCount(id) === 0) { ids.push(id); return; } let own = 0; C.it.enumNodeFragments(id, () => { own++; }, false); if (own) ids.push(id); }, true);
-    const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: ['Category', 'Type Name', 'Family Name'] }, ok, bad));
-    const byCat = {}, info = {};
-    props.forEach(r => { const g = n => (r.properties.find(p => p.attributeName === n) || {}).displayValue; const c = g('Category') || '—'; (byCat[c] = byCat[c] || []).push(r.dbId); info[r.dbId] = { c, type: g('Type Name') || '', fam: g('Family Name') || '', name: r.name || C.it.getNodeName(r.dbId) || '' }; });
-    return { byCat, info };
+    const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: ['Category', 'Категория', 'CategoryId', 'BuiltInCategory', 'Type Name', 'Family Name'], ignoreHidden: false }, ok, bad));
+    const byCat = {}, info = {}, diagnostics={sources:{},unknown:0,unknownExamples:[]};
+    props.forEach(r => {
+      const g = n => (r.properties.find(p => p.attributeName === n) || {}).displayValue;
+      const category=BimCategories.resolve(r.properties),raw=g('Category')||g('Категория')||'—';
+      const c=category.canonical || 'Unknown category: '+raw;
+      diagnostics.sources[category.source]=(diagnostics.sources[category.source]||0)+1;
+      if(!category.canonical){diagnostics.unknown++;if(diagnostics.unknownExamples.length<5)diagnostics.unknownExamples.push({id:r.dbId,category});}
+      (byCat[c] = byCat[c] || []).push(r.dbId);
+      info[r.dbId] = { c, rawCategory:raw, category, type:g('Type Name')||'', fam:g('Family Name')||'', name:r.name||C.it.getNodeName(r.dbId)||'' };
+    });
+    return { byCat, info, diagnostics };
   }
 
   // помещения из базы свойств (у них нет 3D-геометрии в экспорте viewer.autodesk.com); единицы — по dataTypeContext свойства
   async function rooms(C) {
-    const raw = await C.m.getPropertyDb().executeUserFunction(function (pdb) {
-      const out = [];
-      pdb.enumObjects(id => {
-        const o = { id, u: {} }; let isRoom = false;
-        pdb.enumObjectProperties(id, (a, v) => {
-          const d = pdb.getAttributeDef(a), n = d.name, val = pdb.getAttrValue(a, v);
-          if (n === 'Category' && val === 'Revit Rooms') isRoom = true;
-          if (n === 'Level' && isNaN(+val)) o.level = val; if (n === 'Name') o.name = val; if (n === 'Number') o.num = val;
-          if (n === 'ElementId') o.eid = String(val);
-          if (n === 'Area' || n === 'Perimeter' || n === 'Unbounded Height' || n === 'Base Offset') o.u[n] = [val, d.dataTypeContext || null];
-          if (n === 'Department') o.dep = val; if (n === 'Occupancy') o.occ = val;
-        });
-        if (isRoom) out.push(o);
-      });
-      return out;
-    });
-    return raw.map(o => {
+    const extracted = await C.m.getPropertyDb().executeUserFunction(BimCategories.workerSource(),BimCategories.config());
+    const raw=extracted.records;
+    const result=raw.map(o => {
       const A = BimSpaces.conv(...(o.u['Area'] || []), 'area'), P = BimSpaces.conv(...(o.u['Perimeter'] || []), 'len'), H = BimSpaces.conv(...(o.u['Unbounded Height'] || []), 'len');
-      const warn = [A.ok ? null : 'площадь: ' + A.warn, P.ok ? null : 'периметр: ' + P.warn].filter(Boolean);
+      const warn = [A.ok ? null : 'площадь: ' + A.warn, P.ok ? null : 'периметр: ' + P.warn, o.levelWarning].filter(Boolean);
       return { id: o.id, key: o.eid || ('db' + o.id), eid: o.eid, level: o.level, name: o.name || '', num: o.num || '', dep: o.dep, occ: o.occ,
         area: A.v, areaRaw: o.u['Area'] && o.u['Area'][0], areaUnit: A.unit, areaSrc: A.ok ? 'Revit, свойство Area' : null,
-        per: P.v, h: H.v, warn };
-    }).filter(r => r.area > 0 || r.warn.length);
+        per: P.v, h: H.v, category:o.category, warn };
+    });
+    Object.defineProperty(result,'diagnostics',{value:extracted.diagnostics,enumerable:false});
+    return result;
   }
 
   // Location properties have no bearing on north or climate coefficients until
@@ -3428,7 +3529,7 @@ const KeoBim = (function () {
   function invalidateBinding(message) {
     stopBindingWatch(); binding = null; st.dirty = true;
     st.res = []; st.sel = null; st.levels = []; st.rooms = []; st.noLevel = [];
-    st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null;
+    st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.categoryDiagnostics=null; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null;
     VOPS = []; LANS = []; HM = null; clearVisuals();
     const main = ui?.querySelector?.('#kb-main'); if (main) main.innerHTML = '';
     if (!closed) statusLine('Результаты отменены: ' + message);
@@ -3470,14 +3571,14 @@ const KeoBim = (function () {
     const lv = (aec && aec.levels || []).map(l => ({ name: l.name, floor: (l.elevation - C.GZ) * C.S })).sort((a, b) => a.floor - b.floor);
     lv.forEach((l, i) => { l.top = i < lv.length - 1 ? lv[i + 1].floor : l.floor + 6; l.rooms = rooms.filter(r => r.level === l.name); });
     const levels = lv.filter(l => l.rooms.length);
-    st.rooms = rooms; st.noLevel = rooms.filter(r => !levels.some(l => l.name === r.level));
+    st.rooms = rooms; st.categoryDiagnostics={catalog:cat.diagnostics||null,rooms:rooms.diagnostics||null}; st.noLevel = rooms.filter(r => !levels.some(l => l.name === r.level));
     progress('Проёмы и фонари…');
     const ops = G.openings(C, cat, S.glassExclude ? new RegExp(S.glassExclude, 'i') : null);
     VOPS = ops.filter(o => !o.roof); LANS = ops.filter(o => o.roof); st.lanDiag = ops.diag || [];
     progress('Карта высот для затенения…');
     const bb = C.m.getBoundingBox(), box = [bb.min.x * C.S - 5, bb.min.y * C.S - 5, bb.max.x * C.S + 5, bb.max.y * C.S + 5];
-    const skip = /Planting|Furniture|Mechanical Equipment|Plumbing|Specialty|Lines|Grids|Level|Room Separation|Sun Path|Area|Rooms/;
-    HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip.test(c)), 0.5, box);
+    const skip = c => BimCategories.skipHeight(c);
+    HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip(c)), 0.5, box);
     refreshPurpose(); st.T = T;
     // физические преграды (свет, состав пространства) и линии разделения помещений (только опознание помещений Revit)
     const bcats = ['Revit Walls', 'Revit Curtain Panels', 'Revit Curtain Wall Mullions', 'Revit Doors', 'Revit Windows', 'Revit Structural Columns', 'Revit Columns'];
@@ -3562,7 +3663,7 @@ const KeoBim = (function () {
         const hh = G.hitUpEl(C, l.c[0], l.c[1], L.floor + S.cut, l.z0 - L.floor);
         // перекрытие/покрытие на отметке низа фонаря — основа фонаря, проём в которой в модели не вырезан
         // (семейство размещено на уровне, а не в перекрытии): считается открытым по габариту фонаря, с пометкой
-        if (hh && hh.z < l.z0 - 0.3 && l.zb !== undefined && hh.z >= l.zb - 0.2 && /Floors|Roofs/.test((cat.info[hh.id] || {}).c || '')) {
+        if (hh && hh.z < l.z0 - 0.3 && l.zb !== undefined && hh.z >= l.zb - 0.2 && BimCategories.isHostSlab((cat.info[hh.id] || {}).c)) {
           l.hostSlab = hh.id; l.note = (l.note ? l.note + '; ' : '') + `проём в перекрытии под фонарём в модели не вырезан (элемент ${hh.id}) — принят открытым по габариту фонаря`;
         } else if (hh && hh.z < l.z0 - 0.3) continue; // между полом и фонарём — перекрытие
         l.lvl = L.name; l.floor = L.floor; l.space = spaceAt(L, l.c); l.why = l.space < 0 ? lanWhy(L, l) : null; break;
@@ -3982,6 +4083,7 @@ const KeoBim = (function () {
       </tbody></table>
       <p class="muted" style="font-size:11px">Помещений Revit: ${cs.all}; в расчётных пространствах — ${cs.inSp}${cs.dup ? `, <b style="color:${COL.bad}">в двух пространствах сразу — ${cs.dup}</b>` : ''}; без контура — ${cs.nogeo}; исключено (ЛК, коридоры, холлы, вестибюли) — ${cs.ex}${cs.units ? `; <b>предупреждения свойств — ${cs.units}</b>` : ''}${cs.noLevel ? `; без уровня — ${cs.noLevel}` : ''}. Фонарей найдено: ${cs.lans}, привязано к помещениям: ${cs.lansIn}.</p>
       <details class="kb-set"><summary>${dg.available ? `Почему Rooms остались без контура (${cs.nogeo})` : 'Диагностика недоступна — выполните полный пересчёт'}</summary><p class="muted">Причины относятся к уникальным Room на известных уровнях; неопознанные контуры считаются отдельно и не соответствуют Rooms один к одному. Индивидуальные кандидаты сравниваются с площадью одного Room; причины отказа суммарного баланса отражены отдельно у неопознанных контуров в JSON. Неоднозначность не разрешается порядком элементов.</p><ul>${Object.entries(dg.unplacedReasons).map(([k,n])=>`<li>${esc(DIAG_LABEL[k]||k)}: ${n}</li>`).join('')}</ul><p class="muted">Подробные кандидаты и стадии размещения включены в общий JSON.</p></details>
+      ${categoryOverview()}
       ${lanOverview()}
       <p class="muted" style="font-size:11px">${esc(PRELIM)} Север: ${esc(st.north ? st.north.src : '—')}.</p>
       <details class="kb-set"><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
@@ -4018,6 +4120,12 @@ const KeoBim = (function () {
       <details><summary>Почему выбрано это назначение</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Это предположение по названиям, а не подтверждённая классификация.</p>${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
       ${st.storageWarning ? `<p class="kb-warn">${esc(st.storageWarning)}</p>` : ''}
     </section>`;
+  }
+  function categoryOverview() {
+    const d=st.categoryDiagnostics;if(!d)return '';
+    const r=d.rooms,c=d.catalog;
+    const counts=r?.counts;
+    return `<details class="kb-set"><summary>Категории экспорта и источники распознавания</summary><p>Rooms: ${counts?.rooms??'—'}; Spaces: ${counts?.spaces??'—'}; Areas: ${counts?.areas??'—'}. Spaces и Areas не подменяют Rooms.</p><p>Идентификатор категории имеет приоритет; запасной путь — точные имена поддерживаемых категорий ru/en. Неизвестные категории не считаются подтверждёнными стенами, окнами или Rooms.</p><p>Каталог: неизвестных элементов ${c?.unknown??'—'}; база свойств: неизвестных категорий элементов ${counts?.unknown??'—'}. Наличие Rooms не подтверждает их геометрию или контуры.</p></details>`;
   }
   // все кандидаты в фонари и элементы с именем фонаря: что найдено, к чему привязано, что учтено и почему
   function lanOverview() {
@@ -4276,7 +4384,7 @@ const KeoBim = (function () {
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), categoryDiagnostics: st.categoryDiagnostics, calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
@@ -4293,7 +4401,7 @@ const KeoBim = (function () {
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {
-      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null; VOPS = []; LANS = []; HM = null;
+      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.categoryDiagnostics=null; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null; VOPS = []; LANS = []; HM = null;
       await analyze(statusLine, opts); assertModel();
       st.dirty = false; saveDec();
       statusLine(completionText(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с`));
@@ -4307,5 +4415,5 @@ const KeoBim = (function () {
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
-window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision, BimViewerBinding };
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision, BimViewerBinding, BimCategories };
 })();

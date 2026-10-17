@@ -126,6 +126,17 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   assert.equal(KeoBim.st().levels.length,0);assert.equal(KeoBim.st().dirty,true);groupInput.value='1';groupInput.onchange();assert.equal(KeoBim.st().res.length,0);
   assert.throws(()=>KeoBim.decide('split',['synthetic']),/полный пересчёт/);
   let finishClosed;G.catalog=()=>new Promise(r=>finishClosed=r);const closing=KeoBim.run();KeoBim.destroy();finishClosed({byCat:{},info:{}});await closing;assert.equal(KeoBim.st().res.length,0);G.catalog=oldCatalog;
+  // Only a confirmed canonical slab category may activate the existing host-opening assumption.
+  const savedOpenings=G.openings,savedHit=G.hitUpEl;let capturedLanterns=[];
+  NOP_VIEWER.model=makeModel('test-purpose:host-category');
+  G.openings=()=>{const ops=savedOpenings();capturedLanterns=ops.filter(o=>o.roof);capturedLanterns.forEach(l=>l.zb=l.z0-.7);return ops};
+  G.hitUpEl=(c,x,y,z)=>({id:900,z:z<5?3.5:8.5});
+  for(const category of ['Revit Floors','Revit Roofs','Unknown category: Revit Floors','Unknown category: Revit Roofs','Revit User Floors description']){
+    G.catalog=async()=>({byCat:{},info:{900:{c:category}}});await KeoBim.run({region:'г. Москва'});
+    assert.equal(capturedLanterns.every(l=>l.hostSlab===900),['Revit Floors','Revit Roofs'].includes(category));
+    if(!['Revit Floors','Revit Roofs'].includes(category))assert.ok(capturedLanterns.every(l=>!l.lvl));
+  }
+  G.catalog=oldCatalog;G.openings=savedOpenings;G.hitUpEl=savedHit;
   KeoBim.destroy();assert.equal(JSON.stringify(NOP_VIEWER.getCutPlanes()),JSON.stringify(cuts));
  })()`,context);
  total++;console.log('OK Real app/engine: two floors, unknown region, clipped/full/repeated recalculation, per-model climate, failure/close restoration');

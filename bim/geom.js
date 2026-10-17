@@ -43,37 +43,33 @@ const BimGeom = (function () {
   // не листовой, но сам несёт стекло — раньше он пропускался.
   async function catalog(C) {
     const ids = []; C.it.enumNodeChildren(C.it.getRootId(), id => { if (C.it.getChildCount(id) === 0) { ids.push(id); return; } let own = 0; C.it.enumNodeFragments(id, () => { own++; }, false); if (own) ids.push(id); }, true);
-    const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: ['Category', 'Type Name', 'Family Name'] }, ok, bad));
-    const byCat = {}, info = {};
-    props.forEach(r => { const g = n => (r.properties.find(p => p.attributeName === n) || {}).displayValue; const c = g('Category') || '—'; (byCat[c] = byCat[c] || []).push(r.dbId); info[r.dbId] = { c, type: g('Type Name') || '', fam: g('Family Name') || '', name: r.name || C.it.getNodeName(r.dbId) || '' }; });
-    return { byCat, info };
+    const props = await new Promise((ok, bad) => C.m.getBulkProperties2(ids, { propFilter: ['Category', 'Категория', 'CategoryId', 'BuiltInCategory', 'Type Name', 'Family Name'], ignoreHidden: false }, ok, bad));
+    const byCat = {}, info = {}, diagnostics={sources:{},unknown:0,unknownExamples:[]};
+    props.forEach(r => {
+      const g = n => (r.properties.find(p => p.attributeName === n) || {}).displayValue;
+      const category=BimCategories.resolve(r.properties),raw=g('Category')||g('Категория')||'—';
+      const c=category.canonical || 'Unknown category: '+raw;
+      diagnostics.sources[category.source]=(diagnostics.sources[category.source]||0)+1;
+      if(!category.canonical){diagnostics.unknown++;if(diagnostics.unknownExamples.length<5)diagnostics.unknownExamples.push({id:r.dbId,category});}
+      (byCat[c] = byCat[c] || []).push(r.dbId);
+      info[r.dbId] = { c, rawCategory:raw, category, type:g('Type Name')||'', fam:g('Family Name')||'', name:r.name||C.it.getNodeName(r.dbId)||'' };
+    });
+    return { byCat, info, diagnostics };
   }
 
   // помещения из базы свойств (у них нет 3D-геометрии в экспорте viewer.autodesk.com); единицы — по dataTypeContext свойства
   async function rooms(C) {
-    const raw = await C.m.getPropertyDb().executeUserFunction(function (pdb) {
-      const out = [];
-      pdb.enumObjects(id => {
-        const o = { id, u: {} }; let isRoom = false;
-        pdb.enumObjectProperties(id, (a, v) => {
-          const d = pdb.getAttributeDef(a), n = d.name, val = pdb.getAttrValue(a, v);
-          if (n === 'Category' && val === 'Revit Rooms') isRoom = true;
-          if (n === 'Level' && isNaN(+val)) o.level = val; if (n === 'Name') o.name = val; if (n === 'Number') o.num = val;
-          if (n === 'ElementId') o.eid = String(val);
-          if (n === 'Area' || n === 'Perimeter' || n === 'Unbounded Height' || n === 'Base Offset') o.u[n] = [val, d.dataTypeContext || null];
-          if (n === 'Department') o.dep = val; if (n === 'Occupancy') o.occ = val;
-        });
-        if (isRoom) out.push(o);
-      });
-      return out;
-    });
-    return raw.map(o => {
+    const extracted = await C.m.getPropertyDb().executeUserFunction(BimCategories.workerSource(),BimCategories.config());
+    const raw=extracted.records;
+    const result=raw.map(o => {
       const A = BimSpaces.conv(...(o.u['Area'] || []), 'area'), P = BimSpaces.conv(...(o.u['Perimeter'] || []), 'len'), H = BimSpaces.conv(...(o.u['Unbounded Height'] || []), 'len');
-      const warn = [A.ok ? null : 'площадь: ' + A.warn, P.ok ? null : 'периметр: ' + P.warn].filter(Boolean);
+      const warn = [A.ok ? null : 'площадь: ' + A.warn, P.ok ? null : 'периметр: ' + P.warn, o.levelWarning].filter(Boolean);
       return { id: o.id, key: o.eid || ('db' + o.id), eid: o.eid, level: o.level, name: o.name || '', num: o.num || '', dep: o.dep, occ: o.occ,
         area: A.v, areaRaw: o.u['Area'] && o.u['Area'][0], areaUnit: A.unit, areaSrc: A.ok ? 'Revit, свойство Area' : null,
-        per: P.v, h: H.v, warn };
-    }).filter(r => r.area > 0 || r.warn.length);
+        per: P.v, h: H.v, category:o.category, warn };
+    });
+    Object.defineProperty(result,'diagnostics',{value:extracted.diagnostics,enumerable:false});
+    return result;
   }
 
   // Location properties have no bearing on north or climate coefficients until

@@ -62,7 +62,7 @@ const KeoBim = (function () {
   function invalidateBinding(message) {
     stopBindingWatch(); binding = null; st.dirty = true;
     st.res = []; st.sel = null; st.levels = []; st.rooms = []; st.noLevel = [];
-    st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null;
+    st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.categoryDiagnostics=null; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null;
     VOPS = []; LANS = []; HM = null; clearVisuals();
     const main = ui?.querySelector?.('#kb-main'); if (main) main.innerHTML = '';
     if (!closed) statusLine('Результаты отменены: ' + message);
@@ -104,14 +104,14 @@ const KeoBim = (function () {
     const lv = (aec && aec.levels || []).map(l => ({ name: l.name, floor: (l.elevation - C.GZ) * C.S })).sort((a, b) => a.floor - b.floor);
     lv.forEach((l, i) => { l.top = i < lv.length - 1 ? lv[i + 1].floor : l.floor + 6; l.rooms = rooms.filter(r => r.level === l.name); });
     const levels = lv.filter(l => l.rooms.length);
-    st.rooms = rooms; st.noLevel = rooms.filter(r => !levels.some(l => l.name === r.level));
+    st.rooms = rooms; st.categoryDiagnostics={catalog:cat.diagnostics||null,rooms:rooms.diagnostics||null}; st.noLevel = rooms.filter(r => !levels.some(l => l.name === r.level));
     progress('Проёмы и фонари…');
     const ops = G.openings(C, cat, S.glassExclude ? new RegExp(S.glassExclude, 'i') : null);
     VOPS = ops.filter(o => !o.roof); LANS = ops.filter(o => o.roof); st.lanDiag = ops.diag || [];
     progress('Карта высот для затенения…');
     const bb = C.m.getBoundingBox(), box = [bb.min.x * C.S - 5, bb.min.y * C.S - 5, bb.max.x * C.S + 5, bb.max.y * C.S + 5];
-    const skip = /Planting|Furniture|Mechanical Equipment|Plumbing|Specialty|Lines|Grids|Level|Room Separation|Sun Path|Area|Rooms/;
-    HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip.test(c)), 0.5, box);
+    const skip = c => BimCategories.skipHeight(c);
+    HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip(c)), 0.5, box);
     refreshPurpose(); st.T = T;
     // физические преграды (свет, состав пространства) и линии разделения помещений (только опознание помещений Revit)
     const bcats = ['Revit Walls', 'Revit Curtain Panels', 'Revit Curtain Wall Mullions', 'Revit Doors', 'Revit Windows', 'Revit Structural Columns', 'Revit Columns'];
@@ -196,7 +196,7 @@ const KeoBim = (function () {
         const hh = G.hitUpEl(C, l.c[0], l.c[1], L.floor + S.cut, l.z0 - L.floor);
         // перекрытие/покрытие на отметке низа фонаря — основа фонаря, проём в которой в модели не вырезан
         // (семейство размещено на уровне, а не в перекрытии): считается открытым по габариту фонаря, с пометкой
-        if (hh && hh.z < l.z0 - 0.3 && l.zb !== undefined && hh.z >= l.zb - 0.2 && /Floors|Roofs/.test((cat.info[hh.id] || {}).c || '')) {
+        if (hh && hh.z < l.z0 - 0.3 && l.zb !== undefined && hh.z >= l.zb - 0.2 && BimCategories.isHostSlab((cat.info[hh.id] || {}).c)) {
           l.hostSlab = hh.id; l.note = (l.note ? l.note + '; ' : '') + `проём в перекрытии под фонарём в модели не вырезан (элемент ${hh.id}) — принят открытым по габариту фонаря`;
         } else if (hh && hh.z < l.z0 - 0.3) continue; // между полом и фонарём — перекрытие
         l.lvl = L.name; l.floor = L.floor; l.space = spaceAt(L, l.c); l.why = l.space < 0 ? lanWhy(L, l) : null; break;
@@ -616,6 +616,7 @@ const KeoBim = (function () {
       </tbody></table>
       <p class="muted" style="font-size:11px">Помещений Revit: ${cs.all}; в расчётных пространствах — ${cs.inSp}${cs.dup ? `, <b style="color:${COL.bad}">в двух пространствах сразу — ${cs.dup}</b>` : ''}; без контура — ${cs.nogeo}; исключено (ЛК, коридоры, холлы, вестибюли) — ${cs.ex}${cs.units ? `; <b>предупреждения свойств — ${cs.units}</b>` : ''}${cs.noLevel ? `; без уровня — ${cs.noLevel}` : ''}. Фонарей найдено: ${cs.lans}, привязано к помещениям: ${cs.lansIn}.</p>
       <details class="kb-set"><summary>${dg.available ? `Почему Rooms остались без контура (${cs.nogeo})` : 'Диагностика недоступна — выполните полный пересчёт'}</summary><p class="muted">Причины относятся к уникальным Room на известных уровнях; неопознанные контуры считаются отдельно и не соответствуют Rooms один к одному. Индивидуальные кандидаты сравниваются с площадью одного Room; причины отказа суммарного баланса отражены отдельно у неопознанных контуров в JSON. Неоднозначность не разрешается порядком элементов.</p><ul>${Object.entries(dg.unplacedReasons).map(([k,n])=>`<li>${esc(DIAG_LABEL[k]||k)}: ${n}</li>`).join('')}</ul><p class="muted">Подробные кандидаты и стадии размещения включены в общий JSON.</p></details>
+      ${categoryOverview()}
       ${lanOverview()}
       <p class="muted" style="font-size:11px">${esc(PRELIM)} Север: ${esc(st.north ? st.north.src : '—')}.</p>
       <details class="kb-set"><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
@@ -652,6 +653,12 @@ const KeoBim = (function () {
       <details><summary>Почему выбрано это назначение</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Это предположение по названиям, а не подтверждённая классификация.</p>${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
       ${st.storageWarning ? `<p class="kb-warn">${esc(st.storageWarning)}</p>` : ''}
     </section>`;
+  }
+  function categoryOverview() {
+    const d=st.categoryDiagnostics;if(!d)return '';
+    const r=d.rooms,c=d.catalog;
+    const counts=r?.counts;
+    return `<details class="kb-set"><summary>Категории экспорта и источники распознавания</summary><p>Rooms: ${counts?.rooms??'—'}; Spaces: ${counts?.spaces??'—'}; Areas: ${counts?.areas??'—'}. Spaces и Areas не подменяют Rooms.</p><p>Идентификатор категории имеет приоритет; запасной путь — точные имена поддерживаемых категорий ru/en. Неизвестные категории не считаются подтверждёнными стенами, окнами или Rooms.</p><p>Каталог: неизвестных элементов ${c?.unknown??'—'}; база свойств: неизвестных категорий элементов ${counts?.unknown??'—'}. Наличие Rooms не подтверждает их геометрию или контуры.</p></details>`;
   }
   // все кандидаты в фонари и элементы с именем фонаря: что найдено, к чему привязано, что учтено и почему
   function lanOverview() {
@@ -910,7 +917,7 @@ const KeoBim = (function () {
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), categoryDiagnostics: st.categoryDiagnostics, calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
@@ -927,7 +934,7 @@ const KeoBim = (function () {
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {
-      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null; VOPS = []; LANS = []; HM = null;
+      st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.categoryDiagnostics=null; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null; VOPS = []; LANS = []; HM = null;
       await analyze(statusLine, opts); assertModel();
       st.dirty = false; saveDec();
       statusLine(completionText(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с`));
@@ -941,4 +948,4 @@ const KeoBim = (function () {
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
-window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision, BimViewerBinding };
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision, BimViewerBinding, BimCategories };

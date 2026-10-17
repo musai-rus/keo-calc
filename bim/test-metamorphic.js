@@ -1,6 +1,7 @@
 /* Independent synthetic review controls. Usage: node bim/test-metamorphic.js [repo root]. */
 const fs=require('fs'),assert=require('assert/strict'),root=process.argv[2]||require('path').join(__dirname,'..');
 global.BimSpaces=new Function(fs.readFileSync(root+'/bim/spaces.js','utf8')+';return BimSpaces')();
+global.BimCategories=require(root+'/bim/categories.js');
 const SP=BimSpaces,G=new Function(fs.readFileSync(root+'/bim/geom.js','utf8')+';return BimGeom')();
 global.THREE={Matrix4:class{constructor(){this.elements=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}},Vector3:class{}};
 function opening(points,indices,S,fam='Skylight'){
@@ -27,7 +28,7 @@ const unit=n=>'autodesk.unit.unit:'+n+'-1.0.1';
 (async()=>{let crossLayer=0;
  for(const S of[1,.001,.3048]){
   const u=S===1?'meters':S===.001?'millimeters':'feet',a=S===1?'squareMeters':S===.001?'squareMillimeters':'squareFeet';
-  const rooms=await G.rooms({m:{getPropertyDb:()=>({executeUserFunction:async()=>[{id:1,eid:'room1',name:'Office',num:'1',level:'L1',u:{Area:[24/S**2,unit(a)],Perimeter:[20/S,unit(u)],'Unbounded Height':[3/S,unit(u)]}}]})}});
+  const rooms=await G.rooms({m:{getPropertyDb:()=>({executeUserFunction:async()=>({records:[{id:1,eid:'room1',name:'Office',num:'1',level:'L1',u:{Area:[24/S**2,unit(a)],Perimeter:[20/S,unit(u)],'Unbounded Height':[3/S,unit(u)]}}],diagnostics:{counts:{rooms:1}}})})}});
   assert.ok(Math.abs(rooms[0].area-24)<1e-9);assert.ok(Math.abs(rooms[0].per-20)<1e-9);
   const segs=[[0,0,6,0],[6,0,6,4],[6,4,0,4],[0,4,0,0]],R=raster(segs),Rp=raster(segs);SP.matchRooms(R,rooms);assert.ok(rooms[0].reg);
   const out=SP.compose(R,Rp,rooms,()=>false,{});assert.equal(out.spaces.length,1);assert.equal(out.unplaced.length,0);
