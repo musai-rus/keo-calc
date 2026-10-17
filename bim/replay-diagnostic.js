@@ -8,6 +8,7 @@ vm.runInContext(fs.readFileSync(__dirname+'/keo-bim.js','utf8'),context);
 const packet = JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 try {
   const replay = context.KeoBim.replayDiagnostic(packet), r = replay.result;
-  console.log(JSON.stringify({matches:replay.matches,mode:r.mode,e:r.comb?.eAvgR ?? r.C?.res?.eFinal ?? r.C?.res?.eAvgR,points:r.comb?.e ?? r.C?.res?.e,error:r.err || null}));
+  console.log(JSON.stringify({matches:replay.matches,scope:replay.scope,rayExtractionReplayed:replay.rayExtractionReplayed,geometryVerified:replay.geometryVerified,
+    recordedOutcome:r.thrown?'thrown':r.err || r.C?.ok===false?'rejected':'returned',mode:r.mode,e:r.comb?.eAvgR ?? r.C?.res?.eFinal ?? r.C?.res?.eAvgR,points:r.comb?.e ?? r.C?.res?.e,error:r.err || r.thrown || null}));
   if (!replay.matches) process.exitCode=1;
-} catch (e) { console.error(e.message); process.exitCode=1; }
+} catch (e) { console.error(e?.message ?? String(e)); process.exitCode=1; }

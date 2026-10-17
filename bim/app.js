@@ -81,6 +81,7 @@ const KeoBim = (function () {
     // (повторный запуск из «План L01» давал 43 рассчитанных пространства вместо 63)
     progress('Каталог элементов…');
     cat = await timedAsync('catalog', () => G.catalog(C)); assertModel();
+    diag?.setCatalog(cat);
     const rooms = await timedAsync('roomProperties', () => G.rooms(C)); assertModel();
     const aec = await timedAsync('aecMetadata', () => Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null));
     assertModel(); const T = aec && aec.refPointTransformation;
@@ -280,6 +281,7 @@ const KeoBim = (function () {
   }
   function shade(f, A, floor) {
     const cl = f.cls.reduce((m, c) => c.bo * (c.z1 - c.z0) > m.bo * (m.z1 - m.z0) ? c : m);
+    diag?.recordProbe('overhangSource',{openingIds:cl.ids,c:cl.c,nin:f.nin,dOut:cl.dOut,zTop:cl.z1,selection:'largest glazing area; first on exact tie'});
     const kDepth = timed('overhangRays', () => G.overhang(C, { c: cl.c, nin: f.nin, dOut: cl.dOut }, cl.z1));
     const nout = [-f.nin[0], -f.nin[1]];
     const P0 = [f.O[0] - f.nin[0] * f.dst, f.O[1] - f.nin[1] * f.dst];
@@ -682,6 +684,8 @@ const KeoBim = (function () {
       <label>Не рассчитывать и не объединять автоматически (имя содержит) <input type="text" data-s="exclude" value="${esc(S.exclude)}"></label>
       <label>Высота среза для контуров, м <input type="number" step="0.1" data-s="cut" value="${S.cut}"></label>
       <label>Поправка на север, ° по часовой (пусто — из модели) <input type="text" data-s="northDeg" value="${esc(S.northDeg)}"></label>
+      <label><input type="checkbox" data-diagnostic-mode${diag?.enabled ? ' checked' : ''}> Собирать локальный диагностический пакет помещений</label>
+      <p class="muted" style="font-size:11px">Включение запускает повторный анализ и добавляет нагрузку. Данные остаются в этой вкладке и сохраняются вручную из карточки помещения. Диагностика не подтверждает нормативную точность.</p>
       <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по истинному северу из модели. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
       <div class="kb-row"><button class="kb-btn pri" data-a="rerun">Пересчитать</button></div>`;
   }
@@ -705,6 +709,14 @@ const KeoBim = (function () {
       if (k === 'region' || k === 'group') { saveDec(); try { rebuild(); } catch (e) { statusLine('Ошибка пересчёта: ' + e.message); } }
     });
     root.querySelector('[data-a=rerun]').onclick = () => run();
+    bindDiagnosticMode(root);
+  }
+  function bindDiagnosticMode(root) {
+    const control=root.querySelector('[data-diagnostic-mode]');if(!control)return;
+    control.onchange=()=>{
+      if(st.busy || !C || window.NOP_VIEWER?.model!==C.m){control.checked=!!diag?.enabled;statusLine(st.busy?'Дождитесь завершения расчёта.':'Модель изменилась — запустите анализ заново.');return;}
+      return run({diagnostics:control.checked===true});
+    };
   }
 
   function areaHTML(r) {
@@ -900,6 +912,7 @@ const KeoBim = (function () {
     return diag.packet(key);
   }
   const replayDiagnostic = packet => BimDiagnostics.replay(packet, { ...LIB, BimCalc:Cc, algorithm:typeof KeoBimBuild === 'undefined' ? null : KeoBimBuild });
+  const compareDiagnostics = (a,b) => BimDiagnostics.compare(a,b);
   function run(opts) {
     if (window.KeoBim?.run !== run) return Promise.resolve(st);
     if (st.busy) { const version = closeVersion; return closed && running ? running.then(() => version === closeVersion ? run(opts) : st) : Promise.resolve(st); }
@@ -926,7 +939,7 @@ const KeoBim = (function () {
     finally { st.busy = false; }
     return st;
   }
-  return { run, st: () => st, S, diagnosticPackage, replayDiagnostic, select, planView, destroy, decide, setBuildingGroup, setShortSection, previewShortSection };
+  return { run, st: () => st, S, diagnosticPackage, replayDiagnostic, compareDiagnostics, select, planView, destroy, decide, setBuildingGroup, setShortSection, previewShortSection };
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;

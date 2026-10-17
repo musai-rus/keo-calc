@@ -9,7 +9,9 @@ const BimGeom = (function () {
   }
   // Observe the original intersection once; never issue a diagnostic ray.
   function rayIntersect(C, ray, ignoreTransparent, kind) {
-    const hit = C.v.impl.rayIntersect(ray, ignoreTransparent);
+    let hit;
+    try { hit = C.v.impl.rayIntersect(ray, ignoreTransparent); }
+    catch(e) { try { C.diagnostics?.recordRay(kind,ray,ignoreTransparent,null,e); } catch(_) {} throw e; }
     try { C.diagnostics?.recordRay(kind, ray, ignoreTransparent, hit); } catch (_) { /* evidence must not affect the ray */ }
     return hit;
   }

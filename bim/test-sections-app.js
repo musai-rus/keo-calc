@@ -22,13 +22,14 @@ await vm.runInContext(`(async()=>{
  G.rooms=async()=>[{id:1,key:'room',eid:'room',level:'L01',name:'Раздевальная',num:'synthetic',area:width*height,per:2*(width+height),h:3.6,warn:[]}];
  G.slice=(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:[[0,0,width,0],[width,0,width,height],[width,height,0,height],[0,height,0,0]];
  G.openings=()=>[{id:200,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:[width/2,height/2],t:[1,0],n:[0,1],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}];
- const opts={region:'г. Москва',bGroup:group('A57')},current=()=>KeoBim.st().res.find(r=>r.key==='room');
+ const opts={region:'г. Москва',bGroup:group('A57'),diagnostics:true},current=()=>KeoBim.st().res.find(r=>r.key==='room');
  await KeoBim.run(opts);assert.match(current().err,/L ≤ 4/);assert.equal(current().sectionContext.error,'');
  const p={y0:1.2,nPts:3,nPtsBasis:'Synthetic project section selection',confirmed:true};
  const preview=KeoBim.previewShortSection('room',p);assert.equal(preview.errors.length,0);assert.equal(preview.points.length,3);assert.equal(current().kind,'err');assert.equal(current().st,undefined);assert.equal(current().section.mode,'draft');
  KeoBim._json();assert.equal(downloaded.spaces.length,0);assert.equal(downloaded.calculationErrors[0].section.mode,'draft');assert.equal(Object.keys(downloaded.shortSections).length,0);
  assert.throws(()=>KeoBim.setShortSection('room',{...p,nPtsBasis:''}),/обоснование/);
  KeoBim.setShortSection('room',p);assert.equal(current().C.ok,true);assert.equal(current().section.mode,'manual');assert.equal(current().st.top.nPts,3);
+ const manualPacket=JSON.parse(JSON.stringify(KeoBim.diagnosticPackage('room')));assert.equal(manualPacket.room.sectionContainsPoint,true);assert.ok(manualPacket.room.calls.some(c=>c.name==='sectionContainsPoint'));assert.equal(KeoBim.replayDiagnostic(manualPacket).matches,true);
  KeoBim._json();assert.equal(downloaded.spaces.length,1);assert.equal(downloaded.spaces[0].section.params.nPtsBasis,p.nPtsBasis);assert.equal(downloaded.spaces[0].state.top.y0,1.2);assert.equal(downloaded.shortSections.room.scope.model,'short:A');
  KeoBim._dec();assert.equal(downloaded.shortSections.room.params.confirmed,true);
  const saved=localStorage.getItem('keo-bim:decisions:short:A');assert.equal(JSON.parse(saved).shortSections.room.params.nPts,3);
@@ -68,6 +69,7 @@ await vm.runInContext(`(async()=>{
  KeoBim.setShortSection('room0',p);assert.equal(KeoBim.st().res.find(r=>r.key==='room0').kind,'calc');assert.equal(second().kind,'err');
  KeoBim.setShortSection('room1',{...p,nPts:5,nPtsBasis:'Independent five-point section'});assert.equal(second().st.top.nPts,5);const secondValue=second().C.res.eFinal;
  KeoBim.previewShortSection('room0',{...p,y0:NaN});KeoBim._json();assert.equal(downloaded.spaces.length,1);assert.equal(downloaded.spaces[0].rooms[0].key,'room1');assert.equal(downloaded.calculationErrors[0].section.mode,'draft');assert.equal(second().C.res.eFinal,secondValue);
+ const draftPacket=JSON.parse(JSON.stringify(KeoBim.diagnosticPackage('room0')));assert.equal(KeoBim.replayDiagnostic(draftPacket).matches,true);assert.equal(draftPacket.room.result.section.mode,'draft');
  KeoBim.setShortSection('room0',null);assert.equal(second().C.res.eFinal,secondValue);assert.equal(Object.keys(KeoBim.st().sections).join(','),'room1');
  reloadApp();await KeoBim.run(opts);assert.equal(second().C.res.eFinal,secondValue);assert.match(KeoBim.st().res.find(r=>r.key==='room0').err,/L ≤ 4/);
  // A manually edited persisted record with no explanation is never a numeric result.
