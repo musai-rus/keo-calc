@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <AssemblyName>Keo.RoomEvidence</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="RevitAPI"><HintPath>$(RevitInstallDir)/RevitAPI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="RevitAPIUI"><HintPath>$(RevitInstallDir)/RevitAPIUI.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="RequireOfficialLocalSdk" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(RevitInstallDir)' == '' Or !Exists('$(RevitInstallDir)/RevitAPI.dll') Or !Exists('$(RevitInstallDir)/RevitAPIUI.dll')" Text="Supply RevitInstallDir pointing to your official Revit 2026 installation. No DLL downloads are performed." />
+  </Target>
+</Project>

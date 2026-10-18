@@ -439,6 +439,23 @@ def _validate(data, require_integrity=True):
             mat, ph, doc = _mul(mat, t["matrix"]), mapped[_key(ph)], child
         return doc, ph, opt, mat
     def lifecycle(el, p, doc, ph):
+        # Native Rooms/separation lines may have no Created/Demolished lifecycle.
+        # This never replaces the independently checked spatial phase context.
+        capability = el.get("lifecycleCapability")
+        if capability is not None:
+            has_phases = result(capability, p + ".lifecycleCapability")
+            if (type(has_phases) is not bool or type(capability) is not dict or
+                capability.get("source") != "Element.HasPhases"):
+                issue("lifecycle-capability", p, "Нужен фактический boolean Element.HasPhases.")
+            elif has_phases is False:
+                if el.get("kind") not in {"room", "room-separator"}:
+                    issue("lifecycle-capability", p, "Неподдержанный unphased kind; lifecycle не пропускается.")
+                else:
+                    for k in ("createdPhase", "demolishedPhase"):
+                        result(el.get(k), p + "." + k, required=False)
+                        if type(el.get(k)) is not dict or el[k].get("status") != "not-applicable":
+                            issue("lifecycle-capability", p + "." + k, "HasPhases=false требует явного not-applicable, без подстановки Phase.")
+                    return
         for k in ("createdPhase", "demolishedPhase"):
             val = result(el.get(k), p + "." + k, required=(k == "createdPhase"))
             if k == "demolishedPhase" and type(el.get(k)) is dict and el[k].get("status") not in {"ok", "not-applicable"}:

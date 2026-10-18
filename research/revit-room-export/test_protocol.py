@@ -35,6 +35,34 @@ class ProtocolTests(unittest.TestCase):
             P.serialize(data)
         return result
 
+    def test_native_unphased_room_capability_does_not_replace_room_phase(self):
+        data=F.sample(); room=data['elements'][3]
+        room['lifecycleCapability']=F.ok(False,'Element.HasPhases')
+        for key in ('createdPhase','demolishedPhase'):
+            room[key]=F.unavailable('Element.HasPhases=false')
+        self.valid(data)
+        room['phase']=F.ref(999)
+        self.rejected(data,'phase-context')
+
+    def test_lifecycle_capability_cannot_bypass_phased_elements_or_unknowns(self):
+        for kind in ('room','wall'):
+            for mode in ('unknown','nonboolean','source','conflict','missing','forged-kind'):
+                data=F.sample(); element=data['elements'][3 if kind=='room' else 4]
+                element['lifecycleCapability']=F.ok(False,'Element.HasPhases')
+                for key in ('createdPhase','demolishedPhase'): element[key]=F.unavailable('No lifecycle')
+                if mode=='unknown': element['lifecycleCapability']=F.unavailable('unknown','unsupported','Element.HasPhases')
+                if mode=='nonboolean': element['lifecycleCapability']['value']=0
+                if mode=='source': element['lifecycleCapability']['source']='guess'
+                if mode=='conflict': element['createdPhase']=F.ok(F.ref(1))
+                if mode=='missing': del element['createdPhase']
+                if mode=='forged-kind':
+                    if kind=='room': element['kind']='wall'
+                with self.subTest(kind=kind,mode=mode):
+                    if kind=='room' and mode=='forged-kind':
+                        self.rejected(data,'reference-context')
+                    else:
+                        self.rejected(data,'lifecycle-capability')
+
     def test_examples_and_known_metrics(self):
         for data, area, per, holes in [(F.sample(), 12, 14, 0), (F.with_hole(), 11, 18, 1)]:
             result = self.valid(data)['rooms'][0]
