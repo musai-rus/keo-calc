@@ -15,7 +15,10 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
   const snapshot=()=>JSON.stringify(stableResults());
   function stableResults(){return KeoBim.st().res.map(r=>({key:r.key,kind:r.kind,row:r.row,mode:r.mode,st:r.st,C:r.C,comb:r.comb,geo:r.geo,pts:r.pts,A:r.A,notes:r.notes,section:r.section}));}
   let shadeCalls=0,depth=1.2;G.overhang=()=>{shadeCalls++;return depth};
-  const inputs=G.openings;const cases=[['combined',()=>inputs()],['side',()=>inputs().filter(x=>!x.roof)],['top',()=>inputs().filter(x=>x.roof)]];
+  const multiOpenings=G.openings;
+  await KeoBim.run({diagnostics:true,region:'г. Москва'});
+  for(const r of KeoBim.st().res){assert.equal(r.kind,'err');assert.equal(r.pointChoice.status,'insufficient-data');assert.equal(r.C,undefined);assert.equal(KeoBim.replayDiagnostic(KeoBim.diagnosticPackage(r.key)).matches,true);}
+  const inputs=()=>multiOpenings().filter(o=>o.roof||o.c[0]===3);const cases=[['combined',()=>inputs()],['side',()=>inputs().filter(x=>!x.roof)],['top',()=>inputs().filter(x=>x.roof)]];
   for(const [name,openings] of cases){
    G.openings=openings;shadeCalls=0;await KeoBim.run({diagnostics:false,region:'г. Москва'});const before=snapshot(),calls=shadeCalls;
    assert.throws(()=>KeoBim.diagnosticPackage(),/Диагностика/);
@@ -38,7 +41,7 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
     assert.equal(shadeCalls,beforeReplay,'replay must not call Viewer/shade');
     const corrupted=JSON.parse(JSON.stringify(packet));corrupted.algorithm.sha256='old-algorithm';assert.throws(()=>KeoBim.replayDiagnostic(corrupted),/version mismatch/);
     if(packet.room.calls.length){const missing=JSON.parse(JSON.stringify(packet));missing.room.calls.shift();assert.throws(()=>KeoBim.replayDiagnostic(missing),/callback/);}
-    if(name==='combined')assert.ok(packet.room.result.comb.sideAt.every(x=>x.st.side.walls.length),'all point-wise side states retained');
+    if(name==='combined'){const lit=packet.room.result.comb.sideAt.filter(x=>x.st);assert.ok(lit.length,'positive side contribution captured');assert.ok(lit.every(x=>x.st.side.walls.length),'point-wise side states retained');assert.ok(packet.room.result.comb.sideAt.filter(x=>!x.st).every(x=>x.e===0&&!x.walls.length),'occluded points stay explicit zero contributions');}
     const snap=JSON.stringify(packet.room);r.st.rho=.1;assert.equal(JSON.stringify(packet.room),snap,'detached packet');
    }
    await KeoBim.run({diagnostics:true});const p1=KeoBim.diagnosticPackage(KeoBim.st().res[0].key);
@@ -52,8 +55,8 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
   depth=2.2;await KeoBim.run();const large=KeoBim.diagnosticPackage(KeoBim.st().res[0].key),high=snapshot();
   assert.notEqual(low,high,'changed measured shading is a changed input, not same-input nondeterminism');
   assert.equal(KeoBim.replayDiagnostic(small).matches,true);assert.equal(KeoBim.replayDiagnostic(large).matches,true);
-  assert.ok(small.room.result.comb.sideAt.every(x=>x.st.side.walls.every(w=>w.kDepth===1.2)));
-  assert.ok(large.room.result.comb.sideAt.every(x=>x.st.side.walls.every(w=>w.kDepth===2.2)));
+  assert.ok(small.room.result.comb.sideAt.filter(x=>x.st).every(x=>x.st.side.walls.every(w=>w.kDepth===1.2)));
+  assert.ok(large.room.result.comb.sideAt.filter(x=>x.st).every(x=>x.st.side.walls.every(w=>w.kDepth===2.2)));
   const first=KeoBim.st().res[0].key;await KeoBim.setBuildingGroup('');const rebuilt=KeoBim.diagnosticPackage(first);
   assert.equal(rebuilt.runKind,'rebuild');assert.equal(KeoBim.replayDiagnostic(rebuilt).matches,true);
   assert.equal(rebuilt.phases.some(p=>p.phase==='physicalSlice'),false,'rebuild does not invent extraction timings');

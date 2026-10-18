@@ -187,21 +187,23 @@ console.log('\n=== 6. Метка пространства и видимость 
 console.log('\n=== 7. Боковое освещение объединённого пространства ===');
 let rSide;
 {
-  rSide = Cc.space(SPC, [win(1, 3, 1.5), win(2, 9, 1.5), win(3, 11, 1.5)], [], env());
+  const regPts = id => { const o = []; for (let j = 0; j < P.R.H; j += 4) for (let i = 0; i < P.R.W; i += 4) if (P.R.lab[j * P.R.W + i] === id) o.push([P.R.minx + (i + 0.5) * P.R.cell, P.R.miny + (j + 0.5) * P.R.cell]); return o; };
+  const unverified=Cc.space(SPC, [win(1, 3, 1.5), win(2, 9, 1.5), win(3, 11, 1.5)], [], env());
+  ok('несколько проёмов без геометрического контракта не объединяются', unverified.pointChoice?.status==='insufficient-data' && !unverified.C && !unverified.A && !unverified.st, unverified.err);
+  rSide = Cc.space(SPC, [win(1, 3, 1.5)], [], env({roomPts:rm=>regPts(rm.reg)}));
   ok('режим — боковое, расчёт выполнен', rSide.mode === 'side' && rSide.C && rSide.C.ok, rSide.err || (rSide.C && rSide.C.err));
   const W = rSide.st.side.walls[0];
   const bo = W.windows.reduce((s, x) => s + x.bo, 0);
-  ok('окна за перегородкой не попадают в расчёт целиком', bo < 4.5 - 0.3, `учтено bо = ${f3(bo)} из 4,5 м`);
+  ok('один проём сохраняет свою ширину', near(bo,1.5,.01), `учтено bо = ${f3(bo)} м`);
   ok('норма — наибольшая из норм помещений (групповая / спальня)', rSide.row && rSide.row.eSideN === Math.max(rowG.eSideN, rowS.eSideN), rSide.row && rSide.row.id);
-  ok('есть пояснение о частично закрытом окне', rSide.notes.some(n => /виден из точки|закрыт/.test(n)), rSide.notes.join(' / '));
+  ok('нет вердикта для неподтверждённого объединения', !unverified.C && unverified.pointChoice.classification==='unconfirmed');
   // расчётная точка — в помещении, определяющем норму (групповая), а не в середине объединённого пространства
-  const regPts = id => { const o = []; for (let j = 0; j < P.R.H; j += 4) for (let i = 0; i < P.R.W; i += 4) if (P.R.lab[j * P.R.W + i] === id) o.push([P.R.minx + (i + 0.5) * P.R.cell, P.R.miny + (j + 0.5) * P.R.cell]); return o; };
-  const rG = Cc.space(SPC, [win(1, 3, 1.5), win(2, 9, 1.5), win(3, 11, 1.5)], [], env({ roomPts: rm => regPts(rm.reg) }));
+  const rG = Cc.space(SPC, [win(1, 3, 1.5)], [], env({ roomPts: rm => regPts(rm.reg) }));
   ok('точка бокового света — в групповой (x < 6), с пояснением', rG.A[0] < 6 && rG.notes.some(n => /определяющем норму/.test(n)), `A = (${f3(rG.A[0])}; ${f3(rG.A[1])})`);
   // основная стена + небольшое окно в торцевой стене: точка по правилу основной стены (1 м от дальней стены), вклад торцевого окна учтён
   const side = { id: 9, cat: 'Revit Windows', c: [0, 4], t: [0, 1], n: [1, 0], nin: [1, 0], w: 0.5, d: 0.05, z0: 0.8, z1: 2.6, dIn: 0.05, dOut: 0.05, dst: 0.4 };
   const rS = Cc.space(SPC, [win(1, 3, 1.5), win(2, 9, 1.5), side], [], env({ roomPts: rm => regPts(rm.reg) }));
-  ok('малое торцевое окно не переводит точку в центр: lт = dп − 1 по основной стене', rS.C.ok && !rS.multi && rS.st.side.walls.length === 2 && near(rS.st.side.walls[0].lt, rS.st.side.walls[0].dp - 1, 0.15), rS.st.side.walls.map(w => `${w.orient}: lт ${w.lt}, dп ${w.dp}`).join('; '));
+  ok('соседние стены не получают скрытое правило точки', rS.pointChoice?.status==='insufficient-data' && !rS.A && !rS.C, rS.err);
   ok('ширина bп — по сечению через точку до перегородки (6 м), а не по всему пространству (13 м)', near(rG.st.side.walls[0].bp, 6, 0.15), `bп = ${rG.st.side.walls[0].bp}`);
   const sw = SP.sectionWidth(P.Rp, [3, 4], [1, 0], [0, 1]);
   // колонна 0,4×0,4 м в сечении: пропускается; перегородка и наружная стена — границы
@@ -243,7 +245,9 @@ console.log('\n=== 8. Верхнее и комбинированное осве�
   const rAll = Cc.space(SPC, [], [lan(3, 4, 1.5, 1.5, { shaded: 'перекрыт' })], env());
   ok('все фонари затенены, окон нет — расчёт не выполняется', !!rAll.err, rAll.err);
 
-  const rC = Cc.space(SPC, [win(1, 3, 1.5), win(2, 9, 1.5)], L2, env());
+  const rC = Cc.space(SPC, [win(1, 3, 1.5)], L2, env());
+  const blockedComb=Cc.space(SPC,[win(1,3,1.5),win(2,9,1.5)],L2,env());
+  ok('комбинированный свет также не группирует неподтверждённые фрагменты', !!blockedComb.err && !blockedComb.comb && !blockedComb.C);
   ok('окна + фонари → комбинированное (Б.4)', rC.mode === 'comb' && rC.comb, rC.err);
   const c = rC.comb;
   ok('e = eв + eб в каждой точке (без двойного учёта)', c.e.every((e, j) => near(e, c.eTop[j] + c.eSide[j], 1e-12)) && c.eTop.every((e, j) => near(e, rTop.C.res.e[j], 1e-12)));

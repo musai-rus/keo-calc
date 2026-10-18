@@ -11,6 +11,7 @@ bundle=bundle.replace('  return { run, st: () => st, S,','  mount=()=>{ui={remov
 vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);context.statusElement=status;
 (async()=>{
  await vm.runInContext(`(async()=>{
+  const allOpenings=G.openings;const supportedOpenings=(...a)=>allOpenings(...a).filter(o=>o.roof||o.c[0]===3);G.openings=supportedOpenings;
   await KeoBim.run();assert.equal(KeoBim.st().res.filter(r=>r.kind==='calc').length,0);
   assert.match(statusElement.textContent,/КЕО не рассчитан.*регион/);assert.equal(statusElement.textContent.includes('Готово'),false);
   assert.match(KeoBim._climateHTML(),/data-a="climate"/);assert.match(KeoBim._climateHTML(),/инкогнито/);
@@ -20,6 +21,7 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
   region.value='Краснодарский край';region.onchange();assert.ok(KeoBim.st().res.some(r=>r.kind==='calc'));assert.match(statusElement.textContent,/Пересчёт завершён: рассчитано пространств — [1-9]/);
   assert.equal(KeoBim._climateHTML().includes('data-a="climate"'),false);const results=()=>JSON.stringify(KeoBim.st().res.map(r=>r.comb?.eAvgR??r.C?.res?.eFinal));const initial=results();
   await KeoBim.run();assert.equal(results(),initial);assert.match(statusElement.textContent,/Готово.*рассчитано пространств — [1-9]/);
+  G.openings=allOpenings;await KeoBim.run();assert.match(statusElement.textContent,/КЕО не рассчитан.*Недостаточно данных/);assert.equal(statusElement.textContent.includes('Готово'),false);G.openings=supportedOpenings;
   // Incognito/new model/profile has no inherited climate choice.
   NOP_VIEWER.model=makeModel('test-purpose:fresh-profile');await KeoBim.run();assert.match(statusElement.textContent,/КЕО не рассчитан.*регион/);
   await KeoBim.run({region:'г. Москва'});

@@ -30,6 +30,7 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
 (async()=>{
  await vm.runInContext(`(async()=>{
   const originalRooms=G.rooms;G.rooms=async C=>(await originalRooms(C)).map((r,i)=>({...r,name:i%2?'Спальня':'Мастер-спальня',dep:'Synthetic apartment group'}));G.location=async()=>[];
+  const openings=G.openings;G.openings=()=>openings().filter(o=>o.roof||o.c[0]===3);
   await KeoBim.run({region:'г. Москва'});
   assert.ok(['tentative','unknown'].includes(KeoBim.st().purpose.status));assert.equal(KeoBim.S.bGroup,'');
   const rs=KeoBim.st().res.filter(r=>r.kind==='calc');assert.ok(rs.length);

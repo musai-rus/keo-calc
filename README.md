@@ -51,6 +51,10 @@
 ## Сборка и проверка
 ```
 node test.js        # все проверки должны пройти
+node test-side-point-policy.js # явная точка A57/A60; блокировка неподтверждённых нескольких стен/проёмов
+node bim/test-point-candidates.js # множество кандидатов, точность, перенос/поворот/перестановка без случайного выбора
+node bim/test-facade-contract.js # изолированный exact-rational контракт: topology/coverage/room/scope
+node bim/test-facade-extraction.js # read-only проверка потери holes/provenance в extraction
 node bim/test-bim.js  # КЕО по модели: пространства, единицы, фонари, ориентация
 node bim/test-purpose.js # назначение здания по совокупности помещений
 node bim/test-purpose-confidence.js # confidence gate, подтверждение, UI и экспорт

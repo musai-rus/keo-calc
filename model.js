@@ -8,7 +8,8 @@ const KEO = (function () {
     center: 'в центре помещения',
     far1: 'на расстоянии 1 м от стены, наиболее удалённой от световых проёмов',
     'far1.2': 'на расстоянии 1,2 м от стены, наиболее удалённой от световых проёмов',
-    manual: 'задано вручную'
+    manual: 'задано вручную',
+    unknown: 'недостаточно данных — задайте точку явно'
   };
   const RT_REF = { center: 'п. 5.3 ж) СП 52.13330.2016', far1: 'п. 5.3 а), в), д) СП 52.13330.2016', 'far1.2': 'п. 5.3 г) СП 52.13330.2016', manual: '—' };
   const K_TITLES = { none: 'Нет', balcony: 'Балкон над/перед окном (табл. Б.17)', loggia: 'Лоджия (табл. Б.18)', canopy: 'Горизонтальный козырёк (табл. Б.19)', screen: 'Вертикальный экран (табл. Б.20)', manual: 'Задать K вручную' };
@@ -51,12 +52,15 @@ const KEO = (function () {
     return { v, manual: st.normManual !== null && st.normManual !== '', colName, room: r, src: r ? `СП 367.1325800.2025, табл. А.1, п. ${r.n} (= СП 52.13330.2016, табл. Л.1)` : '—' };
   }
   function hpOf(st) { const r = room(st); if (st.hpManual !== null && st.hpManual !== '' && !isNaN(st.hpManual)) return +st.hpManual; return r && r.h !== null ? r.h : 0.8; }
+  const SIDE_POINT_MISSING = 'Недостаточно данных для выбора расчётной точки: несколько записей стен не подтверждают число физических световых сторон. Румб не задаёт плоскость стены. Проверьте геометрию и явно задайте положение точки.';
   function rtOf(st) {
-    if (st.rtManual) return st.rtManual;
-    if (st.mode === 'side' && st.side.walls.length > 1) return 'center';
+    if (st.rtManual) return Object.hasOwn(RT_REF, st.rtManual) ? st.rtManual : 'unknown';
+    // No plane/normal/room/precision contract exists in the manual wall records.
+    // Equal climate sectors cannot establish one physical facade.
+    if (st.mode === 'side' && st.side.walls.length > 1) return 'unknown';
     const r = room(st); return r ? r.rt : 'center';
   }
-  function ltAuto(rule, dp) { return rule === 'far1' ? dp - 1 : rule === 'far1.2' ? dp - 1.2 : dp / 2; }
+  function ltAuto(rule, dp) { return rule === 'far1' ? dp - 1 : rule === 'far1.2' ? dp - 1.2 : rule === 'center' ? dp / 2 : NaN; }
   function mfOf(st, angleIdx) { return R.MF(st.env, angleIdx, st.glassMult).v; }
   function tau1Wall(w) { const c = coefCheck(w.t1c, 't1c'); return c.st === 'ok' ? c.v : DATA.tau1[w.t1].v; }
 
@@ -280,6 +284,7 @@ const KEO = (function () {
   /* ---------- входные данные для движка ---------- */
   function sideInput(st, overrides) {
     const g = groupOf(st), hp = hpOf(st), rule = rtOf(st);
+    if (st.mode === 'side' && rule === 'unknown') throw new Error(SIDE_POINT_MISSING);
     const walls = st.side.walls.map(w => {
       const lt = rule === 'manual' ? +w.lt : ltAuto(rule, +w.dp);
       const o = { orient: w.orient, bp: +w.bp, dp: +w.dp, H: +w.H, lt, ds: +w.ds || 0, dst: +w.dst, kPos: rule === 'center' ? 'center' : 'wall1', MF: mfOf(st, 3), ...(overrides || {}) };
@@ -391,6 +396,7 @@ const KEO = (function () {
   }
   function validate(st) {
     const err = [], warn = [];
+    if (st.mode === 'side' && rtOf(st) === 'unknown') err.push(SIDE_POINT_MISSING);
     const pos = (v, n) => { if (!(+v > 0)) err.push(`${n}: нужно положительное число`); };
     const rh = rhoOf(st); rh.err.forEach(e => err.push(e)); rh.warn.forEach(e => warn.push(e));
     if (rh.mode === 'legacy') warn.push('ρср: источник не подтверждён (файл прежней версии) — выберите режим «0,55», «По поверхностям» или «Вручную».');
@@ -399,6 +405,7 @@ const KEO = (function () {
       const walls = st.mode === 'comb' ? st.side.walls.slice(0, 1) : st.side.walls;
       walls.forEach((w, wi) => {
         const pre = walls.length > 1 ? `Стена ${wi + 1}. ` : '';
+        if (!ORIENTS.includes(w.orient)) err.push(pre + 'Неизвестная климатическая ориентация стены — выберите румб.');
         if (st.mode === 'side') { pos(w.dp, pre + 'Глубина помещения dп'); pos(w.bp, pre + 'Ширина помещения bп'); }
         windowOverlaps(w.windows).forEach(e => err.push(pre + e));
         if (!(+w.dst >= 0)) err.push(pre + 'Толщина стены Δст должна быть ≥ 0');
@@ -407,7 +414,7 @@ const KEO = (function () {
         if (st.mode === 'side') {
           w.windows.forEach((x, i) => { if (Math.abs(+x.s) + x.bo / 2 > w.bp / 2 + 0.02) warn.push(`${pre}Окно ${i + 1} выходит за пределы ширины помещения bп — проверьте смещение s.`); });
           const rule = rtOf(st), lt = rule === 'manual' ? +w.lt : ltAuto(rule, +w.dp);
-          if (!(lt > 0) || lt >= +w.dp + 1e-9) err.push(pre + 'Расчётная точка должна лежать внутри помещения: 0 < lт < dп');
+          if (rule !== 'unknown' && (!(lt > 0) || lt >= +w.dp + 1e-9)) err.push(pre + 'Расчётная точка должна лежать внутри помещения: 0 < lт < dп');
         }
         w.buildings.forEach((b, i) => { if (!(+b.l > 0 && +b.Hp > 0 && +b.a > 0)) err.push(`${pre}Здание ${i + 1}: укажите l, Hр и a больше нуля`); });
       });
@@ -449,7 +456,7 @@ const KEO = (function () {
 
   /* ---------- расчёт ---------- */
   function compute(st) {
-    const v = validate(st); if (v.err.length) return { ok: false, ...v };
+    const v = validate(st); if (v.err.length) return { ok: false, ...v, ...(st.mode === 'side' && rtOf(st) === 'unknown' ? {pointChoice:{status:'insufficient-data',reason:'unverified-wall-classification'}} : {}) };
     const norm = normOf(st), g = groupOf(st), warn = [...v.warn];
     let res;
     if (st.mode === 'side') {
@@ -493,6 +500,7 @@ const KEO = (function () {
 
   /* ---------- модель отчёта ---------- */
   function buildModel(st, C) {
+    if (!C || !C.ok) return [];
     const M = []; const r = C.res, n = C.norm, g = C.group;
     const modeName = { side: 'боковое естественное освещение', top: isB2(st) ? 'верхнее освещение (фонари-надстройки, проёмы в покрытии)' : 'верхнее освещение (зенитные / шахтные фонари)', comb: 'комбинированное освещение (верхнее + боковое)' }[st.mode];
     const roomTitle = [st.meta.room, n.room ? n.room.name : ''].filter(Boolean).join('. ');

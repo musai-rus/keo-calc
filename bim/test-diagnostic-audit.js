@@ -21,7 +21,7 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   G.catalog=async()=>({byCat:{},info:{900:{c:'Revit Roofs',type:'Synthetic canopy'}}});
   G.overhang=productionOverhang;
   const originalOpenings=G.openings;
-  G.openings=()=>originalOpenings().map(o=>{Object.defineProperty(o,'source',{value:{dbId:o.id,fragments:[{fragment:o.id,glass:true,geometryAvailable:true}],geometryCompleteness:'not verified'}});return o});
+  G.openings=()=>originalOpenings().filter(o=>o.roof||o.c[0]===3).map(o=>{Object.defineProperty(o,'source',{value:{dbId:o.id,fragments:[{fragment:o.id,glass:true,geometryAvailable:true}],geometryCompleteness:'not verified'}});return o});
   const slice=G.slice;
   G.slice=(...args)=>{const segments=slice(...args);Object.defineProperty(segments,'precision',{value:{v:1,reference:'synthetic',complete:false,reconstruction:'unknown',reasons:['unknown synthetic precision'],entries:segments.map((s,i)=>({bounds:null,provenance:{dbId:'synthetic-wall-'+i,fragment:i}}))}});return segments;};
   const numeric=()=>JSON.stringify(KeoBim.st().res.map(r=>({st:r.st,C:r.C,comb:r.comb,pts:r.pts})));
