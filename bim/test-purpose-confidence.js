@@ -31,9 +31,10 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
  await vm.runInContext(`(async()=>{
   const originalRooms=G.rooms;G.rooms=async C=>(await originalRooms(C)).map((r,i)=>({...r,name:i%2?'Спальня':'Мастер-спальня',dep:'Synthetic apartment group'}));G.location=async()=>[];
   const openings=G.openings;G.openings=()=>openings().filter(o=>o.roof||o.c[0]===3);
-  await KeoBim.run({region:'г. Москва'});
+  await KeoBim.run({region:'г. Москва',diagnostics:true});
   assert.ok(['tentative','unknown'].includes(KeoBim.st().purpose.status));assert.equal(KeoBim.S.bGroup,'');
   const rs=KeoBim.st().res.filter(r=>r.kind==='calc');assert.ok(rs.length);
+  const packet=KeoBim.diagnosticPackage(rs[0].key);assert.equal(packet.room.binding.purposeGate.allowed,false);assert.equal(packet.room.binding.previewOnly,true);assert.equal(packet.room.interpretation.purpose.previewOnly,true);assert.equal(packet.room.interpretation.purpose.rawResultStage,'before purpose gating');assert.ok(packet.room.result.C);assert.equal(KeoBim.replayDiagnostic(packet).matches,true);
   const numbers=rs.map(r=>r.comb?.eAvgR??r.C.res.eFinal);
   rs.forEach(r=>{assert.equal(r.C.pass,null);assert.equal(r.C.norm.v,null);assert.equal(KeoBim._en(r),null);assert.equal(KeoBim._status(r).t,'подтвердите назначение здания')});
   assert.match(KeoBim._purposeHTML(),/Назначение не подтверждено/);assert.match(KeoBim._purposeHTML(),/Предположение по названиям/);assert.ok(KeoBim._purposeHTML().includes('<b>Назначение здания: не подтверждено</b>'));assert.match(KeoBim._purposeHTML(),/<details open>/);assert.match(KeoBim._purposeHTML(),/Подтвердить этот вариант/);assert.match(KeoBim._purposeHTML(),/слабый признак/);assert.match(KeoBim._purposeHTML(),/один общий выбор не подтверждает/);assert.match(KeoBim._purposeHTML(),/Synthetic apartment group × 4/);assert.match(document.getElementById('kb-status').textContent,/Норма и соответствие не определены/);
@@ -42,10 +43,14 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
   KeoBim._exportJSON();const out=JSON.parse(capturedDownload.text);assert.equal(out.purpose.confidence.allowed,false);out.spaces.forEach(r=>{assert.equal(r.state,undefined);assert.equal(r.normative.norm,null);assert.ok(r.previewInputs.warning);assert.equal(r.normative.status,'подтвердите назначение здания')});
   KeoBim._exportCSV();assert.ok(capturedDownload.text.includes('подтвердите назначение здания'));assert.equal(capturedDownload.text.includes('соответствует'),false);
   await KeoBim.setBuildingGroup(group('A57'));assert.equal(KeoBim.S.bGroup,group('A57'));assert.ok(KeoBim.st().res.filter(r=>r.kind==='calc').every(r=>r.purposeGate.allowed));
+  const confirmed=KeoBim.diagnosticPackage(KeoBim.st().res.find(r=>r.kind==='calc').key);assert.equal(confirmed.room.binding.purposeGate.allowed,true);assert.equal(confirmed.room.interpretation.purpose.previewOnly,false);assert.equal(KeoBim.replayDiagnostic(confirmed).matches,true);
   KeoBim._exportJSON();assert.ok(JSON.parse(capturedDownload.text).spaces.every(r=>r.state));
   await KeoBim.setBuildingGroup('');assert.equal(KeoBim.S.bGroup,'');assert.ok(KeoBim.st().res.filter(r=>r.kind==='calc').every(r=>r.C.pass===null));
   assert.deepEqual(KeoBim.st().res.filter(r=>r.kind==='calc').map(r=>r.comb?.eAvgR??r.C.res.eFinal),numbers);
+  const pending=KeoBim.diagnosticPackage(KeoBim.st().res.find(r=>r.kind==='calc').key);assert.equal(pending.room.binding.purposeGate.allowed,false);assert.equal(pending.room.interpretation.purpose.previewOnly,true);
   const saved=JSON.parse(localStorage.getItem('keo-bim:decisions:test-purpose:A'));assert.equal(saved.bGroup,'');
+  G.rooms=async C=>(await originalRooms(C)).map(r=>({...r,name:'Групповая'}));await KeoBim.run({diagnostics:true});
+  const weak=KeoBim.st().res.find(r=>r.kind==='calc');assert.equal(weak.C.norm.v,null);assert.equal(weak.C.pass,null);const raw=KeoBim.diagnosticPackage(weak.key);assert.ok(raw.room.result.C.norm.v>0);assert.equal(typeof raw.room.result.C.pass,'boolean');assert.equal(raw.room.binding.purposeGate.allowed,false);assert.equal(raw.room.interpretation.purpose.previewOnly,true);assert.equal(KeoBim.replayDiagnostic(raw).matches,true);
   KeoBim.destroy();
  })()`,context);
  passed++;console.log('PASS actual weak-purpose run, manual confirmation, return to auto, UI and export gate');

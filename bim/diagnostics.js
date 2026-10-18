@@ -215,7 +215,8 @@ const BimDiagnostics = (function () {
         record(() => {
           rec.result = encode(result);
           if (result.st?.meta?.date !== undefined) rec.input.env.reportDate=result.st.meta.date;
-          rec.interpretation=encode({pointRule:{directoryRow:result.row || null,multi:result.multi ?? null,adapterRtManual:result.st?.rtManual,
+          rec.interpretation=encode({purpose:{gate:binding.purposeGate || null,previewOnly:binding.previewOnly !== false,
+            rawResultStage:'before purpose gating',note:'Raw result is retained for exact replay. Norm/pass fields are hypothetical until purpose is confirmed; a confirmed purpose alone does not certify geometry or normative accuracy.'},pointRule:{directoryRow:result.row || null,multi:result.multi ?? null,adapterRtManual:result.st?.rtManual,
             note:'rtManual may be assigned by the adapter for multi-wall/combined calculation; it is not proof of a user override'},
             coefficients:{source:'Saved settings, per-point calculator states and computed wall/window records in result; not measured material properties'},
             sourceBindings:'Opening dbIds/fragments and contour segment provenance are retained; native Room boundaries remain unverified'});

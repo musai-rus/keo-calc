@@ -283,14 +283,15 @@ const KeoBim = (function () {
         base.sectionContext = timed('sectionProof', () => BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, boundaryPrecision:L.boundaryPrecision, paintSegments:G.paintSegments }), {key:sp.key,level:L.name});
         env.shortSection = { context: base.sectionContext, record: st.sections[sp.key], pending: st.sectionDrafts[sp.key] };
       }
+      const gate = purposeGate();
       let r; try {
         r = diag?.enabled ? diag.capture({key:sp.key,level:L.name,spaceIndex:i,rooms:sp.rooms,contourRuns:base.runs,area:base.area,
           roomMatching:(L.diagnostics || []).filter(d=>sp.rooms.some(rm=>rm.key===d.key)), physicalRegions:[...(L.spRegs[i] || [])],
-          north:st.north,decisions:st.dec,normOverrides:st.normOv,nativeRoomGeometry:'not verified'}, sp, o, lsCalc, env, e=>Cc.space(sp,o,lsCalc,e)) : Cc.space(sp, o, lsCalc, env);
+          north:st.north,decisions:st.dec,normOverrides:st.normOv,purposeGate:gate,previewOnly:!gate.allowed,nativeRoomGeometry:'not verified'}, sp, o, lsCalc, env, e=>Cc.space(sp,o,lsCalc,e)) : Cc.space(sp, o, lsCalc, env);
       } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
       if (o.some(x => x.levelBoundary)) (r.notes = r.notes || []).push('Проём попадает в диапазоны нескольких уровней: сохранена первая привязка снизу вверх. Проверьте этаж и геометрию высокого проёма.');
       if (lanPending) (r.notes = r.notes || []).unshift(`фонарей с неподтверждённым типом: ${lanPending} — в расчёте не учтены, подтвердите тип в разделе «Фонари»`);
-      out.push(Cc.gateNorms({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o, lans: ls, lanPending }, purposeGate()));
+      out.push(Cc.gateNorms({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o, lans: ls, lanPending }, gate));
     });
     // части здания ≥ 8 м² без помещения Revit вне рассчитанных пространств — выбор помещений за пользователем
     L.unknown.filter(u => u.space === undefined).forEach(u => out.push({ key: 'unk:' + u.at.join(','), level: L.name, floor: L.floor, rooms: [], title: `Контур без помещения Revit, ${f2(u.area, 1)} м²`, nums: '?', kind: 'unknown', unk: u, A: u.at }));
