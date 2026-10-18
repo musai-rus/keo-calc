@@ -151,13 +151,13 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   other.onchange();assert.equal(KeoBim.st().res.length,0);assert.equal(KeoBim.st().dirty,true);assert.throws(()=>KeoBim.decide('split',['synthetic']),/полный пересчёт/);
   await KeoBim.run();assert.equal(KeoBim.st().dirty,false);assert.ok(KeoBim.st().res.every(r=>r.st.rho===.2));
   let resume;G.catalog=()=>new Promise(r=>resume=r);const pending=KeoBim.run();
-  const beforeDec=JSON.stringify(KeoBim.st().dec);KeoBim.decide('split',['synthetic']);assert.equal(JSON.stringify(KeoBim.st().dec),beforeDec);
+  const beforeDec=JSON.stringify(KeoBim.st().dec,(k,v)=>k==='session'?undefined:v);KeoBim.decide('split',['synthetic']);assert.equal(JSON.stringify(KeoBim.st().dec,(k,v)=>k==='session'?undefined:v),beforeDec);
   regionInput.value='Краснодарский край';regionInput.onchange();assert.equal(KeoBim.S.group,1);assert.equal(KeoBim.S.region,'');
   resume({byCat:{},info:{}});await pending;G.catalog=oldCatalog;
   NOP_VIEWER.model=makeModel('test-purpose:unanalysed');groupInput.value='5';groupInput.onchange();assert.equal(KeoBim.S.group,1);
   assert.throws(()=>KeoBim._focusLantern(1),/Модель изменилась/);assert.throws(()=>KeoBim._exportOne({}),/Модель изменилась/);assert.throws(()=>KeoBim._exportDec(),/Модель изменилась/);
   assert.throws(()=>KeoBim._view3d(),/Модель изменилась/);assert.throws(()=>KeoBim.planView('L01'),/Модель изменилась/);assert.throws(()=>KeoBim.select({}),/Модель изменилась/);
-  assert.throws(()=>KeoBim.decide('split',['synthetic']),/Модель изменилась/);assert.equal(JSON.stringify(KeoBim.st().dec),beforeDec);
+  assert.throws(()=>KeoBim.decide('split',['synthetic']),/Модель изменилась/);assert.equal(JSON.stringify(KeoBim.st().dec,(k,v)=>k==='session'?undefined:v),beforeDec);
   let release;G.catalog=()=>new Promise(r=>release=r);const switched=KeoBim.run();NOP_VIEWER.model=makeModel('test-purpose:switch-during-analysis');release({byCat:{},info:{}});await switched;assert.equal(KeoBim.st().res.length,0);G.catalog=oldCatalog;
   G.catalog=async()=>{throw Error('new model catalog failure')};await KeoBim.run();G.catalog=oldCatalog;
   assert.equal(KeoBim.st().levels.length,0);assert.equal(KeoBim.st().dirty,true);groupInput.value='1';groupInput.onchange();assert.equal(KeoBim.st().res.length,0);

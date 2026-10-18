@@ -126,7 +126,8 @@ const BimGeom = (function () {
     return { byCat, info, diagnostics };
   }
 
-  // помещения из базы свойств (у них нет 3D-геометрии в экспорте viewer.autodesk.com); единицы — по dataTypeContext свойства
+  // Свойства Rooms из propertyDB; этот адаптер не проверяет собственную геометрию Rooms.
+  // Наличие или отсутствие геометрии в иных представлениях отсюда не следует.
   async function rooms(C) {
     const extracted = await C.m.getPropertyDb().executeUserFunction(BimCategories.workerSource(),BimCategories.config());
     const raw=extracted.records;

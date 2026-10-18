@@ -104,6 +104,7 @@ const KeoBim = (function () {
     cat = await timedAsync('catalog', () => G.catalog(C)); assertModel();
     diag?.setCatalog(cat);
     const rooms = await timedAsync('roomProperties', () => G.rooms(C)); assertModel();
+    if (new Set(rooms.map(r => r.key)).size !== rooms.length) throw new Error('Повторяются идентификаторы Rooms между уровнями или связями. Пространственная принадлежность не подтверждена; расчёт остановлен.');
     const aec = await timedAsync('aecMetadata', () => Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null));
     assertModel(); const T = aec && aec.refPointTransformation;
     st.north = northOf(T); st.aecLoc = aec && aec.locationParameters;
@@ -138,7 +139,7 @@ const KeoBim = (function () {
       L.Rp = timed('physicalRaster', () => G.raster(L.boundarySegments, S.cell, bx), {level:L.name});
       L.R = timed('matchingRaster', () => G.raster(matchingSegments, S.cell, bx), {level:L.name}); L.doors = segsD.length / 4;
       timed('perimeterProof', () => BimRectangles.certifyRegionPerimeters(L.R,matchingSegments,BimPrecision.combine([segsP,segsL]),G.paintSegments), {level:L.name});
-      timed('roomMatching', () => SP.matchRooms(L.R, L.rooms), {level:L.name});
+      timed('roomMatching', () => SP.matchRooms(L.R, L.rooms, 0.04, {requireSpatial:true}), {level:L.name});
       timed('exteriorRays', () => G.withFullModel(v, () => G.markExterior(C, L.Rp, z)), {level:L.name});
       timed('compositionAndOpeningBinding', () => compose(L), {level:L.name});
       diag?.captureLevel(L, { physical:segsP, physicalEntries:segsP.precision?.entries || null, roomSeparation:segsL, roomSeparationEntries:segsL.precision?.entries || null, doors:segsD, doorEntries:segsD.precision?.entries || null,
@@ -161,6 +162,7 @@ const KeoBim = (function () {
     if (!Cc.climate(S, LIB.DATA.regions)) return 'КЕО не рассчитан: подтвердите регион строительства или группу светового климата 1–5. Нажмите «Выбрать регион» ниже.';
     if (!st.rooms.length) return 'КЕО не рассчитан: помещения Revit не получены из базы свойств. Проверьте 3D-вид и завершение загрузки модели, затем запустите закладку ещё раз.';
     if (!st.levels.length) return 'КЕО не рассчитан: помещения найдены, но не сопоставлены с уровнями модели. Сведения об уровнях отсутствуют или отличаются от свойств Rooms.';
+    if (st.res.some(r => r.diagnostic?.reason === 'spatial_evidence_missing')) return 'КЕО не рассчитан: связь Rooms с контурами не подтверждена. Совпадение площади и периметра — только кандидат; нужна проверка положения и принадлежности помещения.';
     const reasons = [...new Set(st.res.filter(r => r.kind === 'err').map(r => r.err))];
     if (reasons.length) return `КЕО не рассчитан. Причины: ${reasons.slice(0, 3).join('; ')}${reasons.length > 3 ? '; остальные — в разделе «Без расчёта»' : ''}`;
     return 'КЕО не рассчитан: нет пространств с подтверждёнными световыми проёмами и достаточными исходными данными. Откройте «Без расчёта» и «Проверить состав» для причин.';
@@ -168,7 +170,7 @@ const KeoBim = (function () {
 
   // состав пространств уровня (по текущим решениям) → разметка клеток → привязка вертикальных проёмов
   function compose(L) {
-    const { spaces, unplaced, unknown, diagnostics } = SP.compose(L.R, L.Rp, L.rooms, isExcluded, st.dec, { aux: rm => !normRow(rm) });
+    const { spaces, unplaced, unknown, diagnostics } = SP.compose(L.R, L.Rp, L.rooms, isExcluded, st.dec, { aux: rm => !normRow(rm), placementSession:st.placementSession, level:L.name });
     L.spaces = spaces; L.unplaced = unplaced; L.unknown = unknown; L.diagnostics = diagnostics;
     L.lab = SP.spaceLabel(L.R, L.Rp, spaces);
     VOPS.forEach(o => { if (o.lvl === L.name) { delete o.space; delete o.lvl; delete o.floor; } });
@@ -369,8 +371,8 @@ const KeoBim = (function () {
     if (!decisionReady()) return;
     const D = st.dec, hit = g => g.some(k => keys.includes(k));
     D.merge = D.merge.filter(g => !hit(g)); D.split = D.split.filter(g => !hit(g));
-    D.assign = (D.assign || []).filter(a => !hit(a.keys) && !(at && a.at[0] === at[0] && a.at[1] === at[1]));
-    if (kind === 'assign') D.assign.push({ at, keys }); else if (kind) D[kind].push(keys);
+    D.assign = (D.assign || []).filter(a => !hit(a.keys) && !(at && a.level === levelName && a.at[0] === at[0] && a.at[1] === at[1]));
+    if (kind === 'assign') D.assign.push({ at, keys, level:levelName, session:st.placementSession }); else if (kind) D[kind].push(keys);
     saveDec(); rebuild(levelName);
   }
 
@@ -378,7 +380,7 @@ const KeoBim = (function () {
   function status(r) {
     if (r.lanPending) return { k: 'err', t: 'уточните тип фонаря' };
     if (r.kind === 'dark') return { k: 'none', t: 'нет световых проёмов' };
-    if (r.kind === 'nogeo') return { k: 'none', t: 'контур не найден' };
+    if (r.kind === 'nogeo') return { k: 'none', t: r.diagnostic?.reason === 'spatial_evidence_missing' ? 'привязка контура не подтверждена' : 'контур не найден' };
     if (r.kind === 'unknown') return { k: 'err', t: 'уточните состав' };
     if (r.kind === 'err') return { k: 'err', t: r.err };
     if (normPending(r)) return { k: 'none', t: 'подтвердите назначение здания' };
@@ -600,7 +602,7 @@ const KeoBim = (function () {
   const statusLine = t => { if (!ownsPanel()) return; const el = ui.querySelector('#kb-status'); if (el) el.textContent = t; };
 
   // сводка по помещениям Revit: каждое помещение — ровно в одном пространстве, в списке «без контура» или исключено
-  const DIAG_LABEL = {invalid_area:'нет пригодной площади', ambiguous:'равнозначные кандидаты', physical_exterior:'сопоставленный контур связан с наружной областью', physical_unmapped:'нет физической области', composition_unresolved:'состав не разрешён', claimed_candidate:'кандидаты заняты другими Room', unresolved_candidate:'кандидаты не дают однозначной пары', perimeter_rejected:'индивидуальные кандидаты отклонены по периметру', no_area_candidate:'нет индивидуального кандидата по площади'};
+  const DIAG_LABEL = {spatial_evidence_missing:'связь Room с контуром не подтверждена: площадь и периметр — только кандидаты',invalid_area:'нет пригодной площади', ambiguous:'равнозначные кандидаты', physical_exterior:'сопоставленный контур связан с наружной областью', physical_unmapped:'нет физической области', composition_unresolved:'состав не разрешён', claimed_candidate:'кандидаты заняты другими Room', unresolved_candidate:'кандидаты не дают однозначной пары', perimeter_rejected:'индивидуальные кандидаты отклонены по периметру', no_area_candidate:'нет индивидуального кандидата по площади'};
   function roomDiagnosticData() {
     if (st.dirty) return {available:false,rooms:[],counts:{placement:{},identification:{},physical:{}},unplacedReasons:{},duplicateKeys:[],unknownContours:[]};
     const records = st.levels.flatMap(l => (l.diagnostics || []).map(d => ({...d,level:l.name})));
@@ -648,7 +650,7 @@ const KeoBim = (function () {
       <p class="muted" style="font-size:11px">${esc(PRELIM)} Север: ${esc(st.north ? st.north.src : '—')}.</p>
       <details class="kb-set"${st.north?.unknown ? ' open' : ''}><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
       <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button><button class="kb-btn" data-a="dexp">Решения по составу (JSON)</button><button class="kb-btn" data-a="dimp">Загрузить решения</button>${st.dec.merge.length || st.dec.split.length || (st.dec.assign || []).length || Object.keys(st.dec.lanterns || {}).length || Object.keys(st.normOv).length || Object.keys(st.sections).length || Object.keys(st.sectionDrafts).length ? '<button class="kb-btn" data-a="dclr">Сбросить решения</button>' : ''}</div>
-      <p class="muted" style="font-size:11px">Контуры восстановлены по срезу модели на высоте ${f2(S.cut, 1)} м над полом: помещения Revit опознаются по контуру с линиями разделения, состав расчётного пространства и затенение — по физическим стенам, перегородкам и витражам (линии разделения не считаются стенами). Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б: Б.1 — боковое, Б.3 — верхнее, Б.4 — комбинированное). Экспериментальная версия: нормативная точность на модели не подтверждена.</p>`;
+      <p class="muted" style="font-size:11px">Время полного анализа: ${st.elapsedMs == null ? '—' : f2(st.elapsedMs / 1000, 1) + ' с'}. Ручные привязки действуют только в текущем анализе и на выбранном уровне; после полного перезапуска их нужно проверить заново. Контуры восстановлены по срезу модели на высоте ${f2(S.cut, 1)} м над полом: площадь и периметр Rooms дают только кандидатов; автоматическая пространственная привязка этим адаптером пока не подтверждена, состав расчётного пространства и затенение — по физическим стенам, перегородкам и витражам (линии разделения не считаются стенами). Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б: Б.1 — боковое, Б.3 — верхнее, Б.4 — комбинированное). Экспериментальная версия: нормативная точность на модели не подтверждена.</p>`;
     main.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => planView(b.dataset.lv));
     main.querySelector('[data-a="3d"]').onclick = () => { st.level = null; view3d(); renderList(); labels(); };
     main.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderList(); labels(); });
@@ -912,9 +914,9 @@ const KeoBim = (function () {
       h += `<p class="muted">${esc((r.C.err || []).join('; '))}</p>`;
     } else if (r.kind === 'err') {
       h += `<p class="muted">${esc(r.err)}</p>` + lansHTML(r) + ((r.notes || []).length ? `<p class="muted" style="font-size:11.5px">${r.notes.map(esc).join('<br>')}</p>` : '');
-    } else if (r.kind === 'nogeo') h += `<p class="muted">${esc(r.why || '')} — помещение есть в модели, но его контур не удалось выделить по срезу и подобрать по балансу площадей. Посчитайте его в калькуляторе вручную или объедините с соседним помещением.</p>`;
+    } else if (r.kind === 'nogeo') h += `<p class="muted">${esc(r.why || '')} — свойства помещения прочитаны, но его пространственная привязка не подтверждена. Проверьте положение и границы; совпадение площади не является основанием для расчёта этого Room.</p>`;
     else if (r.kind === 'dark') h += `<p class="muted">${r.lanPending ? 'Окон нет; фонари есть, но их тип не подтверждён (раздел «Фонари в модели» ниже).' : 'У пространства нет наружных окон, витражей и фонарей.'}</p>` + lansHTML(r);
-    else if (r.kind === 'unknown') h += `<p class="muted">После выбора помещений контур будет рассчитан как пространство.</p>`;
+    else if (r.kind === 'unknown') h += `<p class="muted">Кандидаты получены по площади и периметру. Перед ручным назначением проверьте положение, этаж и принадлежность Room модели или связи. Ручное назначение не подтверждает точность восстановленных границ и КЕО; оно действует только до нового полного анализа.</p>`;
     if (r.rooms.length) {
       if (r.unresolvedRooms && r.unresolvedRooms.length) h += `<p class="kb-warn">Назначение не распознано: ${r.unresolvedRooms.map(esc).join('; ')}. Это не означает отсутствие нормы КЕО. Выберите назначение ниже.</p>`;
       const rowsA1 = LIB.DATA.rooms.slice().sort((a, b) => (b.g === st.group) - (a.g === st.group));
@@ -1000,10 +1002,13 @@ const KeoBim = (function () {
     if (opts && Object.prototype.hasOwnProperty.call(opts,'northDeg') && !Object.prototype.hasOwnProperty.call(opts,'northMode')) S.northMode=BimNorth.modeOf(opts.northDeg);
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
+    st.elapsedMs = null;
+    st.placementSession = Date.now().toString(36) + ':' + Math.random().toString(36).slice(2);
     try {
       st.dirty = true; st.sel = null; st.res = []; st.levels = []; st.rooms = []; st.noLevel = []; st.sectionDrafts = {}; st.north = null; st.T = null; st.location = []; st.aecLoc = null; st.purpose = null; st.group = null; st.lanDiag = []; st.categoryDiagnostics=null; st.locationWarning = ''; st.storageWarning = ''; st.level = null; st.plan = false; st.drawn = null; VOPS = []; LANS = []; HM = null;
       await analyze(statusLine, opts); assertModel();
       st.dirty = false; saveDec();
+      st.elapsedMs = performance.now() - t0;
       statusLine(completionText(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с`));
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
       timed('visualization', () => { draw(); renderList(); });
