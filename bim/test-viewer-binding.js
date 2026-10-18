@@ -27,4 +27,27 @@ test('in-place derivative, document or view identity changes invalidate',()=>{fo
 test('normal page reload produces a fresh valid binding, old one cannot be reused',()=>{const a=setup(),b=B.capture(a.env),next=setup();assert.throws(()=>B.assert(b,next.env));assert.equal(B.assert(B.capture(next.env),next.env),true)});
 test('embedded single Viewer without Autodesk document route is supported',()=>{const s=setup();s.env.location={href:'http://localhost/test',hostname:'localhost',pathname:'/test'};s.setRoot(null);assert.equal(B.capture(s.env).m,s.model)});
 test('offscreen canvas and unknown Autodesk route cannot appear active',()=>{const s=setup();s.canvas.getBoundingClientRect=()=>({left:2000,top:2000,width:800,height:600});assert.throws(()=>B.capture(s.env));const t=setup();t.env.location.pathname='/';assert.throws(()=>B.capture(t.env),/не подтверждён/)});
+test('in-place rotation, translation, offset and scale changes invalidate the same model',()=>{
+ const identity=()=>({elements:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]});
+ for(const change of ['world','runtime','placement','dataPlacement','withOffset','offset','scale']){
+  const s=setup(),mat=identity(),d={urn:'derivative-A',globalOffset:{x:0,y:0,z:0}};let scale=1;
+  s.setData(d);s.model.getUnitScale=()=>scale;
+  if(change==='world')s.model.getModelToViewerTransform=()=>mat;
+  if(change==='runtime')s.model.getModelTransform=()=>mat;
+  if(change==='placement')s.model.getPlacementTransform=()=>mat;
+  if(change==='dataPlacement')d.placementTransform=mat;
+  if(change==='withOffset')d.placementWithOffset=mat;
+  const b=B.capture(s.env);
+  // Changes values on the very same matrix object, not just its reference.
+  if(change==='offset')d.globalOffset.x=10;else if(change==='scale')scale=.3048;else mat.elements[12]=10;
+  assert.throws(()=>B.assert(b,s.env),/изменилась/);
+ }
+ const s=setup(),mat=identity();s.model.getModelToViewerTransform=()=>mat;const b=B.capture(s.env);
+ mat.elements.splice(0,6,0,1,0,0,-1,0);assert.throws(()=>B.assert(b,s.env),/изменилась/);
+});
+test('equivalent matrix objects are stable; malformed spatial context fails closed',()=>{
+ const s=setup();s.model.getModelToViewerTransform=()=>({elements:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]});
+ assert.equal(B.assert(B.capture(s.env),s.env),true);
+ for(const value of [{},{elements:[]},{elements:Array(16).fill(NaN)}]){s.model.getModelToViewerTransform=()=>value;assert.throws(()=>B.capture(s.env),/преобразование/);}
+});
 console.log(`${count}/${count} Viewer binding groups passed`);

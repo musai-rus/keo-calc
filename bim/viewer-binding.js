@@ -18,6 +18,23 @@ const BimViewerBinding = (function () {
     const data = m.getData(), node = m.getDocumentNode();
     return { urn: data && data.urn || null, root: node?.getRootNode()?.urn() || null, guid: node?.data?.guid || null };
   }
+  // Same object/URN can acquire a different placement after analysis. Keep
+  // values, not Matrix4 references: Viewer mutates existing matrices in place.
+  function spatialContext(m) {
+    const d=m.getData() || {};
+    const matrix=value=>{
+      if (value===null || value===undefined) return null;
+      const a=Array.from(value.elements || []);
+      if (a.length!==16 || !a.every(Number.isFinite)) fail('Не удалось проверить преобразование модели Viewer.');
+      return a;
+    };
+    const offset=d.globalOffset;
+    const xyz=offset===null || offset===undefined ? null : [offset.x,offset.y,offset.z];
+    if (xyz && !xyz.every(Number.isFinite)) fail('Не удалось проверить смещение модели Viewer.');
+    const scale=m.getUnitScale?.() ?? null;
+    if (scale!==null && !(Number.isFinite(scale) && scale>0)) fail('Не удалось проверить единицы модели Viewer.');
+    return JSON.stringify({world:matrix(m.getModelToViewerTransform?.()),runtime:matrix(m.getModelTransform?.()),placement:matrix(m.getPlacementTransform?.()),dataPlacement:matrix(d.placementTransform),withOffset:matrix(d.placementWithOffset),offset:xyz,scale});
+  }
   function route(env) {
     const loc = env.location;
     if (!loc) return { token: '', urn: null };
@@ -44,12 +61,12 @@ const BimViewerBinding = (function () {
     if (typeof v.isLoadDone !== 'function' || v.isLoadDone({ geometry: true, propDb: true }) !== true || !m.getInstanceTree() || !(fragments?.getCount() > 0) || !m.getPropertyDb()) fail('Модель ещё не готова: дождитесь загрузки геометрии и базы свойств, затем повторите запуск.');
     const id = identity(m), page = route(env);
     if (page.urn && (!id.root || page.urn !== id.root)) fail('Модель Viewer не соответствует странице. Перезагрузите страницу и повторите запуск.');
-    return { v, m, canvas, container, doc, ...id, page: page.token };
+    return { v, m, canvas, container, doc, ...id, page: page.token, spatial:spatialContext(m) };
   }
   function assert(binding, env = window) {
     if (!binding) changed();
     const now = capture(env);
-    for (const k of ['v', 'm', 'canvas', 'container', 'doc', 'urn', 'root', 'guid', 'page']) if (now[k] !== binding[k]) changed();
+    for (const k of ['v', 'm', 'canvas', 'container', 'doc', 'urn', 'root', 'guid', 'page', 'spatial']) if (now[k] !== binding[k]) changed();
     return true;
   }
   return { capture, assert };

@@ -127,6 +127,10 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   modeInput.value='manual';modeInput.onchange();angleInput.value='';angleInput.onchange();assert.equal(KeoBim.st().north.unknown,true);assert.equal(KeoBim.st().res.some(r=>r.kind==='calc'),false);
   angleInput.value='0';angleInput.onchange();assert.equal(KeoBim.st().north.rot,0);assert.ok(KeoBim.st().res.some(r=>r.kind==='calc'));
   Autodesk.Viewing.Document.getAecModelData=originalAEC;delete placedModel.getModelToViewerTransform;await KeoBim.run({northDeg:'0'});
+  const contextModel=NOP_VIEWER.model,identityMatrix={elements:rot(0,4)};contextModel.getModelToViewerTransform=()=>identityMatrix;
+  await KeoBim.run({northMode:'auto'});identityMatrix.elements.splice(0,6,0,1,0,0,-1,0);
+  assert.throws(()=>KeoBim._exportJSON(),/Модель изменилась/);assert.equal(KeoBim.st().res.length,0);assert.equal(KeoBim.st().dirty,true);
+  delete contextModel.getModelToViewerTransform;await KeoBim.run({northDeg:'0'});
   KeoBim._restoreDec({merge:[],northDeg:'90'},KeoBim.S.bGroup,{...KeoBim.S,northMode:'auto'});assert.equal(KeoBim.S.northMode,'manual');
   KeoBim._restoreDec({merge:[],northDeg:'90',northMode:'auto'},KeoBim.S.bGroup,KeoBim.S);assert.equal(KeoBim.S.northMode,'auto');
   assert.throws(()=>KeoBim._validateDec({merge:[],northMode:'invalid'}),/формат/);

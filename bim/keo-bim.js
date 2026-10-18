@@ -3458,6 +3458,23 @@ const BimViewerBinding = (function () {
     const data = m.getData(), node = m.getDocumentNode();
     return { urn: data && data.urn || null, root: node?.getRootNode()?.urn() || null, guid: node?.data?.guid || null };
   }
+  // Same object/URN can acquire a different placement after analysis. Keep
+  // values, not Matrix4 references: Viewer mutates existing matrices in place.
+  function spatialContext(m) {
+    const d=m.getData() || {};
+    const matrix=value=>{
+      if (value===null || value===undefined) return null;
+      const a=Array.from(value.elements || []);
+      if (a.length!==16 || !a.every(Number.isFinite)) fail('Не удалось проверить преобразование модели Viewer.');
+      return a;
+    };
+    const offset=d.globalOffset;
+    const xyz=offset===null || offset===undefined ? null : [offset.x,offset.y,offset.z];
+    if (xyz && !xyz.every(Number.isFinite)) fail('Не удалось проверить смещение модели Viewer.');
+    const scale=m.getUnitScale?.() ?? null;
+    if (scale!==null && !(Number.isFinite(scale) && scale>0)) fail('Не удалось проверить единицы модели Viewer.');
+    return JSON.stringify({world:matrix(m.getModelToViewerTransform?.()),runtime:matrix(m.getModelTransform?.()),placement:matrix(m.getPlacementTransform?.()),dataPlacement:matrix(d.placementTransform),withOffset:matrix(d.placementWithOffset),offset:xyz,scale});
+  }
   function route(env) {
     const loc = env.location;
     if (!loc) return { token: '', urn: null };
@@ -3484,12 +3501,12 @@ const BimViewerBinding = (function () {
     if (typeof v.isLoadDone !== 'function' || v.isLoadDone({ geometry: true, propDb: true }) !== true || !m.getInstanceTree() || !(fragments?.getCount() > 0) || !m.getPropertyDb()) fail('Модель ещё не готова: дождитесь загрузки геометрии и базы свойств, затем повторите запуск.');
     const id = identity(m), page = route(env);
     if (page.urn && (!id.root || page.urn !== id.root)) fail('Модель Viewer не соответствует странице. Перезагрузите страницу и повторите запуск.');
-    return { v, m, canvas, container, doc, ...id, page: page.token };
+    return { v, m, canvas, container, doc, ...id, page: page.token, spatial:spatialContext(m) };
   }
   function assert(binding, env = window) {
     if (!binding) changed();
     const now = capture(env);
-    for (const k of ['v', 'm', 'canvas', 'container', 'doc', 'urn', 'root', 'guid', 'page']) if (now[k] !== binding[k]) changed();
+    for (const k of ['v', 'm', 'canvas', 'container', 'doc', 'urn', 'root', 'guid', 'page', 'spatial']) if (now[k] !== binding[k]) changed();
     return true;
   }
   return { capture, assert };
@@ -4174,6 +4191,7 @@ const KeoBim = (function () {
   }
   function purposeHTML() {
     const p = st.purpose, groups = [...new Set(LIB.DATA.rooms.map(r => r.g))];
+    const allowed=purposeGate().allowed;
     const source = S.bGroup ? 'Задано вручную для этой модели' : purposeGate().allowed ? 'Определено автоматически — первый прогон' : 'Предположение по названиям — требуется подтверждение';
     const notice = !p || p.status === 'unknown' ? 'Характерных названий недостаточно. Выберите назначение здания.'
       : p.status === 'ambiguous' ? 'Есть признаки нескольких назначений. Проверьте выбранный вариант и назначения отдельных помещений.'
@@ -4182,13 +4200,13 @@ const KeoBim = (function () {
     const departments=Object.entries((st.rooms||[]).reduce((m,r)=>{const k=String(r.dep||'').trim();if(k)m[k]=(m[k]||0)+1;return m;},{})).sort((a,b)=>b[1]-a[1]).slice(0,12);
     const structure=departments.length ? `<p>Группы/отделы из свойств Rooms: ${departments.map(([k,n])=>`${esc(k)} × ${n}`).join('; ')}. Эти значения показаны для проверки структуры, их смысл автоматически не подтверждён.</p>` : '';
     return `<section class="kb-purpose kb-set" aria-label="Назначение здания">
-      <b>${S.bGroup ? 'Назначение здания' : 'Предположение о назначении'}: ${esc(st.group || 'не определено')}</b>
+      <b>Назначение здания: ${esc(allowed ? st.group || 'не определено' : 'не подтверждено')}</b>
       <p class="muted" style="font-size:12px;margin:4px 0">${source}. ${S.bGroup ? 'Автоматический анализ: ' + esc(p && p.group || 'не определено') + '.' : notice}</p>
       ${purposeGate().allowed ? '' : '<p class="kb-warn">Назначение не подтверждено: КЕО показан предварительно; норма и соответствие не определены. Выберите назначение ниже и нажмите «Применить и пересчитать». Расчётная точка и КЕО могут измениться после подтверждения.</p>'}
       <label>Уточнить назначение <select data-purpose style="max-width:100%;width:100%"><option value="">Автоматически по всем помещениям</option>${groups.map(g => `<option value="${esc(g)}"${S.bGroup === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select></label>
       <button class="kb-btn pri" data-a="purpose">Применить и пересчитать</button>
       <p class="muted">Если в здании разные функции, один общий выбор не подтверждает назначение каждой части. Проверьте состав и назначение отдельных расчётных пространств.</p>
-      <details><summary>Основания и альтернативы назначения</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Баллы эвристические; повторения ограничены по весу, равные баллы не доказывают преимущество. Это предположение по названиям, а не подтверждённая классификация.</p>${structure}${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
+      <details${allowed ? '' : ' open'}><summary>Основания и альтернативы назначения</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Баллы эвристические; повторения ограничены по весу, равные баллы не доказывают преимущество. Это предположение по названиям, а не подтверждённая классификация.</p>${structure}${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
       ${st.storageWarning ? `<p class="kb-warn">${esc(st.storageWarning)}</p>` : ''}
     </section>`;
   }
@@ -4244,6 +4262,7 @@ const KeoBim = (function () {
   }
   function settingsHTML() {
     const opt = (list, cur) => list.map((x, i) => `<option value="${i}"${+cur === i ? ' selected' : ''}>${esc(x.t)} — ${f2(x.v)}</option>`).join('');
+    const purposeSource=purposeGate().allowed ? `Тип здания для норм: ${esc(st.group || 'не определён')}.` : `Предположение для предварительного прогона: ${esc(st.group || 'нет')}. Назначение для нормы не подтверждено.`;
     return `<label>Регион строительства (справочник СП 52, прил. Е) <select data-s="region"><option value="">Не выбран / группа вручную</option>${LIB.DATA.regions.map(r => `<option value="${esc(r.name)}"${S.region === r.name ? ' selected' : ''}>${esc(r.name)} — группа ${r.g}</option>`).join('')}</select></label>
       <label>Группа района вручную (1–5; заменяет регион) <input type="number" min="1" max="5" step="1" data-s="group" value="${S.group ?? ''}"></label>
       <label>ρср — средневзвешенный коэффициент отражения <input type="number" step="0.01" data-s="rho" value="${S.rho}"></label>
@@ -4256,7 +4275,7 @@ const KeoBim = (function () {
       <label>Не рассчитывать и не объединять автоматически (имя содержит) <input type="text" data-s="exclude" value="${esc(S.exclude)}"></label>
       <label>Высота среза для контуров, м <input type="number" step="0.1" data-s="cut" value="${S.cut}"></label>
       ${northHTML()}
-      <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по выбранному источнику истинного севера; источник и угол показаны выше. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
+      <p class="muted" style="font-size:11px">${purposeSource} Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по выбранному источнику истинного севера; источник и угол показаны выше. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
       <div class="kb-row"><button class="kb-btn pri" data-a="rerun">Пересчитать</button></div>`;
   }
   function bindSettings(root) {
