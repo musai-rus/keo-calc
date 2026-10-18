@@ -191,7 +191,7 @@ const BimCalc = (function () {
   }
   function baseState(env, sp, row) {
     const S = env.settings, st = env.KEO.defaultState();
-    st.meta = { code: S.code || '', object: S.object || '', room: title(sp), author: '', date: new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
+    st.meta = { code: S.code || '', object: S.object || '', room: title(sp), author: '', date: env.reportDate ?? new Date().toLocaleDateString('ru-RU'), sheetStart: 1 };
     const cl = climate(S, env.DATA.regions);
     if (!cl) throw new Error('Регион не подтверждён: выберите регион или группу светового климата в настройках.');
     st.region = cl.region; st.group = cl.group; st.groupManual = cl.source === 'manual'; st.bType = row ? row.g : (S.bGroup || st.bType); st.roomId = row ? row.id : '';

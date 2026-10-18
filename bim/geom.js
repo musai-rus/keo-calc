@@ -7,6 +7,14 @@ const BimGeom = (function () {
     const m = v.model, it = m.getInstanceTree(), fl = m.getFragmentList();
     return { v, m, it, fl, S: m.getUnitScale(), GZ: (m.getData().globalOffset || { z: 0 }).z };
   }
+  // Observe the original intersection once; never issue a diagnostic ray.
+  function rayIntersect(C, ray, ignoreTransparent, kind) {
+    let hit;
+    try { hit = C.v.impl.rayIntersect(ray, ignoreTransparent); }
+    catch(e) { try { C.diagnostics?.recordRay(kind,ray,ignoreTransparent,null,e); } catch(_) {} throw e; }
+    try { C.diagnostics?.recordRay(kind, ray, ignoreTransparent, hit); } catch (_) { /* evidence must not affect the ray */ }
+    return hit;
+  }
 
   // Viewer.getCutPlanes() is an aggregate, while setCutPlanes() writes only one
   // named set. Preserve the sets separately or restoration duplicates clipping.
@@ -186,7 +194,7 @@ const BimGeom = (function () {
       const g = C.fl.getGeometry(f); if (!g || !g.vb) return; C.fl.getWorldMatrix(f, mat); const e = mat.elements;
       const P = positionReader(g, e, 1, withPrecision);
       const ib = g.ib || (g.index && g.index.array);
-      if (g.isLines) { if (!onLine) return; if (ib) for (let i = 0; i + 1 < ib.length; i += 2) onLine(P(ib[i]), P(ib[i + 1])); return; }
+      if (g.isLines) { if (!onLine) return; if (ib) for (let i = 0; i + 1 < ib.length; i += 2) onLine(P(ib[i]), P(ib[i + 1]), {fragment:f,dbId}); return; }
       if (!onTri || !ib) return;
       for (let i = 0; i + 2 < ib.length; i += 3) onTri(P(ib[i]), P(ib[i + 1]), P(ib[i + 2]), {fragment:f,dbId});
     }, true);
@@ -209,7 +217,7 @@ const BimGeom = (function () {
         }
       }
       if (pts.length === 2) {segs.push([pts[0][0], pts[0][1], pts[1][0], pts[1][1]]);entries.push({bounds:bounds.every(Boolean)?bounds.flat():null,provenance:{...meta,category:c,zM,unitScale:S,vertices:p.map(q=>q.precision?.provenance||{decoder:'unknown'}),operation:'triangle-plane interval intersection',reconstruction:'unknown'}});}
-    }, lineZ ? (a, b) => { const z0 = lineZ[0] / S, tol = lineZ[1] / S; if (Math.abs(a[2] - z0) < tol && Math.abs(b[2] - z0) < tol) {segs.push([a[0] * S, a[1] * S, b[0] * S, b[1] * S]);entries.push({bounds:null,provenance:{reason:'line-selection-precision-unknown'}});} } : null, undefined, true)));
+    }, lineZ ? (a, b, meta) => { const z0 = lineZ[0] / S, tol = lineZ[1] / S; if (Math.abs(a[2] - z0) < tol && Math.abs(b[2] - z0) < tol) {segs.push([a[0] * S, a[1] * S, b[0] * S, b[1] * S]);entries.push({bounds:null,provenance:{...meta,category:c,zM,unitScale:S,reason:'line-selection-precision-unknown'}});} } : null, undefined, true)));
     Object.defineProperty(segs,'precision',{value:{v:1,reference:'source-model',reconstruction:'unknown',complete:!reasons.has('slice-topology-uncertain'),entries,reasons:[...reasons].sort()}});
     return segs;
   }
@@ -272,7 +280,7 @@ const BimGeom = (function () {
     R.regs.forEach(r => {
       if (!r || r.border || r.room || r.areaC < 60) return;
       if (labelAt(R, r.cx, r.cy) !== r.id) return;
-      const hit = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(r.cx / S, r.cy / S, zM / S), new THREE.Vector3(0, 0, 1)), false);
+      const hit = rayIntersect(C, new THREE.Ray(new THREE.Vector3(r.cx / S, r.cy / S, zM / S), new THREE.Vector3(0, 0, 1)), false, 'exterior');
       if (!hit) R.ext.add(r.id);
     });
   }
@@ -295,16 +303,20 @@ const BimGeom = (function () {
       if (excludeRe && excludeRe.test(inf.type || '')) { if (named) diag.push({ id, cat: c, label, reason: 'тип исключён настройкой «стекло не учитывать»' }); return; }
       if (c === 'Revit Generic Models' && !named) return;
       // P — точки стекла; A/NZ — площадь стекла и её проекция на горизонталь; Pa/Aa/NZa — то же по всей геометрии элемента
-      const P = [], Pa = []; let A = 0, NZ = 0, Aa = 0, NZa = 0, up = 0;
+      const P = [], Pa = [], sourceFragments = []; let A = 0, NZ = 0, Aa = 0, NZa = 0, up = 0;
       C.it.enumNodeFragments(id, f => {
         const mt = C.fl.getMaterial(f), glass = !!(mt && (mt.transparent || mt.opacity < 0.95));
-        const g = C.fl.getGeometry(f); if (!g || !g.vb || !g.vb.length || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
+        const g = C.fl.getGeometry(f);
+        if (C.diagnostics?.enabled) sourceFragments.push({fragment:f,glass,geometryAvailable:!!(g && g.vb && g.vb.length),isLines:!!g?.isLines});
+        if (!g || !g.vb || !g.vb.length || g.isLines) return; C.fl.getWorldMatrix(f, mat4);
         const n = g.vb.length / g.vbstride, Q = [], read = positionReader(g, mat4.elements, S);
         for (let i = 0; i < n; i++) Q.push(read(i));
         const ib = g.ib || (g.index && g.index.array);
         if (ib) for (let i = 0; i + 2 < ib.length; i += 3) { const a = Q[ib[i]], b = Q[ib[i + 1]], cc = Q[ib[i + 2]]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = cc[0] - a[0], vy = cc[1] - a[1], vz = cc[2] - a[2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, ar = Math.hypot(nx, ny, nz) / 2; Aa += ar; NZa += Math.abs(nz) / 2; if (glass) { A += ar; NZ += Math.abs(nz) / 2; if (nz > 0) up += nz / 2; } }
         Q.forEach(q => Pa.push(q)); if (glass) Q.forEach(q => P.push(q));
       }, true);
+      const source = C.diagnostics?.enabled ? {dbId:id,category:c,fragments:sourceFragments,geometryCompleteness:'not verified',glassSelection:'Viewer material.transparent or opacity < 0.95'} : null;
+      const emit = record => { if (source) Object.defineProperty(record,'source',{value:source}); out.push(record); };
       if (!Pa.length) { if (named) diag.push({id, cat:c, label, named, reason:'геометрия элемента отсутствует — фонарь не учтён'}); return; }
       const box = pts => {
         // Minimum-area rectangle of the XY convex hull: independent of triangle
@@ -351,13 +363,13 @@ const BimGeom = (function () {
           if (radius > 0.1 && Math.min(bb.w, bb.d) / Math.max(bb.w, bb.d) > 0.9 && angles.length >= 8 && Math.max(...gaps) <= Math.PI / 2 &&
               rim.every(p => Math.abs(Math.hypot(p[0] - bb.c[0], p[1] - bb.c[1]) - radius) / radius < 0.05)) { rec.round = true; rec.d = 2 * radius; }
         }
-        out.push(rec); diag.push(rec); return;
+        emit(rec); diag.push(rec); return;
       }
       if (!glassOk) { if (named) diag.push({ id, cat: c, label, named, reason: 'нет прозрачных фрагментов (стекло не выделено материалом) и геометрия не обращена вверх' }); return; }
       const bb = box(P);
-      if (c === 'Revit Roofs' || c === 'Revit Generic Models') { if (flat < 0.3 && bb.w >= 0.3 && bb.h >= 0.3) out.push({ id, cat: c, type: inf.type, c: bb.c, t: bb.t, n: bb.n, w: bb.w, d: bb.d, z0: bb.z0, z1: bb.z1 }); else if (named) diag.push({ id, cat: c, label, reason: `наклон стекла ${Math.round(Math.acos(Math.min(1, flat)) * 180 / Math.PI)}° — ни фонарь (≤ 60°), ни вертикальный проём` }); return; }
+      if (c === 'Revit Roofs' || c === 'Revit Generic Models') { if (flat < 0.3 && bb.w >= 0.3 && bb.h >= 0.3) emit({ id, cat: c, type: inf.type, c: bb.c, t: bb.t, n: bb.n, w: bb.w, d: bb.d, z0: bb.z0, z1: bb.z1 }); else if (named) diag.push({ id, cat: c, label, reason: `наклон стекла ${Math.round(Math.acos(Math.min(1, flat)) * 180 / Math.PI)}° — ни фонарь (≤ 60°), ни вертикальный проём` }); return; }
       if (bb.w < 0.15 && bb.d < 0.15) return; // щели и торцы стекла
-      out.push({ id, cat: c, type: inf.type, c: bb.c, t: bb.t, n: bb.n, w: bb.w, d: bb.d, z0: bb.z0, z1: bb.z1 });
+      emit({ id, cat: c, type: inf.type, c: bb.c, t: bb.t, n: bb.n, w: bb.w, d: bb.d, z0: bb.z0, z1: bb.z1 });
       if (named) diag.push({ id, cat: c, label, reason: `стекло вертикальное (наклон ${Math.round(Math.acos(Math.min(1, flat)) * 180 / Math.PI)}°) — учтено как окно` });
     }));
     out.diag = diag;
@@ -367,16 +379,17 @@ const BimGeom = (function () {
   // двери без остекления считаются закрытыми: контур габарита двери в плане добавляется в физический растр Rp,
   // чтобы открытая (повёрнутая) створка не соединяла помещения в один объём
   function doorBoxes(C, cat, zM) {
-    const S = C.S, segs = [], box = new THREE.Box3(), fb = new THREE.Box3();
+    const S = C.S, segs = [], entries = [], box = new THREE.Box3(), fb = new THREE.Box3();
     (cat.byCat['Revit Doors'] || []).forEach(id => {
-      box.makeEmpty(); let glass = false;
-      C.it.enumNodeFragments(id, f => { const mt = C.fl.getMaterial(f); if (mt && (mt.transparent || mt.opacity < 0.95)) glass = true; C.fl.getWorldBounds(f, fb); box.union(fb); }, true);
+      box.makeEmpty(); let glass = false; const fragments=[];
+      C.it.enumNodeFragments(id, f => { fragments.push(f); const mt = C.fl.getMaterial(f); if (mt && (mt.transparent || mt.opacity < 0.95)) glass = true; C.fl.getWorldBounds(f, fb); box.union(fb); }, true);
       if (glass || box.isEmpty() || box.min.z * S > zM || box.max.z * S < zM) return;
       const x0 = box.min.x * S, y0 = box.min.y * S, x1 = box.max.x * S, y1 = box.max.y * S;
       if (x1 - x0 > 4 || y1 - y0 > 4) return; // ворота, витражные блоки — не трогаем
       segs.push([x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]);
+      for(let i=0;i<4;i++) entries.push({bounds:null,provenance:{dbId:id,fragments,category:'Revit Doors',zM,unitScale:S,operation:'Viewer getWorldBounds; closed opaque door AABB',reconstruction:'unknown'}});
     });
-    Object.defineProperty(segs,'precision',{value:{v:1,reference:'source-model',reconstruction:segs.length?'unknown':'exact',complete:true,entries:segs.map(()=>({bounds:null,provenance:{operation:'Viewer getWorldBounds; closed opaque door AABB',reconstruction:'unknown'}})),reasons:segs.length?['door-bounds-accuracy-unknown']:[]}});
+    Object.defineProperty(segs,'precision',{value:{v:1,reference:'source-model',reconstruction:segs.length?'unknown':'exact',complete:true,entries,reasons:segs.length?['door-bounds-accuracy-unknown']:[]}});
     return segs;
   }
 
@@ -431,7 +444,7 @@ const BimGeom = (function () {
 
   // первое непрозрачное препятствие по вертикали вверх от (x, y, z): отметка в м или null
   function hitUp(C, x, y, z, maxD) {
-    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true);
+    const S = C.S, h = rayIntersect(C, new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true, 'hitUp');
     return h && h.distance * S <= (maxD || 1e9) ? z + h.distance * S : null;
   }
   // размеры фонаря из параметров семейства (A_GMO_Skywindow_Angle: Diameter_Inside — D1, верхнее отверстие шахты под стеклом;
@@ -491,11 +504,11 @@ const BimGeom = (function () {
   }
   // то же с элементом, в который упёрся луч
   function hitUpEl(C, x, y, z, maxD) {
-    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true);
+    const S = C.S, h = rayIntersect(C, new THREE.Ray(new THREE.Vector3(x / S, y / S, z / S), new THREE.Vector3(0, 0, 1)), true, 'hitUpEl');
     return h && h.distance * S <= (maxD || 1e9) ? { z: z + h.distance * S, id: h.dbId } : null;
   }
   function hitDir(C, p, dir, maxD) {
-    const S = C.S, h = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(p[0] / S, p[1] / S, p[2] / S), new THREE.Vector3(dir[0], dir[1], dir[2]).normalize()), true);
+    const S = C.S, h = rayIntersect(C, new THREE.Ray(new THREE.Vector3(p[0] / S, p[1] / S, p[2] / S), new THREE.Vector3(dir[0], dir[1], dir[2]).normalize()), true, 'hitDir');
     return h && h.distance * S <= (maxD || 1e9) ? h.distance * S : null;
   }
 
@@ -516,7 +529,7 @@ const BimGeom = (function () {
     const S = C.S; let depth = 0;
     for (let k = 0.2; k <= 4.0001; k += 0.2) {
       const x = o.c[0] - o.nin[0] * (o.dOut + k), y = o.c[1] - o.nin[1] * (o.dOut + k);
-      const hit = C.v.impl.rayIntersect(new THREE.Ray(new THREE.Vector3(x / S, y / S, (zTop + 0.05) / S), new THREE.Vector3(0, 0, 1)), false);
+      const hit = rayIntersect(C, new THREE.Ray(new THREE.Vector3(x / S, y / S, (zTop + 0.05) / S), new THREE.Vector3(0, 0, 1)), false, 'overhang');
       if (hit && hit.distance * S < 3.0) depth = k; else break;
     }
     return depth;

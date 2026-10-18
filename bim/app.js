@@ -13,6 +13,9 @@ const KeoBim = (function () {
   };
   let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false, dec: { merge: [], split: [], assign: [], lanterns: {} }, normOv: {}, sections: {}, sectionDrafts: {} };
   let C, cat, ui, cssEl, overlay = 'keo-bim', labelsEl, labelViewer, drawViewer, drawModel, running, HM, VOPS = [], LANS = [];
+  let diag = null;
+  const timed = (name, work, scope) => diag ? diag.measure(name, work, scope) : work();
+  const timedAsync = (name, work, scope) => diag ? diag.measureAsync(name, work, scope) : work();
   const exRe = () => S.exclude ? new RegExp(S.exclude, 'i') : null;
   const isExcluded = rm => { const re = exRe(); return !!(re && re.test(rm.name || '')); };
 
@@ -89,6 +92,7 @@ const KeoBim = (function () {
   async function analyze(progress, opts) {
     binding = BimViewerBinding.capture(); const v = binding.v;
     C = G.ctx(v); assertModel(); watchBinding();
+    if (diag?.enabled) { C.diagnostics = diag; diag.inspectModel(C, Autodesk.Viewing.VERSION); }
     const key = modelKey();
     if (st.model !== key || (!key && st.modelRef !== C.m)) {
       st.storageWarning = ''; restoreDec(loadDec(), opts && opts.bGroup, opts);
@@ -97,9 +101,10 @@ const KeoBim = (function () {
     // лучи Viewer (наружная область, затенение, фонари) не видят геометрию за секущей плоскостью: анализ — без сечения
     // (повторный запуск из «План L01» давал 43 рассчитанных пространства вместо 63)
     progress('Каталог элементов…');
-    cat = await G.catalog(C); assertModel();
-    const rooms = await G.rooms(C); assertModel();
-    const aec = await Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null);
+    cat = await timedAsync('catalog', () => G.catalog(C)); assertModel();
+    diag?.setCatalog(cat);
+    const rooms = await timedAsync('roomProperties', () => G.rooms(C)); assertModel();
+    const aec = await timedAsync('aecMetadata', () => Autodesk.Viewing.Document.getAecModelData(C.m.getDocumentNode()).catch(() => null));
     assertModel(); const T = aec && aec.refPointTransformation;
     st.north = northOf(T); st.aecLoc = aec && aec.locationParameters;
     try { const location = await G.location(C); assertModel(); st.location = location; st.locationWarning = ''; }
@@ -110,36 +115,41 @@ const KeoBim = (function () {
     const levels = lv.filter(l => l.rooms.length);
     st.rooms = rooms; st.categoryDiagnostics={catalog:cat.diagnostics||null,rooms:rooms.diagnostics||null}; st.noLevel = rooms.filter(r => !levels.some(l => l.name === r.level));
     progress('Проёмы и фонари…');
-    const ops = G.openings(C, cat, S.glassExclude ? new RegExp(S.glassExclude, 'i') : null);
+    const ops = timed('openings', () => G.openings(C, cat, S.glassExclude ? new RegExp(S.glassExclude, 'i') : null));
     VOPS = ops.filter(o => !o.roof); LANS = ops.filter(o => o.roof); st.lanDiag = ops.diag || [];
     progress('Карта высот для затенения…');
     const bb = C.m.getBoundingBox(), box = [bb.min.x * C.S - 5, bb.min.y * C.S - 5, bb.max.x * C.S + 5, bb.max.y * C.S + 5];
     const skip = c => BimCategories.skipHeight(c);
-    HM = G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip(c)), 0.5, box);
+    HM = timed('heightMap', () => G.heightMap(C, cat, Object.keys(cat.byCat).filter(c => !skip(c)), 0.5, box));
     refreshPurpose(); st.T = T;
     // физические преграды (свет, состав пространства) и линии разделения помещений (только опознание помещений Revit)
     const bcats = ['Revit Walls', 'Revit Curtain Panels', 'Revit Curtain Wall Mullions', 'Revit Doors', 'Revit Windows', 'Revit Structural Columns', 'Revit Columns'];
     for (const L of levels) {
       progress(`Уровень ${L.name}: срез и контуры…`); await tick(); assertModel();
       const z = L.floor + S.cut;
-      const segsP = G.slice(C, cat, bcats, z), segsL = G.slice(C, cat, ['Revit <Room Separation>'], z, [L.floor, 0.6]), segsD = G.doorBoxes(C, cat, z);
+      const segsP = timed('physicalSlice', () => G.slice(C, cat, bcats, z), {level:L.name}),
+        segsL = timed('roomSeparationSlice', () => G.slice(C, cat, ['Revit <Room Separation>'], z, [L.floor, 0.6]), {level:L.name}),
+        segsD = timed('doorBounds', () => G.doorBoxes(C, cat, z), {level:L.name});
       const bx = G.bounds(segsP.concat(segsL));
       // Rp — физические преграды + закрытые двери (габарит непрозрачной двери: открытая створка не соединяет помещения)
       L.boundarySegments=segsP.concat(segsD);
       L.boundaryPrecision=BimPrecision.combine([segsP,segsD]);
       const matchingSegments=segsP.concat(segsL);
-      L.Rp = G.raster(L.boundarySegments, S.cell, bx); L.R = G.raster(matchingSegments, S.cell, bx); L.doors = segsD.length / 4;
-      BimRectangles.certifyRegionPerimeters(L.R,matchingSegments,BimPrecision.combine([segsP,segsL]),G.paintSegments);
-      SP.matchRooms(L.R, L.rooms);
-      G.withFullModel(v, () => G.markExterior(C, L.Rp, z));
-      compose(L);
+      L.Rp = timed('physicalRaster', () => G.raster(L.boundarySegments, S.cell, bx), {level:L.name});
+      L.R = timed('matchingRaster', () => G.raster(matchingSegments, S.cell, bx), {level:L.name}); L.doors = segsD.length / 4;
+      timed('perimeterProof', () => BimRectangles.certifyRegionPerimeters(L.R,matchingSegments,BimPrecision.combine([segsP,segsL]),G.paintSegments), {level:L.name});
+      timed('roomMatching', () => SP.matchRooms(L.R, L.rooms), {level:L.name});
+      timed('exteriorRays', () => G.withFullModel(v, () => G.markExterior(C, L.Rp, z)), {level:L.name});
+      timed('compositionAndOpeningBinding', () => compose(L), {level:L.name});
+      diag?.captureLevel(L, { physical:segsP, physicalEntries:segsP.precision?.entries || null, roomSeparation:segsL, roomSeparationEntries:segsL.precision?.entries || null, doors:segsD, doorEntries:segsD.precision?.entries || null,
+        nativeRoomBoundaries:{status:'unavailable',reason:'Only reconstructed slice/matching evidence is collected by this adapter'} });
     }
     progress('Фонари: привязка к помещениям, шахты, затенение…'); await tick(); assertModel();
-    const LP = await G.lanternParams(C, LANS.map(l => l.id)); assertModel();
+    const LP = await timedAsync('lanternProperties', () => G.lanternParams(C, LANS.map(l => l.id))); assertModel();
     LANS.forEach(l => { const q = LP[l.id]; if (q) { l.dTop = q.dIn || null; l.dBot = q.dBot || null; l.paramNotes = q.notes || []; } });
-    lanterns(levels);
+    timed('lanternBindingAndRays', () => lanterns(levels));
     st.levels = levels; st.res = [];
-    for (const L of levels) { progress(`Уровень ${L.name}: расчёт…`); await tick(); assertModel(); st.res.push(...calcLevel(L)); }
+    for (const L of levels) { progress(`Уровень ${L.name}: расчёт…`); await tick(); assertModel(); st.res.push(...timed('levelCalculation', () => calcLevel(L), {level:L.name})); }
     return st.res;
   }
   const tick = () => new Promise(r => setTimeout(r, 0));
@@ -262,7 +272,7 @@ const KeoBim = (function () {
       const o = VOPS.filter(x => x.lvl === L.name && (x.space === i || (x.reg && L.spRegs[i] && L.spRegs[i].has(x.reg)))), ls = LANS.filter(x => x.lvl === L.name && x.space === i);
       ls.forEach(l => { l.conf = lanConf(l); });
       const lsCalc = ls.filter(l => l.conf === 'b3'), lanPending = ls.filter(l => !l.conf).length;
-      if (!o.length && !lsCalc.length) { out.push({ ...base, kind: 'dark', lans: ls, lanPending }); return; }
+      if (!o.length && !lsCalc.length) { diag?.captureUnavailable({key:sp.key,level:L.name,rooms:sp.rooms,contourRuns:base.runs,area:base.area},'No confirmed light openings; no calculation input'); out.push({ ...base, kind: 'dark', lans: ls, lanPending }); return; }
       if (st.north.unknown) { out.push({...base,kind:'err',err:'Север не подтверждён. '+st.north.src,ops:o,lans:ls,lanPending}); return; }
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
         containsPoint: p => { const R = L.R, x = Math.floor((p[0] - R.minx) / R.cell), y = Math.floor((p[1] - R.miny) / R.cell); return x >= 0 && y >= 0 && x < R.W && y < R.H && L.lab[y * R.W + x] === i; },
@@ -270,10 +280,14 @@ const KeoBim = (function () {
       if (lsCalc.some(l => !l.shaded)) {
         const node = C.m.getDocumentNode();
         const scope = { model: modelKey(), version: node?.getRootNode()?.urn?.() || null, view: node?.data?.guid || null, level: L.name, floor: L.floor, rooms: sp.rooms.map(r=>String(r.eid || r.key)).sort() };
-        base.sectionContext = BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, boundaryPrecision:L.boundaryPrecision, paintSegments:G.paintSegments });
+        base.sectionContext = timed('sectionProof', () => BimSections.context({ scope, runs: base.runs, cell: L.R.cell, cut: S.cut, grid: L.R, containsPoint: env.containsPoint, openings: o, lanterns: lsCalc, boundarySegments:L.boundarySegments, boundaryPrecision:L.boundaryPrecision, paintSegments:G.paintSegments }), {key:sp.key,level:L.name});
         env.shortSection = { context: base.sectionContext, record: st.sections[sp.key], pending: st.sectionDrafts[sp.key] };
       }
-      let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
+      let r; try {
+        r = diag?.enabled ? diag.capture({key:sp.key,level:L.name,spaceIndex:i,rooms:sp.rooms,contourRuns:base.runs,area:base.area,
+          roomMatching:(L.diagnostics || []).filter(d=>sp.rooms.some(rm=>rm.key===d.key)), physicalRegions:[...(L.spRegs[i] || [])],
+          north:st.north,decisions:st.dec,normOverrides:st.normOv,nativeRoomGeometry:'not verified'}, sp, o, lsCalc, env, e=>Cc.space(sp,o,lsCalc,e)) : Cc.space(sp, o, lsCalc, env);
+      } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
       if (o.some(x => x.levelBoundary)) (r.notes = r.notes || []).push('Проём попадает в диапазоны нескольких уровней: сохранена первая привязка снизу вверх. Проверьте этаж и геометрию высокого проёма.');
       if (lanPending) (r.notes = r.notes || []).unshift(`фонарей с неподтверждённым типом: ${lanPending} — в расчёте не учтены, подтвердите тип в разделе «Фонари»`);
       out.push(Cc.gateNorms({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o, lans: ls, lanPending }, purposeGate()));
@@ -285,6 +299,7 @@ const KeoBim = (function () {
     const diagByKey = new Map((L.diagnostics || []).map(d=>[d.key,d]));
     L.rooms.filter(rm => !isExcluded(rm) && !placed.has(rm.key)).forEach(rm => {
       const diagnostic = diagByKey.get(rm.key);
+      diag?.captureUnavailable({key:rm.key,level:L.name,rooms:[rm],roomMatching:diagnostic},'No matched room contour; no calculation input');
       out.push({key:rm.key,level:L.name,floor:L.floor,rooms:[rm],title:`${rm.num} ${rm.name}`,nums:rm.num,kind:'nogeo',diagnostic,
         why: DIAG_LABEL[diagnostic && diagnostic.reason] || (!(rm.area>0) ? ((rm.warn||[]).join('; ') || 'нет площади') : 'контур не выделен по срезу')});
     });
@@ -299,12 +314,13 @@ const KeoBim = (function () {
   }
   function shade(f, A, floor) {
     const cl = f.cls.reduce((m, c) => c.bo * (c.z1 - c.z0) > m.bo * (m.z1 - m.z0) ? c : m);
-    const kDepth = G.overhang(C, { c: cl.c, nin: f.nin, dOut: cl.dOut }, cl.z1);
+    diag?.recordProbe('overhangSource',{openingIds:cl.ids,c:cl.c,nin:f.nin,dOut:cl.dOut,zTop:cl.z1,selection:'largest glazing area; first on exact tie'});
+    const kDepth = timed('overhangRays', () => G.overhang(C, { c: cl.c, nin: f.nin, dOut: cl.dOut }, cl.z1));
     const nout = [-f.nin[0], -f.nin[1]];
     const P0 = [f.O[0] - f.nin[0] * f.dst, f.O[1] - f.nin[1] * f.dst];
     const z0 = Math.min(...f.cls.map(c => c.z0)), z1 = Math.max(...f.cls.map(c => c.z1)), zc = (z0 + z1) / 2;
     const d0 = kDepth + 0.4;
-    const samples = G.skyline(HM, P0, nout, f.t, zc, d0, 5);
+    const samples = timed('skyline', () => G.skyline(HM, P0, nout, f.t, zc, d0, 5));
     const vP0 = (P0[0] - A[0]) * f.t[0] + (P0[1] - A[1]) * f.t[1];
     const blds = Cc.buildings(samples, floor, vP0, S.rhoF, d0);
     return { kDepth, blds, samples, P0, zc };
@@ -314,15 +330,16 @@ const KeoBim = (function () {
     assertModel(); if (st.dirty) throw new Error('Настройки изменены — запустите полный пересчёт.');
     if (levelName && !st.levels.some(l => l.name === levelName)) return;
     const selKey = st.sel && st.sel.key;
+    diag?.beginRebuild();
     // Смена назначения меняет состав пространств. Сначала собираем все уровни,
     // затем заново связываем фонари с новыми индексами пространств и считаем.
     st.res = [];
     try {
       st.north = northOf(st.T);
       G.withFullModel(C.v, () => {
-        st.levels.forEach(compose);
-        lanterns(st.levels);
-        st.res = st.levels.flatMap(calcLevel);
+        st.levels.forEach(L=>timed('compositionAndOpeningBinding',()=>compose(L),{level:L.name}));
+        timed('lanternBindingAndRays',()=>lanterns(st.levels));
+        st.res = st.levels.flatMap(L=>timed('levelCalculation',()=>calcLevel(L),{level:L.name}));
       });
     } catch (e) {
       st.res = []; st.sel = null; st.dirty = true; draw(); renderList(); statusLine('Ошибка пересчёта: ' + e.message); throw e;
@@ -734,6 +751,8 @@ const KeoBim = (function () {
       <label>Не рассчитывать и не объединять автоматически (имя содержит) <input type="text" data-s="exclude" value="${esc(S.exclude)}"></label>
       <label>Высота среза для контуров, м <input type="number" step="0.1" data-s="cut" value="${S.cut}"></label>
       ${northHTML()}
+      <label><input type="checkbox" data-diagnostic-mode${diag?.enabled ? ' checked' : ''}> Собирать локальный диагностический пакет помещений</label>
+      <p class="muted" style="font-size:11px">Включение запускает повторный анализ и добавляет нагрузку. Данные остаются в этой вкладке и сохраняются вручную из карточки помещения. Диагностика не подтверждает нормативную точность.</p>
       <p class="muted" style="font-size:11px">${purposeSource} Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по выбранному источнику истинного севера; источник и угол показаны выше. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
       <div class="kb-row"><button class="kb-btn pri" data-a="rerun">Пересчитать</button></div>`;
   }
@@ -759,6 +778,14 @@ const KeoBim = (function () {
       if (k === 'region' || k === 'group') { saveDec(); try { rebuild(); } catch (e) { statusLine('Ошибка пересчёта: ' + e.message); } }
     });
     root.querySelector('[data-a=rerun]').onclick = () => run();
+    bindDiagnosticMode(root);
+  }
+  function bindDiagnosticMode(root) {
+    const control=root.querySelector('[data-diagnostic-mode]');if(!control)return;
+    control.onchange=()=>{
+      if(st.busy || !C || window.NOP_VIEWER?.model!==C.m){control.checked=!!diag?.enabled;statusLine(st.busy?'Дождитесь завершения расчёта.':'Модель изменилась — запустите анализ заново.');return;}
+      return run({diagnostics:control.checked===true});
+    };
   }
 
   function areaHTML(r) {
@@ -893,10 +920,12 @@ const KeoBim = (function () {
       h += `<label class="muted" style="display:block;font-size:12px">Назначение по табл. А.1: <select data-norm style="max-width:100%"><option value="">авто (по названиям помещений)</option>${['<option value="-"' + (st.normOv[r.key] === '-' ? ' selected' : '') + '>— без нормы КЕО —</option>', ...rowsA1.map(x => `<option value="${x.id}"${st.normOv[r.key] === x.id ? ' selected' : ''}>${esc(x.n + '. ' + x.name + ' (' + x.g.slice(0, 40) + ')')}</option>`)].join('')}</select></label>`;
     }
     h += shortSectionHTML(r);
+    if (diag?.enabled && r.rooms.length) h += '<div class="kb-row"><button class="kb-btn" data-a="diagnostic">Диагностика помещения (JSON)</button></div><p class="muted" style="font-size:11px">Локальный пакет содержит геометрию и идентификаторы модели. Воспроизведение записанного входа не подтверждает нормативную точность.</p>';
     box.innerHTML = h + '</div>';
     bindShortSection(box, r);
     const sn = box.querySelector('[data-norm]'); if (sn) sn.onchange = () => { if (!decisionReady()) return; if (sn.value === '') delete st.normOv[r.key]; else st.normOv[r.key] = sn.value; saveDec(); rebuild(r.level); };
     const b1 = box.querySelector('[data-a=one]'); if (b1) b1.onclick = () => exportOne(r);
+    const bd = box.querySelector('[data-a=diagnostic]'); if (bd) bd.onclick = () => download('КЕО_диагностика_помещения.json', JSON.stringify(diagnosticPackage(r.key),null,1), 'application/json');
     const keys = r.rooms.map(x => x.key);
     box.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => decide(b.dataset.dec === 'split' ? 'split' : null, keys, r.level));
     box.querySelectorAll('[data-merge]').forEach(b => b.onclick = () => decide('merge', [...keys, b.dataset.merge], r.level));
@@ -948,6 +977,13 @@ const KeoBim = (function () {
   }
 
   /* ---------- запуск ---------- */
+  function diagnosticPackage(key = st.sel?.key) {
+    if (!decisionReady()) throw Error('Анализ ещё выполняется.');
+    if (!diag) throw Error('Диагностика не включена.');
+    return diag.packet(key);
+  }
+  const replayDiagnostic = packet => BimDiagnostics.replay(packet, { ...LIB, BimCalc:Cc, algorithm:typeof KeoBimBuild === 'undefined' ? null : KeoBimBuild });
+  const compareDiagnostics = (a,b) => BimDiagnostics.compare(a,b);
   function run(opts) {
     if (window.KeoBim?.run !== run) return Promise.resolve(st);
     if (st.busy) { const version = closeVersion; return closed && running ? running.then(() => version === closeVersion ? run(opts) : st) : Promise.resolve(st); }
@@ -956,7 +992,9 @@ const KeoBim = (function () {
   async function analyzeRun(opts) {
     st.busy = true; closed = false;
     stopBindingWatch(); binding = null; clearVisuals();
-    const { bGroup, ...otherOpts } = opts || {};
+    const { bGroup, diagnostics, ...otherOpts } = opts || {};
+    const enabled = diagnostics === undefined ? !!diag?.enabled : diagnostics === true;
+    diag = typeof BimDiagnostics === 'undefined' ? null : BimDiagnostics.create(enabled, typeof KeoBimBuild === 'undefined' ? null : KeoBimBuild);
     Object.assign(S, otherOpts);
     if (opts && Object.prototype.hasOwnProperty.call(opts,'northDeg') && !Object.prototype.hasOwnProperty.call(opts,'northMode')) S.northMode=BimNorth.modeOf(opts.northDeg);
     if (!ui || !document.body.contains(ui)) mount();
@@ -967,13 +1005,13 @@ const KeoBim = (function () {
       st.dirty = false; saveDec();
       statusLine(completionText(`Готово за ${f2((performance.now() - t0) / 1000, 1)} с`));
       st.level = st.levels.length ? st.levels[st.levels.length - 1].name : null;
-      draw(); renderList();
+      timed('visualization', () => { draw(); renderList(); });
     } catch (e) { stopBindingWatch(); st.res = []; if (!closed) { clearVisuals(); try { renderList(); } catch (_) { } statusLine('Ошибка: ' + e.message); console.error(e); } }
     finally { st.busy = false; }
     return st;
   }
-  return { run, st: () => st, S, select, planView, destroy, decide, setBuildingGroup, setShortSection, previewShortSection };
+  return { run, st: () => st, S, diagnosticPackage, replayDiagnostic, compareDiagnostics, select, planView, destroy, decide, setBuildingGroup, setShortSection, previewShortSection };
 })();
 try { if (window.KeoBim && window.KeoBim !== KeoBim && window.KeoBim.destroy) window.KeoBim.destroy(); } catch (e) { } // повторный запуск закладки: убрать панель, метки и обработчики прежней версии
 window.KeoBim = KeoBim;
-window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision, BimViewerBinding, BimCategories };
+window.KeoBimLib = { BimGeom, BimCalc, BimSpaces, BimPrecision, BimViewerBinding, BimCategories, BimDiagnostics: typeof BimDiagnostics === 'undefined' ? undefined : BimDiagnostics };
