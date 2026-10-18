@@ -1,6 +1,6 @@
 # Проект 99_КЕО — веб-калькулятор КЕО. Инструкция проекта
 
-Версия инструкции: 1.11.18 (18.10.2026). Проект read-only контракта Room evidence из Revit; разграничены API boundary loops, срез solid на заданной высоте, идентичность и нормативный расчёт. Синтетический gap показывает предел цифрового замыкания. Revit не запускался; не опубликовано.
+Версия инструкции: 1.11.19 (18.10.2026). Автономный сериализатор/валидатор ограниченного horizontal-line-plan профиля Room evidence: strict JSON, целостность, единицы/ссылки/фазы/варианты/links, Line loops/отверстия/наложения и объяснимые отказы. Revit SDK exporter и запуск в Revit не реализованы; runtime не изменён, не опубликовано.
 
 Термины: **инструкция проекта** — этот файл. **Инструкция проекта чата** — правила для ИИ-агента (постоянные правила + указатель на этот файл): для Codex и других агентов — `AGENTS.md` в корне репозитория, для Claude — инструкции проекта «99_КЕО». Это разные документы.
 
@@ -170,6 +170,8 @@ eрв = CN·[Σ εвi·q(γi) + εср·(r2·kф − 1)]·τо·MF
 
 ## 9. Журнал решений
 
+- 18.10.2026 — v1.11.19: реализованы `research/revit-room-export/protocol.py`, генератор вымышленных fixtures и автономные тесты. Валидатор работает только с горизонтальными Line loops: exact predicates над сохранёнными числами, без snap, все вложенные loops/отверстия/компоненты, строгая принадлежность XY и наложение разных Room. Проверяются единицы, направление/жёсткость матриц, Ref/int64 строка, полные выбранные scope, phase maps/lifecycle каждой link, option, Host/FromTo и inventory с instance path. Hash — только целостность, API-source строки — декларации, не аутентификация. CLI сохраняет причины code/path/message/severity и не перезаписывает файлы. Поддержанные данные не означают принятия Room/seed/нормативного результата. SDK, Arc/NURBS, solid section, реальный Revit/Viewer binding и glazing не проверены. Независимый review выявил и закрыл пропуски cross-instance joins, scope/type, claims, повторных links и lifecycle. Расчётный runtime/нормы не изменены; публикации нет.
+
 - 18.10.2026 — v1.11.18: добавлен `research/revit-room-export/CONTRACT.md` — минимальный универсальный read-only контракт RoomLocation, всех boundary loops/curves, host окон/дверей, фаз/вариантов/уровней/единиц/преобразований/версий и план приёмки. Это проект, экспортёр не реализован и не проверен в Revit. Синтетический `test-raster-limit.js` воспроизводит замкнутую область на трёх сетках при открытом исходном зазоре 1 мм: `border=false` не доказывает непрерывное замыкание. Расчётный runtime и нормы не менялись; не опубликовано.
 
 - 18.10.2026 — обобщён урок 2D PDF: raw ID примитива/выбора Viewer может отличаться от dbId propertyDB, даже если прямой raw lookup возвращает правдоподобный чужой объект. Исследовательский `bim/pdf-identity.js` требует валидный штатный remap, reverse roundtrip, root/view identity, совпадение возвращённого dbId и непустой externalId; различие root/view/пары ID на концах async-чтения отклоняет результат. Модуль изолирован от сборки и автоматического расчёта, не извлекает границы/позиции и всегда оставляет seed/geometry unaccepted. Регрессия синтетическая, без приватных ID.
@@ -231,6 +233,8 @@ eрв = CN·[Σ εвi·q(γi) + εср·(r2·kф − 1)]·τо·MF
    `javascript:(()=>{fetch('https://musai-rus.github.io/keo-calc/keo-bim.js').then(r=>r.text()).then(t=>{(0,eval)(t);KeoBim.run()})})()`.
 
 ## 12. ЭКСПЕРИМЕНТЫ
+
+- 18.10.2026 — **автономная реализация профиля Room evidence**, продолжается: [описание](research/revit-room-export/README.md), `python3 -B research/revit-room-export/test_protocol.py`. Не SDK exporter. Проверяет выбранный небольшой набор Line-plan снимка, сохраняет отказы и синтетические примеры. Успех `valid` ограничен проверками профиля; geometry/seed/normative/Revit/source-accuracy/Viewer verification остаются false. Превышение размера/неподдержанные кривые/срез не обходятся аппроксимацией. Переход к реальной модели требует отдельного read-only адаптера и доказанного capture/version/coordinate contract.
 
 - 18.10.2026 — прямые Room evidence из Revit — **проект контракта** (`research/revit-room-export/CONTRACT.md`). В нём явно разделены LocationPoint и расчётная точка КЕО, plan API boundary и solid section на 1,2 м, Room separators и физические преграды, Host/FromRoom/ToRoom и видимое остекление. Требуются полный scope/версии и независимо проверенная связь с derivative Viewer; API-ошибки не становятся пустыми успешными массивами. Ни контракт, ни цифровой растр не принимают контуры или нормативные результаты. Реальный Revit export и continuous topology пока не проверены. Синтетическая регрессия: `node research/revit-room-export/test-raster-limit.js`.
 

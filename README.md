@@ -55,6 +55,7 @@ node bim/test-bim.js  # КЕО по модели: пространства, ед
 node bim/test-purpose.js # назначение здания по совокупности помещений
 node bim/test-purpose-confidence.js # confidence gate, подтверждение, UI и экспорт
 node bim/test-pdf-identity.js # исследовательская связь raw PDF-ID → dbId, без принятия seed
+python3 -B research/revit-room-export/test_protocol.py # автономный codec/валидатор Room evidence; без Revit и принятия геометрии
 node bim/test-context.js # сечения, видимость, регион, жизненный цикл приложения в VM (не Autodesk/DOM)
 node bim/test-edge-cases.js # неоднозначные/малые комнаты, границы этажей, геометрия и параметры фонарей
 node bim/test-metamorphic.js # 111 контролей эквивалентной геометрии, единиц и состава
