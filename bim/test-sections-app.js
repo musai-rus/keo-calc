@@ -16,11 +16,14 @@ context.fixtureUnknownPrecision=false;
 context.reloadApp=()=>{const methods={...context.KeoBimLib.BimGeom};vm.runInContext(source,context);annotateGeometry(context.KeoBimLib.BimGeom);Object.assign(context.KeoBimLib.BimGeom,methods);};
 (async()=>{
 await vm.runInContext(`(async()=>{
+ // These tests validate section policy, not automatic Room identity. Supply
+ // explicit synthetic placements afresh for each geometry analysis.
+ const placed=(rs,points)=>{KeoBim.st().dec.assign=rs.map((r,i)=>({at:points[i],keys:[r.key],level:r.level,session:KeoBim.st().placementSession}));return rs};
  let width=3.6;const height=2.4;
  const model=(urn,version=urn)=>({...makeModel(urn),getDocumentNode:()=>({data:{guid:'short-view'},getRootNode:()=>({urn:()=>version})})});
  NOP_VIEWER.model=model('short:A');
  G.location=async()=>[];
- G.rooms=async()=>[{id:1,key:'room',eid:'room',level:'L01',name:'Раздевальная',num:'synthetic',area:width*height,per:2*(width+height),h:3.6,warn:[]}];
+ G.rooms=async()=>placed([{id:1,key:'room',eid:'room',level:'L01',name:'Раздевальная',num:'synthetic',area:width*height,per:2*(width+height),h:3.6,warn:[]}],[[width/2,height/2]]);
  G.slice=(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:[[0,0,width,0],[width,0,width,height],[width,height,0,height],[0,height,0,0]];
  G.openings=()=>[{id:200,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:[width/2,height/2],t:[1,0],n:[0,1],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}];
  const opts={region:'г. Москва',bGroup:group('A57'),diagnostics:true},current=()=>KeoBim.st().res.find(r=>r.key==='room');
@@ -61,7 +64,7 @@ await vm.runInContext(`(async()=>{
  // Two independent short rooms on one level: one profile must not affect the other.
  const box=(x,w)=>[[x,0,x+w,0],[x+w,0,x+w,height],[x+w,height,x,height],[x,height,x,0]];
  Object.assign(KeoBimLib.BimGeom,{
-  rooms:async()=>[3.6,3.4].map((w,i)=>({id:i+1,key:'room'+i,eid:'room'+i,level:'L01',name:'Раздевальная',num:'synthetic'+i,area:w*height,per:2*(w+height),h:3.6,warn:[]})),
+  rooms:async()=>placed([3.6,3.4].map((w,i)=>({id:i+1,key:'room'+i,eid:'room'+i,level:'L01',name:'Раздевальная',num:'synthetic'+i,area:w*height,per:2*(w+height),h:3.6,warn:[]})),[[1.8,height/2],[6.7,height/2]]),
   slice:(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:[...box(0,3.6),...box(5,3.4)],
   openings:()=>[1.8,6.7].map((x,i)=>({id:200+i,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:[x,height/2],t:[1,0],n:[0,1],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}))
  });
@@ -81,7 +84,7 @@ await vm.runInContext(`(async()=>{
   const world=([x,y])=>[.013+x*Math.cos(angle)-y*Math.sin(angle),.017+x*Math.sin(angle)+y*Math.cos(angle)];
   const points=[[0,0],[3.6,0],[3.6,2.4],[0,2.4]].map(world);
   Object.assign(KeoBimLib.BimGeom,{
-   rooms:async()=>[{id:1,key:'rotated',eid:'rotated',level:'L01',name:'Раздевальная',num:'synthetic',area:8.64,per:12,h:3.6,warn:[]}],
+   rooms:async()=>placed([{id:1,key:'rotated',eid:'rotated',level:'L01',name:'Раздевальная',num:'synthetic',area:8.64,per:12,h:3.6,warn:[]}],[world([1.8,1.2])]),
    slice:(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:points.map((p,j)=>[...p,...points[(j+1)%4]]),
    openings:()=>[{id:200,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:world([1.8,1.2]),t:[Math.cos(angle),Math.sin(angle)],n:[-Math.sin(angle),Math.cos(angle)],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}]
   });
@@ -103,18 +106,18 @@ await vm.runInContext(`(async()=>{
  for(const sign of [1,-1]){
   const ps=[[0,0],[2.5,2.5*sign],[2.5-1.5*sign,2.5*sign+1.5],[-1.5*sign,1.5]],center=[(2.5-1.5*sign)/2,(2.5*sign+1.5)/2],segments=ps.map((p,j)=>[...p,...ps[(j+1)%4]]);
   Object.assign(KeoBimLib.BimGeom,{
-   rooms:async()=>[{id:1,key:'certified45',eid:'certified45',level:'L01',name:'Раздевальная',num:'synthetic45',area:7.5,per:8*Math.SQRT2,h:3.6,warn:[]}],
+   rooms:async()=>placed([{id:1,key:'certified45',eid:'certified45',level:'L01',name:'Раздевальная',num:'synthetic45',area:7.5,per:8*Math.SQRT2,h:3.6,warn:[]}],[center]),
    slice:(c,cat,cats)=>cats[0]==='Revit <Room Separation>'?[]:segments,
    doorBoxes:()=>{const [x,y]=center;return [[x-.1,y-.1,x+.1,y-.1],[x+.1,y-.1,x+.1,y+.1],[x+.1,y+.1,x-.1,y+.1],[x-.1,y+.1,x-.1,y-.1]];},
    openings:()=>[{id:200,cat:'Revit Windows',roof:true,auto:true,type:'Synthetic shaft',label:'Synthetic shaft',c:center,t:[1,0],n:[0,1],av:1,bv:1,z0:4.2,z1:4.4,tilt:0}]
   });
   NOP_VIEWER.model=model('short:certified45:'+sign);await KeoBim.run(opts);
-  const room=KeoBim.st().rooms.find(r=>r.key==='certified45');assert.ok(room.reg,'automatic matching at 45 degrees needs no explicit assign');
-  const L=KeoBim.st().levels.find(l=>l.name==='L01'),rg=L.R.regs[room.reg];assert.equal(rg.perimeterEvidence.state,'confirmed');assert.ok(rg.per<.75*room.per);assert.ok(rg.perimeterEvidence.range.min<=room.per&&rg.perimeterEvidence.range.max>=room.per);
+  const room=KeoBim.st().rooms.find(r=>r.key==='certified45');assert.equal(room.reg,undefined,'perimeter proof cannot prove Room identity');assert.ok(room.byUser);assert.ok(room.sub);
+  const L=KeoBim.st().levels.find(l=>l.name==='L01'),rg=L.R.regs[room.sub];assert.equal(rg.perimeterEvidence.state,'confirmed');assert.ok(rg.per<.75*room.per);assert.ok(rg.perimeterEvidence.range.min<=room.per&&rg.perimeterEvidence.range.max>=room.per);
   const r=KeoBim.st().res.find(r=>r.key==='certified45');assert.notEqual(r.kind,'nogeo');assert.equal(r.sectionContext.geometryProof.state,'contradicted','manual source retains physical door closure');assert.equal(r.st,undefined);
-  KeoBim._json();const d=downloaded.roomDiagnostics.rooms.find(d=>d.key==='certified45');assert.equal(d.identification,'direct');assert.equal(d.candidates.strict[0].perimeterMetric.source,'confirmed-R-boundary');
+  KeoBim._json();const d=downloaded.roomDiagnostics.rooms.find(d=>d.key==='certified45');assert.equal(d.identification,'manual');assert.equal(d.candidates.strict[0].perimeterMetric.source,'confirmed-R-boundary');
  }
  KeoBim.destroy();
 })()`,context);
-console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis, exact source positive flow at 0 degrees, floating rotated geometry fails closed at 30/±45 degrees, subcell notch invalidation, certified R matching at ±45 degrees before assignment with an independent Rp door obstacle');
+console.log('PASS actual app: preview/apply, input handlers with NaN/Infinity/empty/fractional count, JSON/CSV/stale export, persisted bundle reload/reset, two models/rooms, geometry/version invalidation, hand-edited record without basis, exact source positive flow at 0 degrees, floating rotated geometry fails closed at 30/±45 degrees, subcell notch invalidation, certified R perimeter at ±45 degrees after explicit fixture assignment with an independent Rp door obstacle');
 })().catch(e=>{console.error(e);process.exitCode=1});

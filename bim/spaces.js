@@ -44,8 +44,18 @@ const BimSpaces = (function () {
     return {...result,ratioRange,ok:ratioRange[0]>=limits[0]&&ratioRange[1]<=limits[1]};
   }
   // площадь Revit сравнивается с площадью области в чистоте (areaC) и до осей стен (areaV) — зависит от настройки расчёта площадей в Revit
-  function matchRooms(R, rooms, tol = 0.04) {
+  function matchRooms(R, rooms, tol = 0.04, options = {}) {
     R.matchTolerance = tol;
+    R.requireSpatial = options.requireSpatial === true;
+    if (R.requireSpatial) {
+      // Area/perimeter are candidate evidence only. No verified Room location
+      // is available in the live adapter yet; never attach windows on this basis.
+      if (new Set(rooms.map(r => r.key)).size !== rooms.length)
+        throw new Error('Повторяются идентификаторы Rooms: принадлежность модели или связи не установлена. Расчёт остановлен.');
+      for (const rm of rooms) for (const k of ['reg','sub','dA','loose','areaModel','areaModelV','matchAmbiguous','byUser','byBalance']) delete rm[k];
+      for (const rg of R.regs) if (rg) for (const k of ['room','rooms','dA','cands','balanceReason']) delete rg[k];
+      return;
+    }
     const regs = R.regs.filter(r => r && !r.border && r.areaC >= 0.8);
     const pairs = [];
     rooms.forEach(rm => {
@@ -123,7 +133,12 @@ const BimSpaces = (function () {
   function compose(R, Rp, rooms, isExcluded, decisions, opts) {
     const aux = (opts && opts.aux) || (() => false);
     decisions = decisions || {};
-    const M = decisions.merge || [], SPL = decisions.split || [], AS = decisions.assign || [];
+    const M = decisions.merge || [], SPL = decisions.split || [];
+    // Coordinates and dbId/ElementId-based decisions are not portable identity.
+    // In the strict runtime, accept only explicit placement from this analysis
+    // and this level. Old JSON/localStorage assignments remain data, not proof.
+    const AS = (decisions.assign || []).filter(a => !R.requireSpatial ||
+      (opts?.placementSession && a.session === opts.placementSession && a.level === opts.level));
     rooms.forEach(rm => { delete rm.byBalance; delete rm.byUser; delete rm.sub; }); // повторная сборка после ручного решения
     R.regs.forEach(r => { if (r) { delete r.rooms; delete r.cands; delete r.balanceReason; } });
     const byKey = new Map(rooms.map(r => [r.key, r]));
@@ -151,13 +166,13 @@ const BimSpaces = (function () {
     // can also belong to another contour.
     const proposals = [...subsOf.values()].flat().filter(r => free(r) && r.areaC >= 3).map(rg => {
       const tol = Math.max(0.6, 0.03 * rg.areaC);
-      return { rg, c: combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg) };
+      return { rg, c: combos(pool(), [rg.areaC, rg.areaV || rg.areaC], tol, rg, R.requireSpatial ? 1 : 3) };
     });
     const owners = new Map();
     proposals.forEach(({rg,c}) => c.forEach(v => v.sel.forEach(rm => { if (!owners.has(rm)) owners.set(rm,new Set()); owners.get(rm).add(rg); })));
     proposals.forEach(({rg,c}) => {
-      if (c.length === 1 && c[0].sel.every(rm => owners.get(rm).size === 1) && new Set(c[0].sel.map(aux)).size <= 1) { rg.rooms = c[0].sel; c[0].sel.forEach(rm => { rm.sub = rg.id; rm.byBalance = rg.id; }); }
-      else if (c.length) { rg.cands = c.slice(0, 6); rg.balanceReason = c.length > 1 ? 'multiple_combinations' : c[0].sel.some(rm => owners.get(rm).size > 1) ? 'competing_contours' : 'mixed_auxiliary'; }
+      if (!R.requireSpatial && c.length === 1 && c[0].sel.every(rm => owners.get(rm).size === 1) && new Set(c[0].sel.map(aux)).size <= 1) { rg.rooms = c[0].sel; c[0].sel.forEach(rm => { rm.sub = rg.id; rm.byBalance = rg.id; }); }
+      else if (c.length || R.requireSpatial) { rg.cands = c.slice(0, 6); rg.balanceReason = R.requireSpatial ? 'spatial_evidence_missing' : c.length > 1 ? 'multiple_combinations' : c[0].sel.some(rm => owners.get(rm).size > 1) ? 'competing_contours' : 'mixed_auxiliary'; }
     });
     const spaces = [], unknown = [], keyIn = (list, k) => list.some(g => g.includes(k)), LK = links(R, Rp);
     const unk = s => ({ at: cellXY(R, s.seed), area: s.areaC, areaV: s.areaV, reason: s.balanceReason || 'no_candidate', cands: (s.cands || []).map(c => ({ keys: c.sel.map(r => r.key), label: c.sel.map(r => `${r.num} ${r.name}`).join(' + '), sum: c.sum,...(c.perimeter?{perimeter:c.perimeter}:{}) })) });
@@ -231,6 +246,7 @@ const BimSpaces = (function () {
       else if (placement === 'unplaced') {
         if (identification === 'invalid_area') reason = 'invalid_area';
         else if (reg) reason = physical === 'exterior' ? 'physical_exterior' : physical === 'unmapped' ? 'physical_unmapped' : 'composition_unresolved';
+        else if (R.requireSpatial) reason = 'spatial_evidence_missing';
         else if ((strict.length || loose.length) && [...strict,...loose].every(c=>c.claimedBy.length && !c.claimedBy.includes(rm.key))) reason = 'claimed_candidate';
         else if (rm.matchAmbiguous) reason = 'ambiguous';
         else if (strict.length || loose.length) reason = 'unresolved_candidate';
@@ -244,12 +260,12 @@ const BimSpaces = (function () {
   const cellXY = (R, p) => { const i = p % R.W, j = (p - i) / R.W; return [Math.round((R.minx + (i + 0.5) * R.cell) * 1000) / 1000, Math.round((R.miny + (j + 0.5) * R.cell) * 1000) / 1000]; };
   // все наборы из 1–3 помещений, сумма площадей которых совпадает с площадью контура (в чистоте или до осей) в пределах tol;
   // периметр контура per (если задан) должен быть совместим: одно помещение — 0,75…1,45 его периметра, несколько — 0,45…1,15 суммы периметров
-  function combos(list, targets, tol, per) {
+  function combos(list, targets, tol, per, maxMembers = 3) {
     const maxArea = Math.max(...targets) + tol;
     list = list.filter(r => Number.isFinite(r.area) && r.area > 0 && r.area <= maxArea).slice().sort((a, b) => a.area - b.area || String(a.key).localeCompare(String(b.key)));
     const out = [], n = list.length;
     const consider = sel => { const s = sel.reduce((a, r) => a + r.area, 0), d = Math.min(...targets.map(t => Math.abs(s - t)));if(!(d<=tol))return;const p=perimeterCheck(per,sel,true);if(p.ok)out.push({sel,d,sum:s,...(per?.perimeterEvidence?{perimeter:p}:{})}); };
-    for (let i = 0; i < n; i++) { consider([list[i]]); for (let j = i + 1; j < n; j++) { if (list[i].area + list[j].area > maxArea) break; consider([list[i], list[j]]); for (let k = j + 1; k < n; k++) { if (list[i].area + list[j].area + list[k].area > maxArea) break; consider([list[i], list[j], list[k]]); } } }
+    for (let i = 0; i < n; i++) { consider([list[i]]); for (let j = i + 1; maxMembers >= 2 && j < n; j++) { if (list[i].area + list[j].area > maxArea) break; consider([list[i], list[j]]); for (let k = j + 1; maxMembers >= 3 && k < n; k++) { if (list[i].area + list[j].area + list[k].area > maxArea) break; consider([list[i], list[j], list[k]]); } } }
     return out.sort((a, b) => a.d - b.d);
   }
   // клетка → номер пространства (−1 — не в пространстве): контуры помещений пространства, затем рост по близости в пределах

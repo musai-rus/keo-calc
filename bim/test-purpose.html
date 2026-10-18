@@ -20,7 +20,13 @@ const rooms=()=>[0,5].flatMap((floor,j)=>[['Групповая',48,28],['Спа�
 const box=[[0,0,13,0],[13,0,13,8],[13,8,0,8],[0,8,0,0]];
 let sliceCount=0;
 Object.assign(G,{
- ctx:v=>({v,m:v.model,S:1,GZ:0}),catalog:async()=>({byCat:{},info:{}}),rooms:async()=>rooms(),
+ ctx:v=>({v,m:v.model,S:1,GZ:0}),catalog:async()=>({byCat:{},info:{}}),rooms:async()=>{
+  const rs=rooms();
+  // Explicit synthetic manual placement. Never use area matching as proof in
+  // orchestration tests of climate/purpose/calculation. Live extraction is mocked.
+  KeoBim.st().dec.assign=rs.map((r,i)=>({at:[i%2===0?3:10,4],keys:[r.key],level:r.level,session:KeoBim.st().placementSession}));
+  return rs;
+ },
  openings:()=>[0,5].flatMap((floor,j)=>[
   ...[3,10].map((x,i)=>({id:100+j*10+i,cat:'Revit Windows',c:[x,0],t:[1,0],n:[0,1],w:1.5,d:0.05,z0:floor+0.8,z1:floor+2.6})),
   {id:200+j,cat:'Revit Windows',roof:true,auto:true,type:'Зенитный фонарь',label:'Зенитный фонарь',c:[10,4],t:[1,0],n:[0,1],av:1.5,bv:1.5,z0:floor+4.2,z1:floor+4.4,tilt:0}

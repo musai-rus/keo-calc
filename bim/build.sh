@@ -1,6 +1,8 @@
 #!/bin/sh
 # Сборка keo-bim.js: данные + ядро калькулятора + модуль «КЕО по модели» (для запуска в окне Autodesk Viewer)
+set -eu
 cd "$(dirname "$0")/.."
+python3 bim/build-bookmarklet.py
 node -e "
 const D=require('./data.js');
 process.stdout.write('window.DATA='+JSON.stringify(D)+';\n');
