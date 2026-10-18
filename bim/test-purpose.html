@@ -90,8 +90,22 @@ window.testDone=(async()=>{
  NOP_VIEWER.model=makeModel(null);await KeoBim.run();await apply(group('A1'));
  check('Без URN решения не попадают в общий ключ страницы',KeoBim.st().storageWarning.includes('Идентификатор модели')&&!localStorage.getItem('keo-bim:decisions:null'));
  // Оставляем чистый первый прогон для визуального осмотра.
+ localStorage.removeItem('keo-bim:decisions:test-purpose:B');
  NOP_VIEWER.model=makeModel('test-purpose:B');await KeoBim.run({region:'г. Москва'});
  check('Возврат к авто воспроизводит исходные результаты',KeoBim.st().res.every((r,i)=>(r.comb ? r.comb.eAvgR : r.C.res.eFinal)===original[i]));
+ // Generic weak-purpose case: keep numeric preview, require existing manual UI.
+ const currentG=KeoBimLib.BimGeom,originalRooms=currentG.rooms;
+ currentG.rooms=async C=>(await originalRooms(C)).map((r,i)=>({...r,name:i%2?'Спальня':'Мастер-спальня'}));
+ localStorage.removeItem('keo-bim:decisions:test-purpose:confidence');NOP_VIEWER.model=makeModel('test-purpose:confidence');
+ await KeoBim.run({region:'г. Москва'});
+ const pending=()=>KeoBim.st().res.filter(r=>r.kind==='calc');
+ check('Общие спальни не подтверждают нормативное назначение',pending().length>0&&pending().every(r=>r.C.norm.v===null&&r.C.pass===null)&&document.querySelector('.kb-purpose').textContent.includes('Назначение не подтверждено'));
+ check('Неподтверждённый тип не выдаёт соответствие в таблице',!document.querySelector('#kb-main').textContent.includes('соответствует*'));
+ const preview=pending().map(r=>r.comb?.eAvgR??r.C.res.eFinal);
+ await apply(group('A57'));
+ check('Существующий ручной UI подтверждает назначение',KeoBim.S.bGroup===group('A57')&&pending().every(r=>r.purposeGate.allowed));
+ await apply('');
+ check('Возврат к слабому авто снова закрывает нормативный вывод',KeoBim.S.bGroup===''&&pending().every(r=>r.C.pass===null)&&pending().every((r,i)=>(r.comb?.eAvgR??r.C.res.eFinal)===preview[i]));
  log.textContent+=`\n${total}/${total} пройдено`;window.testResult={ok:true,total};return window.testResult;
 })().catch(e=>{log.textContent+='\nОШИБКА: '+e.stack;window.testResult={ok:false,error:e.message};return window.testResult});
 </script>

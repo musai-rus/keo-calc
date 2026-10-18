@@ -103,6 +103,24 @@ const BimCalc = (function () {
   }
   const guessGroup = (names, rows) => inferGroup(names, rows).group;
 
+  // Confidence controls normative publication, never coefficient tables or the
+  // numerical result. A candidate group alone is not a trusted classification.
+  function purposeGate(manual, analysis, rows) {
+    const known = g => typeof g === 'string' && !!g && rows.some(r => r.g === g);
+    if (manual) return { allowed: known(manual), source: 'manual', status: known(manual) ? 'confirmed' : 'invalid', group: manual };
+    const allowed = analysis?.status === 'supported' && known(analysis.group);
+    return { allowed, source: 'auto', status: analysis?.status || 'unknown', group: analysis?.group || null };
+  }
+  function gateNorms(result, gate) {
+    const r = { ...result, purposeGate: { ...gate } };
+    if (gate.allowed) return r;
+    const pending = value => value ? { ...value, norm: { v: null, room: null, pending: true, reason: 'building-purpose-unconfirmed' }, normOk: null, uniOk: null, pass: null } : value;
+    if (r.C) r.C = pending(r.C);
+    if (r.comb) r.comb = pending(r.comb);
+    return r;
+  }
+
+
   /* ---------- ориентация по сторонам света ---------- */
   const ORI = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
   // азимут направления nout (наружная нормаль проёма) — по часовой от севера, °.
@@ -392,5 +410,5 @@ const BimCalc = (function () {
     }).filter(b => b.Hp > 0.5 && b.l > 0);
   }
 
-  return { climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
+  return { purposeGate, gateNorms, climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();

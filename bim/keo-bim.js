@@ -2829,6 +2829,24 @@ const BimCalc = (function () {
   }
   const guessGroup = (names, rows) => inferGroup(names, rows).group;
 
+  // Confidence controls normative publication, never coefficient tables or the
+  // numerical result. A candidate group alone is not a trusted classification.
+  function purposeGate(manual, analysis, rows) {
+    const known = g => typeof g === 'string' && !!g && rows.some(r => r.g === g);
+    if (manual) return { allowed: known(manual), source: 'manual', status: known(manual) ? 'confirmed' : 'invalid', group: manual };
+    const allowed = analysis?.status === 'supported' && known(analysis.group);
+    return { allowed, source: 'auto', status: analysis?.status || 'unknown', group: analysis?.group || null };
+  }
+  function gateNorms(result, gate) {
+    const r = { ...result, purposeGate: { ...gate } };
+    if (gate.allowed) return r;
+    const pending = value => value ? { ...value, norm: { v: null, room: null, pending: true, reason: 'building-purpose-unconfirmed' }, normOk: null, uniOk: null, pass: null } : value;
+    if (r.C) r.C = pending(r.C);
+    if (r.comb) r.comb = pending(r.comb);
+    return r;
+  }
+
+
   /* ---------- ориентация по сторонам света ---------- */
   const ORI = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
   // азимут направления nout (наружная нормаль проёма) — по часовой от севера, °.
@@ -3118,7 +3136,7 @@ const BimCalc = (function () {
     }).filter(b => b.Hp > 0.5 && b.l > 0);
   }
 
-  return { climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
+  return { purposeGate, gateNorms, climate, mapNorm, knownUnnormed, guessGroup, inferGroup, clusters, facets, space, spaceNorm, planFrame, buildings, azimuth, oriOf, words, title };
 })();
 /* Research: source boundaries certify a rectangle; raster cells are never filled. */
 const BimRectangles = (function () {
@@ -3519,6 +3537,8 @@ const KeoBim = (function () {
     try { localStorage.setItem(decKey(), JSON.stringify({ ...decisionsData(), saved: new Date().toISOString() })); }
     catch (e) { st.storageWarning = 'Не удалось сохранить решения в браузере. Выбор действует в текущем сеансе; сохраните JSON.'; }
   }
+  const purposeGate = () => Cc.purposeGate(S.bGroup, st.purpose, LIB.DATA.rooms);
+  const normPending = r => r.kind === 'calc' && !purposeGate().allowed;
   function refreshPurpose() {
     st.purpose = Cc.inferGroup((st.rooms || []).map(r => r.name), LIB.DATA.rooms);
     st.group = S.bGroup || st.purpose.group;
@@ -3610,7 +3630,7 @@ const KeoBim = (function () {
   // browser profile the climate choice is deliberately absent, not inferred.
   function completionText(success) {
     const count = st.res.filter(r => r.kind === 'calc').length;
-    if (count) return `${success}: рассчитано пространств — ${count}.`;
+    if (count) return `${success}: рассчитано пространств — ${count}.` + (purposeGate().allowed ? '' : ' Норма и соответствие не определены: подтвердите назначение здания.');
     if (!Cc.climate(S, LIB.DATA.regions)) return 'КЕО не рассчитан: подтвердите регион строительства или группу светового климата 1–5. Нажмите «Выбрать регион» ниже.';
     if (!st.rooms.length) return 'КЕО не рассчитан: помещения Revit не получены из базы свойств. Проверьте 3D-вид и завершение загрузки модели, затем запустите закладку ещё раз.';
     if (!st.levels.length) return 'КЕО не рассчитан: помещения найдены, но не сопоставлены с уровнями модели. Сведения об уровнях отсутствуют или отличаются от свойств Rooms.';
@@ -3739,7 +3759,7 @@ const KeoBim = (function () {
       let r; try { r = Cc.space(sp, o, lsCalc, env); } catch (e) { r = { err: 'ошибка: ' + e.message }; console.error(e); }
       if (o.some(x => x.levelBoundary)) (r.notes = r.notes || []).push('Проём попадает в диапазоны нескольких уровней: сохранена первая привязка снизу вверх. Проверьте этаж и геометрию высокого проёма.');
       if (lanPending) (r.notes = r.notes || []).unshift(`фонарей с неподтверждённым типом: ${lanPending} — в расчёте не учтены, подтвердите тип в разделе «Фонари»`);
-      out.push({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o, lans: ls, lanPending });
+      out.push(Cc.gateNorms({ ...base, ...r, env, kind: r.err ? 'err' : 'calc', ops: o, lans: ls, lanPending }, purposeGate()));
     });
     // части здания ≥ 8 м² без помещения Revit вне рассчитанных пространств — выбор помещений за пользователем
     L.unknown.filter(u => u.space === undefined).forEach(u => out.push({ key: 'unk:' + u.at.join(','), level: L.name, floor: L.floor, rooms: [], title: `Контур без помещения Revit, ${f2(u.area, 1)} м²`, nums: '?', kind: 'unknown', unk: u, A: u.at }));
@@ -3826,6 +3846,7 @@ const KeoBim = (function () {
     if (r.kind === 'nogeo') return { k: 'none', t: 'контур не найден' };
     if (r.kind === 'unknown') return { k: 'err', t: 'уточните состав' };
     if (r.kind === 'err') return { k: 'err', t: r.err };
+    if (normPending(r)) return { k: 'none', t: 'подтвердите назначение здания' };
     if (r.unresolvedRooms && r.unresolvedRooms.length) return { k: 'err', t: 'уточните назначение' };
     if (r.sp && r.sp.unknown.length) return { k: 'err', t: 'уточните состав' };
     if (r.lanPending) return { k: 'err', t: 'уточните тип фонаря' };
@@ -3837,7 +3858,7 @@ const KeoBim = (function () {
   // * — результат предварительный: расчёт по модели не сверен с независимым расчётом (см. инструкцию проекта, разд. 12)
   const PRELIM = '* Предварительно: результаты КЕО по модели не сверены с независимым расчётом и не являются заключением о соответствии.';
   const eOf = r => r.comb ? r.comb.eAvgR : r.C && r.C.ok ? r.C.res.eFinal : null;
-  const enOf = r => r.comb ? r.comb.norm.v : r.C && r.C.ok ? r.C.norm.v : null;
+  const enOf = r => normPending(r) ? null : r.comb ? r.comb.norm.v : r.C && r.C.ok ? r.C.norm.v : null;
   const MODE = { side: 'боковое', top: 'верхнее', comb: 'комбинированное' };
   const UNIT = { squareMeters: 'м²', squareMillimeters: 'мм²', squareCentimeters: 'см²', squareFeet: 'фут²', squareInches: 'дюйм²' };
   // требует внимания: автоматическое объединение, привязка по балансу площадей, открытый проход в исключённое помещение, расхождение площадей
@@ -4115,6 +4136,7 @@ const KeoBim = (function () {
     return `<section class="kb-purpose kb-set" aria-label="Назначение здания">
       <b>Назначение здания: ${esc(st.group || 'не определено')}</b>
       <p class="muted" style="font-size:12px;margin:4px 0">${source}. ${S.bGroup ? 'Автоматический анализ: ' + esc(p && p.group || 'не определено') + '.' : notice}</p>
+      ${purposeGate().allowed ? '' : '<p class="kb-warn">Назначение не подтверждено: КЕО показан предварительно; норма и соответствие не определены. Выберите назначение ниже и нажмите «Применить и пересчитать». Расчётная точка и КЕО могут измениться после подтверждения.</p>'}
       <label>Уточнить назначение <select data-purpose style="max-width:100%;width:100%"><option value="">Автоматически по всем помещениям</option>${groups.map(g => `<option value="${esc(g)}"${S.bGroup === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select></label>
       <button class="kb-btn pri" data-a="purpose">Применить и пересчитать</button>
       <details><summary>Почему выбрано это назначение</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Это предположение по названиям, а не подтверждённая классификация.</p>${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
@@ -4289,9 +4311,9 @@ const KeoBim = (function () {
     if (r.mode === 'comb') {
       const c = r.comb;
       return `<h3>Расчётные точки (Б.4: e = eв + eб)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th><th class="num">eб, %</th><th class="num">e, %</th></tr>${c.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(c.eTop[j], 3)}</td><td class="num">${f2(c.eSide[j], 3)}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table>
-        <p class="muted" style="font-size:12px">eср (Б.10) = ${f2(c.eAvgR)} %, eмин = ${f2(c.eMin, 3)} %, равномерность eмин/eср = ${f2(c.uni, 3)} (не менее 1/3, п. 5.6 СП 52) — ${c.uniOk ? 'выполняется' : '<b>не выполняется</b>'}. eб в каждой точке — по формуле Б.1 через видимые из точки участки окон.</p>`;
+        <p class="muted" style="font-size:12px">eср (Б.10) = ${f2(c.eAvgR)} %, eмин = ${f2(c.eMin, 3)} %, равномерность eмин/eср = ${f2(c.uni, 3)} (не менее 1/3, п. 5.6 СП 52) — ${normPending(r) ? 'оценка отложена до подтверждения назначения' : c.uniOk ? 'выполняется' : '<b>не выполняется</b>'}. eб в каждой точке — по формуле Б.1 через видимые из точки участки окон.</p>`;
     }
-    if (r.mode === 'top') { const R = r.C.res; return `<h3>Расчётные точки (Б.3)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th></tr>${R.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table><p class="muted" style="font-size:12px">eср (Б.10) = ${f2(R.eAvgR)} %, равномерность eмин/eср = ${f2(R.uni, 3)} (не менее 1/3) — ${r.C.uniOk ? 'выполняется' : '<b>не выполняется</b>'}.</p>`; }
+    if (r.mode === 'top') { const R = r.C.res; return `<h3>Расчётные точки (Б.3)</h3><table class="kb-t"><tr><th>РТ</th><th class="num">eв, %</th></tr>${R.e.map((e, j) => `<tr><td>${j + 1}</td><td class="num">${f2(e, 3)}</td></tr>`).join('')}</table><p class="muted" style="font-size:12px">eср (Б.10) = ${f2(R.eAvgR)} %, равномерность eмин/eср = ${f2(R.uni, 3)} (не менее 1/3) — ${normPending(r) ? 'оценка отложена до подтверждения назначения' : r.C.uniOk ? 'выполняется' : '<b>не выполняется</b>'}.</p>`; }
     return '';
   }
   function renderDetail() {
@@ -4303,8 +4325,9 @@ const KeoBim = (function () {
     if (ok) {
       const n = r.comb ? r.comb.norm : r.C.norm;
       h += `<div style="display:flex;gap:16px;align-items:baseline;margin:8px 0"><div><span class="kb-big">${f2(e)}</span> %<div class="muted">${r.mode === 'side' ? 'расчётный e<sub>р</sub>' : 'e<sub>ср</sub> по точкам'}</div></div><div><span class="kb-big" style="font-weight:500">${n.v === null || n.v === undefined ? '—' : f2(n.v)}</span> %<div class="muted">нормируемый e<sub>н</sub></div></div></div>`;
-      h += `<div class="muted" style="font-size:12px">${n.room ? `Норма: табл. А.1 СП 367, п. ${n.room.n} «${esc(n.room.name)}», ${esc(n.colName)}` : 'Назначение не найдено в табл. А.1 — норма не задана'}.${r.mode === 'side' ? ` Точка: ${r.multi ? 'центр пространства (проёмы в нескольких стенах)' : esc(LIB.KEO.RT_TEXT[r.row ? r.row.rt : 'center'])}, ${r.row && r.row.h === 0 ? 'на полу' : 'на УРП 0,8 м'}.` : ` Точки — ${r.section?.mode==='manual'?'по разрезу пользователя':'по главной оси пространства'} (${r.pts.length} шт.).`}</div>`;
+      if (!normPending(r)) h += `<div class="muted" style="font-size:12px">${n.room ? `Норма: табл. А.1 СП 367, п. ${n.room.n} «${esc(n.room.name)}», ${esc(n.colName)}` : 'Назначение не найдено в табл. А.1 — норма не задана'}.${r.mode === 'side' ? ` Точка: ${r.multi ? 'центр пространства (проёмы в нескольких стенах)' : esc(LIB.KEO.RT_TEXT[r.row ? r.row.rt : 'center'])}, ${r.row && r.row.h === 0 ? 'на полу' : 'на УРП 0,8 м'}.` : ` Точки — ${r.section?.mode==='manual'?'по разрезу пользователя':'по главной оси пространства'} (${r.pts.length} шт.).`}</div>`;
     }
+    if (normPending(r)) h += '<p class="kb-warn">Вычисленный КЕО предварительный: назначение здания, нормативный выбор расчётной точки и нормы не подтверждены. Подтвердите назначение здания в существующем поле выше.</p>';
     h += compHTML(r) + areaHTML(r);
     if (ok) {
       if (r.mode === 'side' || r.mode === 'comb') {
@@ -4318,8 +4341,8 @@ const KeoBim = (function () {
       h += lansHTML(r) + pointsHTML(r);
       const warn = [...(r.notes || []), ...(r.C && r.C.warn || [])];
       if (warn.length) h += `<p class="muted" style="font-size:11.5px">${[...new Set(warn)].map(esc).join('<br>')}</p>`;
-      if (r.C && r.C.ok) h += `<details><summary>Полный разбор: формулы, коэффициенты, схема${r.mode === 'comb' ? ' (верхний свет, Б.3)' : ''}</summary><div class="rep">${reportHTML(LIB.KEO.buildModel(r.st, r.C))}</div></details>`;
-      h += `<div class="kb-row" style="margin-top:8px"><button class="kb-btn" data-a="one">Исходные для калькулятора (.json)</button></div>`;
+      if (!normPending(r) && r.C && r.C.ok) h += `<details><summary>Полный разбор: формулы, коэффициенты, схема${r.mode === 'comb' ? ' (верхний свет, Б.3)' : ''}</summary><div class="rep">${reportHTML(LIB.KEO.buildModel(r.st, r.C))}</div></details>`;
+      if (!normPending(r)) h += `<div class="kb-row" style="margin-top:8px"><button class="kb-btn" data-a="one">Исходные для калькулятора (.json)</button></div>`;
       h += `<p class="muted" style="font-size:11px">${esc(PRELIM)}</p>`;
     } else if (r.kind === 'calc' && r.C && !r.C.ok) {
       h += `<p class="muted">${esc((r.C.err || []).join('; '))}</p>`;
@@ -4370,6 +4393,7 @@ const KeoBim = (function () {
   function exportOne(r) {
     if (!decisionReady()) return;
     if (!st.res.includes(r)) throw new Error('Результат устарел — выберите помещение из текущего расчёта.');
+    if (normPending(r)) throw new Error('Подтвердите назначение здания перед экспортом исходных для калькулятора.');
     download(`КЕО_${r.nums}.json`, JSON.stringify(r.st, null, 2), 'application/json');
   }
   function exportDec() {
@@ -4379,12 +4403,12 @@ const KeoBim = (function () {
   function exportCSV() {
     if (!decisionReady()) return;
     const rows = [['Уровень', 'Номера', 'Помещения Revit', 'ElementId', 'Площадь Revit, м2', 'Площадь контура, м2', 'Освещение', 'e, %', 'eн, %', 'Итог', 'Состав', 'Пункт табл. А.1']];
-    st.res.forEach(r => { const s = status(r), e = eOf(r), en = enOf(r); rows.push([r.level, r.nums, r.rooms.map(x => x.name).join(' + '), r.rooms.map(x => x.eid || x.key).join(' + '), r.area ? f2(r.area.revit) : r.rooms[0] && r.rooms[0].area > 0 ? f2(r.rooms[0].area) : '', r.area ? f2(r.area.model) : '', r.mode ? MODE[r.mode] : '', e === null ? '' : f2(e), en === null || en === undefined ? '' : f2(en), s.t, r.sp ? (r.sp.merged ? (r.sp.manual ? 'объединено вручную' : 'объединено авто') : r.sp.manual ? 'раздельно (решение)' : '') : '', r.row ? r.row.n : '']); });
+    st.res.forEach(r => { const s = status(r), e = eOf(r), en = enOf(r); rows.push([r.level, r.nums, r.rooms.map(x => x.name).join(' + '), r.rooms.map(x => x.eid || x.key).join(' + '), r.area ? f2(r.area.revit) : r.rooms[0] && r.rooms[0].area > 0 ? f2(r.rooms[0].area) : '', r.area ? f2(r.area.model) : '', r.mode ? MODE[r.mode] : '', e === null ? '' : f2(e), en === null || en === undefined ? '' : f2(en), s.t, r.sp ? (r.sp.merged ? (r.sp.manual ? 'объединено вручную' : 'объединено авто') : r.sp.manual ? 'раздельно (решение)' : '') : '', !normPending(r) && r.row ? r.row.n : '']); });
     download('КЕО_по_модели.csv', '﻿' + rows.map(x => x.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n'), 'text/csv');
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), categoryDiagnostics: st.categoryDiagnostics, calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, state: r.st, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { confidence: purposeGate(), selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), categoryDiagnostics: st.categoryDiagnostics, calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, normative: { confidence: purposeGate(), norm: enOf(r), status: status(r).t }, state: normPending(r) ? undefined : r.st, previewInputs: normPending(r) ? { warning: 'Назначение и расчётная точка не подтверждены; это предварительные исходные, не файл калькулятора', input: r.st } : undefined, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
