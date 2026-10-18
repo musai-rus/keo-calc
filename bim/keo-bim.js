@@ -1833,14 +1833,25 @@ const BimSpaces = (function () {
     bestRoom.forEach((ps, rm) => { if (ps.length > 1) { ambiguousRooms.add(rm); ps.forEach(p => ambiguousRegions.add(p[2])); } });
     bestRegion.forEach((ps, rg) => { if (ps.length > 1) { ambiguousRegions.add(rg); ps.forEach(p => ambiguousRooms.add(p[1])); } });
     ambiguousRooms.forEach(rm => { rm.matchAmbiguous = true; });
-    pairs.forEach(([d, rm, rg]) => { if (rm.reg || rg.room || ambiguousRooms.has(rm) || ambiguousRegions.has(rg)) return; rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; rm.areaModelV = rg.areaV; });
+    // A claimed first choice does not make a second/third choice a Room's
+    // identity. Freeze preferences over the original graph, before assignment;
+    // accept only reciprocal, untied first choices. Area/perimeter remain a
+    // heuristic even for these pairs, never independent spatial evidence.
+    pairs.forEach(pair => {
+      const [d, rm, rg] = pair;
+      if (rm.reg || rg.room || ambiguousRooms.has(rm) || ambiguousRegions.has(rg)) return;
+      if (bestRoom.get(rm)[0] !== pair || bestRegion.get(rg)[0] !== pair) return;
+      rg.room = rm; rg.dA = d; rm.reg = rg.id; rm.dA = d; rm.areaModel = rg.areaC; rm.areaModelV = rg.areaV;
+    });
     // второй проход: допуск по площади до tol2 (10 %) — только для взаимно единственной пары «помещение ↔ контур»
     // (контур урезан нишей/шкафом за дверными полотнами и т.п.; пример — спальня 84 модели 1226: Area 55,14 м², контур 51,1–52,0 м²)
     const tol2 = 0.10, cand = new Map(), back = new Map();
     rooms.forEach(rm => {
-      if (rm.reg || !(rm.area > 0)) return;
+      // The relaxed pass is for missing tight candidates, not for resolving a
+      // conflict by removing already claimed alternatives from the graph.
+      if (rm.reg || bestRoom.has(rm) || !(rm.area > 0)) return;
       regs.forEach(rg => {
-        if (rg.room || rg.areaC < 4) return;
+        if (rg.room || bestRegion.has(rg) || rg.areaC < 4) return;
         const dd = Math.min(Math.abs(rg.areaC - rm.area), Math.abs((rg.areaV || rg.areaC) - rm.area));
         if (dd / rm.area >= tol2) return;
         if (!perimeterCheck(rg,[rm]).ok) return;
