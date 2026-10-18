@@ -41,7 +41,7 @@ const storage=new Map();context.localStorage={getItem:k=>storage.get(k)||null,se
 require('./fixture-binding-dom.js')(context);
 vm.runInContext(scripts[0],context);
 let bundle=fs.readFileSync(__dirname+'/keo-bim.js','utf8');
-bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {}, querySelector:s=>document.getElementById(s.slice(1)) }; }; draw = () => {}; renderList = () => {};\n  return { _exportJSON: exportJSON, _exportCSV: exportCSV, _roomDiagnosticData: roomDiagnosticData, _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _restoreDec: restoreDec, _bindSettings: bindSettings, _northHTML: northHTML, run, st: () => st, S,');
+bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {}, querySelector:s=>document.getElementById(s.slice(1)) }; }; draw = () => {}; renderList = () => {};\n  return { _view3d: view3d, _exportJSON: exportJSON, _exportCSV: exportCSV, _roomDiagnosticData: roomDiagnosticData, _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _restoreDec: restoreDec, _bindSettings: bindSettings, _northHTML: northHTML, run, st: () => st, S,');
 bundle=bundle.replace(/  function download\(name, text, type\) \{[^\n]+\}/,'  function download(name, text, type) { window.capturedDownload = { name, text, type }; }');
 vm.runInContext(bundle,context);
 vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
@@ -136,7 +136,9 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   assert.throws(()=>KeoBim._validateDec({merge:[],northMode:'invalid'}),/формат/);
   await KeoBim.run({northDeg:'0'});
   assert.throws(()=>KeoBim._exportOne({}),/Результат устарел/);
-  const setCuts=NOP_VIEWER.setCutPlanes;NOP_VIEWER.setCutPlanes(cuts);NOP_VIEWER.setCutPlanes=p=>{if(!p.length)setCuts(p)};regionInput.value='Краснодарский край';regionInput.onchange();assert.equal(KeoBim.st().res.length,0);assert.ok(/восстановить/.test(statusElement.textContent));assert.equal(KeoBim.st().dirty,true);assert.equal(KeoBim._roomDiagnosticData().available,false);assert.deepEqual(KeoBim._roomDiagnosticData().unplacedReasons,{});assert.throws(()=>KeoBim._exportDec(),/полный пересчёт/);assert.throws(()=>KeoBim._exportJSON(),/полный пересчёт/);NOP_VIEWER.setCutPlanes=setCuts;setCuts(cuts);await KeoBim.run({region:'г. Москва'});groupInput.value='1';groupInput.onchange();
+  const setCuts=NOP_VIEWER.setCutPlanes;NOP_VIEWER.setCutPlanes(cuts);NOP_VIEWER.setCutPlanes=p=>{if(!p.length)setCuts(p)};regionInput.value='Краснодарский край';regionInput.onchange();assert.equal(KeoBim.st().res.length,0);assert.ok(/восстановить/.test(statusElement.textContent));assert.equal(KeoBim.st().dirty,true);assert.equal(KeoBim._roomDiagnosticData().available,false);assert.deepEqual(KeoBim._roomDiagnosticData().unplacedReasons,{});assert.throws(()=>KeoBim._exportDec(),/полный пересчёт/);assert.throws(()=>KeoBim._exportJSON(),/полный пересчёт/);NOP_VIEWER.setCutPlanes=setCuts;setCuts(cuts);
+  KeoBim._view3d();assert.equal(NOP_VIEWER.getCutPlanes().length,0);assert.equal(KeoBim.st().dirty,true);assert.equal(KeoBim.st().res.length,0);assert.throws(()=>KeoBim._exportJSON(),/полный пересчёт/);
+  setCuts(cuts);await KeoBim.run({region:'г. Москва'});groupInput.value='1';groupInput.onchange();
   const normKey=KeoBim.st().res[0].key;KeoBim.st().normOv[normKey]='obsolete-id';await KeoBim.setBuildingGroup('');assert.equal(KeoBim.st().res.length,0);
   delete KeoBim.st().normOv[normKey];await KeoBim.run();assert.ok(KeoBim.st().res.every(r=>r.C.ok));
   other.onchange();assert.equal(KeoBim.st().res.length,0);assert.equal(KeoBim.st().dirty,true);assert.throws(()=>KeoBim.decide('split',['synthetic']),/полный пересчёт/);
@@ -147,7 +149,7 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   resume({byCat:{},info:{}});await pending;G.catalog=oldCatalog;
   NOP_VIEWER.model=makeModel('test-purpose:unanalysed');groupInput.value='5';groupInput.onchange();assert.equal(KeoBim.S.group,1);
   assert.throws(()=>KeoBim._focusLantern(1),/Модель изменилась/);assert.throws(()=>KeoBim._exportOne({}),/Модель изменилась/);assert.throws(()=>KeoBim._exportDec(),/Модель изменилась/);
-  assert.throws(()=>KeoBim.planView('L01'),/Модель изменилась/);assert.throws(()=>KeoBim.select({}),/Модель изменилась/);
+  assert.throws(()=>KeoBim._view3d(),/Модель изменилась/);assert.throws(()=>KeoBim.planView('L01'),/Модель изменилась/);assert.throws(()=>KeoBim.select({}),/Модель изменилась/);
   assert.throws(()=>KeoBim.decide('split',['synthetic']),/Модель изменилась/);assert.equal(JSON.stringify(KeoBim.st().dec),beforeDec);
   let release;G.catalog=()=>new Promise(r=>release=r);const switched=KeoBim.run();NOP_VIEWER.model=makeModel('test-purpose:switch-during-analysis');release({byCat:{},info:{}});await switched;assert.equal(KeoBim.st().res.length,0);G.catalog=oldCatalog;
   G.catalog=async()=>{throw Error('new model catalog failure')};await KeoBim.run();G.catalog=oldCatalog;

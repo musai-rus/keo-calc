@@ -497,7 +497,11 @@ const KeoBim = (function () {
     v.navigation.setView(new THREE.Vector3(c.x, c.y, c.z + h), c); v.navigation.setCameraUpVector(new THREE.Vector3(0, 1, 0));
     v.navigation.fitBounds(false, bx);
   }
-  function view3d() { if (!decisionReady()) return; const v = C.v; st.plan = false; v.setCutPlanes([]); v.fitToView(); draw(); }
+  function view3d() {
+    if (st.busy) return;
+    assertModel(); // View recovery is allowed while results are dirty, only on the bound model.
+    const v=C.v;G.clearSections(v);st.plan=false;v.fitToView();draw();
+  }
 
   /* ---------- выбор пространства: подсветка его окон и фонарей ---------- */
   function select(r, fly = true) {

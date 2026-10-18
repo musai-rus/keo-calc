@@ -50,4 +50,11 @@ test('equivalent matrix objects are stable; malformed spatial context fails clos
  assert.equal(B.assert(B.capture(s.env),s.env),true);
  for(const value of [{},{elements:[]},{elements:Array(16).fill(NaN)}]){s.model.getModelToViewerTransform=()=>value;assert.throws(()=>B.capture(s.env),/преобразование/);}
 });
+test('display clipping changes do not impersonate a model placement change',()=>{
+ const s=setup(),b=B.capture(s.env);let planes=[];
+ s.v.getCutPlanes=()=>planes;s.v.setCutPlanes=p=>planes=p;
+ s.v.setCutPlanes([{x:0,y:0,z:1,w:-2}]);assert.equal(B.assert(b,s.env),true);
+ s.v.setCutPlanes([]);assert.equal(B.assert(b,s.env),true);
+ s.v.model={...s.model};assert.throws(()=>B.assert(b,s.env),/изменилась/);
+});
 console.log(`${count}/${count} Viewer binding groups passed`);

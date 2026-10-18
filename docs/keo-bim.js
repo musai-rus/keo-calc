@@ -2263,8 +2263,66 @@ const BimGeom = (function () {
     return { v, m, it, fl, S: m.getUnitScale(), GZ: (m.getData().globalOffset || { z: 0 }).z };
   }
 
-  // Every ray-based stage must see the whole model. Restore display clipping even
-  // on failure; nested calls are harmless. Unknown extension cut sets fail closed.
+  // Viewer.getCutPlanes() is an aggregate, while setCutPlanes() writes only one
+  // named set. Preserve the sets separately or restoration duplicates clipping.
+  function cutState(v) {
+    const impl=v.impl || {}, names=['getCutPlaneSets','getCutPlaneSet','setCutPlaneSet'];
+    const present=names.filter(k=>typeof impl[k]==='function').length;
+    const fail=()=>{throw new Error('Viewer не предоставляет проверяемое управление наборами сечений. Отключите сечение штатными средствами Viewer.');};
+    const planes=value=>{
+      if(value===null || value===undefined)return [];
+      if(!Array.isArray(value) || value.some(p=>!p || !['x','y','z','w'].every(k=>Number.isFinite(p[k]))))fail();
+      return value.map(p=>p.clone ? p.clone() : {...p});
+    };
+    const same=(a,b)=>a.length===b.length && a.every((p,i)=>['x','y','z','w'].every(k=>Math.abs(p[k]-b[i][k])<=1e-9));
+    const bag=(a,b)=>{const rest=b.slice();return a.length===b.length && a.every(p=>{const i=rest.findIndex(q=>same([p],[q]));if(i<0)return false;rest.splice(i,1);return true;});};
+    const aggregate=()=>planes(typeof impl.getAllCutPlanes==='function'?impl.getAllCutPlanes():v.getCutPlanes());
+    if(typeof v.getCutPlanes!=='function' || present && present!==names.length)fail();
+    let read,apply,equal,flatten;
+    if(present){
+      const keys=()=>{const ks=impl.getCutPlaneSets();if(!Array.isArray(ks)||ks.some(k=>typeof k!=='string'||!k)||new Set(ks).size!==ks.length)fail();return ks;};
+      read=()=>new Map(keys().map(k=>[k,planes(impl.getCutPlaneSet(k))]).filter(([,p])=>p.length));
+      apply=state=>{
+        let current,error;
+        try {current=read();} catch(e) {error=e;}
+        // Restore every accessible saved owner even if enumeration or another
+        // owner fails. Do not touch an unchanged owner that may be read-only.
+        for(const k of new Set([...(current?.keys()||[]),...state.keys()])){
+          const wanted=state.get(k)||[];
+          if(current && same(current.get(k)||[],wanted))continue;
+          try {impl.setCutPlaneSet(k,wanted.length?planes(wanted):undefined);} catch(e) {error ||= e;}
+        }
+        if(error)throw error;
+      };
+      equal=(a,b)=>a.size===b.size && [...a].every(([k,p])=>b.has(k)&&same(p,b.get(k)));
+      flatten=state=>[...state.values()].flat();
+    } else {
+      if(typeof v.setCutPlanes!=='function')fail();
+      read=()=>planes(v.getCutPlanes());apply=state=>v.setCutPlanes(planes(state));equal=same;flatten=state=>state;
+    }
+    const saved=read(),empty=present?new Map():[];
+    const matches=state=>equal(read(),state)&&bag(aggregate(),flatten(state))&&bag(planes(v.getCutPlanes()),flatten(state));
+    if(!matches(saved))fail(); // Unaccounted clipping cannot be safely restored.
+    const restoreError=()=>new Error('Не удалось восстановить исходное сечение Viewer. Результат отменён; восстановите вид вручную.');
+    return {
+      clear(){apply(empty);if(!matches(empty))throw new Error('Не удалось снять все сечения Viewer. Отключите сечение и повторите расчёт.');},
+      assertClear(){if(!matches(empty))throw new Error('Сечение Viewer изменилось во время расчёта. Результат отменён.');},
+      restore(){
+        try {if(matches(saved))return;} catch(_) {}
+        try {apply(saved);} catch(_) {} // Verify the final state after best-effort recovery.
+        try {if(matches(saved))return;} catch(_) {}
+        throw restoreError();
+      }
+    };
+  }
+  function clearSections(v) {
+    const cuts=cutState(v);
+    try { cuts.clear(); } catch(e) { cuts.restore();throw e; }
+  }
+
+  // Every ray-based stage must see the whole model. Temporary clipping changes
+  // do not change model identity/placement; those are checked by the binding.
+  const fullModelScopes=new WeakMap();
   function withFullModel(v, work) {
     // Ray intersection follows Viewer visibility, including isolation. Do not
     // mutate that state without a verified restoration contract.
@@ -2276,20 +2334,23 @@ const BimGeom = (function () {
     const hidden = v.getAggregateHiddenNodes ? v.getAggregateHiddenNodes() : v.getHiddenNodes ? v.getHiddenNodes() : [];
     const isolated = v.getAggregateIsolation ? v.getAggregateIsolation() : v.getIsolatedNodes ? v.getIsolatedNodes() : [];
     if (hasIds(hidden) || hasIds(isolated) || (v.areAllVisible && v.areAllVisible() !== true)) throw new Error('Часть модели скрыта или изолирована. Покажите всю модель и повторите расчёт.');
-    const saved = (v.getCutPlanes() || []).map(p => p.clone ? p.clone() : { ...p });
-    const samePlanes = (a,b) => Array.isArray(a) && a.length === b.length && a.every((p,i) => ['x','y','z','w'].every(k => Number.isFinite(p[k]) && Math.abs(p[k]-b[i][k]) <= 1e-9));
-    const restore = () => {
-      if (!samePlanes(v.getCutPlanes() || [], saved)) v.setCutPlanes(saved);
-      if (!samePlanes(v.getCutPlanes() || [], saved)) throw new Error('Не удалось восстановить исходное сечение Viewer. Результат отменён; восстановите вид вручную.');
+    let scope=fullModelScopes.get(v);
+    if(scope)scope.cuts.assertClear();
+    else {
+      const cuts=cutState(v);
+      try {cuts.clear();} catch(e) {cuts.restore();throw e;}
+      scope={cuts,count:0};fullModelScopes.set(v,scope);
+    }
+    scope.count++;let released=false,result;
+    const release=()=>{
+      if(released)return;released=true;
+      if(--scope.count===0){fullModelScopes.delete(v);scope.cuts.restore();}
     };
     try {
-      if (saved.length) v.setCutPlanes([]);
-      const remaining = v.impl && v.impl.getAllCutPlanes ? v.impl.getAllCutPlanes() : v.getCutPlanes();
-      if (remaining && remaining.length) throw new Error('Не удалось снять все сечения Viewer. Отключите сечение и повторите расчёт.');
-      const result = work();
-      if (result && typeof result.then === 'function') return result.finally(restore);
-      restore(); return result;
-    } catch (e) { restore(); throw e; }
+      result=work();
+      if (result && typeof result.then === 'function') return Promise.resolve(result).finally(release);
+    } catch (e) {release();throw e;}
+    release();return result;
   }
 
   // элементы с категорией, уровнем, типом: листовые узлы и узлы со своей геометрией.
@@ -2732,7 +2793,7 @@ const BimGeom = (function () {
     return res;
   }
 
-  return { withFullModel, ctx, catalog, rooms, location, eachGeom, slice, bounds, paintSegments, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
+  return { withFullModel, clearSections, ctx, catalog, rooms, location, eachGeom, slice, bounds, paintSegments, raster, labelAt, markExterior, openings, doorBoxes, assign, spaceCells, hitUp, hitUpEl, hitDir, lanternParams, heightMap, overhang, skyline, deg };
 })();
 
 /* КЕО по модели: из геометрии помещения и его проёмов — исходные данные калькулятора (то же состояние, что вводится вручную),
@@ -4042,7 +4103,11 @@ const KeoBim = (function () {
     v.navigation.setView(new THREE.Vector3(c.x, c.y, c.z + h), c); v.navigation.setCameraUpVector(new THREE.Vector3(0, 1, 0));
     v.navigation.fitBounds(false, bx);
   }
-  function view3d() { if (!decisionReady()) return; const v = C.v; st.plan = false; v.setCutPlanes([]); v.fitToView(); draw(); }
+  function view3d() {
+    if (st.busy) return;
+    assertModel(); // View recovery is allowed while results are dirty, only on the bound model.
+    const v=C.v;G.clearSections(v);st.plan=false;v.fitToView();draw();
+  }
 
   /* ---------- выбор пространства: подсветка его окон и фонарей ---------- */
   function select(r, fly = true) {
