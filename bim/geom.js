@@ -224,6 +224,7 @@ const BimGeom = (function () {
 
   // растр среза и разметка связных свободных областей
   function bounds(segs) {
+    if (!segs.length) throw new Error('Срез модели пуст: геометрические границы недоступны. Проверьте загрузку 3D-геометрии и выбранный вид Viewer.');
     let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
     segs.forEach(s => { minx = Math.min(minx, s[0], s[2]); maxx = Math.max(maxx, s[0], s[2]); miny = Math.min(miny, s[1], s[3]); maxy = Math.max(maxy, s[1], s[3]); });
     return [minx - 2, miny - 2, maxx + 2, maxy + 2];
@@ -238,6 +239,7 @@ const BimGeom = (function () {
   // bx — общие границы, чтобы растры R и Rp совпадали поклеточно
   function raster(segs, cell, bx) {
     const [minx, miny, maxx, maxy] = bx || bounds(segs);
+    if (![minx,miny,maxx,maxy,cell].every(Number.isFinite) || cell <= 0 || maxx <= minx || maxy <= miny) throw new Error('Некорректные границы или шаг сетки среза: расчёт остановлен.');
     const W = Math.ceil((maxx - minx) / cell), H = Math.ceil((maxy - miny) / cell);
     const occ = new Uint8Array(W * H);
     paintSegments(segs, cell, minx, miny, (i,j) => { if (i >= 0 && j >= 0 && i < W && j < H) occ[j * W + i] = 1; });

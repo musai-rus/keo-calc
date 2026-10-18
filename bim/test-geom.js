@@ -40,3 +40,9 @@ assert.throws(()=>G.slice(context(geom(true)),cat,['Revit Windows'],15.5),/де�
 const bad=geom(false);bad.vb[0]=NaN;
 assert.throws(()=>G.slice(context(bad),cat,['Revit Windows'],15.5),/некорректные координаты/);
 console.log('OK: Float32, синтетический half-float, матрица и масштаб, срез, линии, окна, фонари, отказ при неверных координатах');
+
+// Empty geometry must fail before invalid sentinel bounds become an enormous allocation.
+assert.throws(()=>G.bounds([]),/Срез модели пуст/);
+assert.throws(()=>G.raster([],0.05),/Срез модели пуст/);
+for(const [cell,bx] of [[.05,[1,1,-1,-1]],[.05,[0,0,Infinity,1]],[0,[0,0,1,1]]])assert.throws(()=>G.raster([],cell,bx),/границы или шаг/);
+assert.equal(G.raster([],1,[0,0,2,2]).W,2); // explicit valid empty canvas remains supported
