@@ -41,7 +41,7 @@ const storage=new Map();context.localStorage={getItem:k=>storage.get(k)||null,se
 require('./fixture-binding-dom.js')(context);
 vm.runInContext(scripts[0],context);
 let bundle=fs.readFileSync(__dirname+'/keo-bim.js','utf8');
-bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {}, querySelector:s=>document.getElementById(s.slice(1)) }; }; draw = () => {}; renderList = () => {};\n  return { _exportJSON: exportJSON, _exportCSV: exportCSV, _roomDiagnosticData: roomDiagnosticData, _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _bindSettings: bindSettings, run, st: () => st, S,');
+bundle=bundle.replace('  return { run, st: () => st, S,', '  mount = () => { ui = { remove() {}, querySelector:s=>document.getElementById(s.slice(1)) }; }; draw = () => {}; renderList = () => {};\n  return { _exportJSON: exportJSON, _exportCSV: exportCSV, _roomDiagnosticData: roomDiagnosticData, _focusLantern: focusLantern, _exportOne: exportOne, _exportDec: exportDec, _status: status, _validateDec: validateDec, _restoreDec: restoreDec, _bindSettings: bindSettings, _northHTML: northHTML, run, st: () => st, S,');
 bundle=bundle.replace(/  function download\(name, text, type\) \{[^\n]+\}/,'  function download(name, text, type) { window.capturedDownload = { name, text, type }; }');
 vm.runInContext(bundle,context);
 vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
@@ -102,11 +102,35 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   await KeoBim.run({northDeg:'Infinity'});assert.equal(KeoBim.st().res.length,0);
   await KeoBim.run({northDeg:'   '});assert.equal(Math.abs(KeoBim.st().north.rot),0);
   const getAec=Autodesk.Viewing.Document.getAecModelData;Autodesk.Viewing.Document.getAecModelData=async(...args)=>({...await getAec(...args),refPointTransformation:[Infinity,1,0,0,1]});
-  await KeoBim.run();assert.equal(KeoBim.st().north.unknown,true);assert.equal(KeoBim.st().north.rot,0);Autodesk.Viewing.Document.getAecModelData=getAec;
+  await KeoBim.run();assert.equal(KeoBim.st().north.unknown,true);assert.equal(KeoBim.st().north.rot,null);assert.ok(KeoBim.st().res.filter(r=>r.kind==='err').every(r=>/Север/.test(r.err)));assert.equal(KeoBim.st().res.some(r=>r.kind==='calc'),false);Autodesk.Viewing.Document.getAecModelData=getAec;
   const northInput={dataset:{s:'northDeg'},value:'oops',type:'text'}, other={dataset:{s:'rho'},value:'.2',type:'number'};
   KeoBim._bindSettings({querySelectorAll:()=>[northInput,other],querySelector:()=>({})});northInput.onchange();assert.equal(KeoBim.st().res.length,0);
   await assert.rejects(()=>KeoBim.setBuildingGroup(''),/полный пересчёт/);assert.equal(KeoBim.st().res.length,0);
   await KeoBim.run({northDeg:'0'});assert.ok(KeoBim.st().res.every(r=>r.C.ok));
+  // Real orchestration: source selector, all manual cardinals, auto metadata and placed model.
+  const originalAEC=Autodesk.Viewing.Document.getAecModelData;
+  const rot=(a,stride)=>{const c=Math.cos(a*Math.PI/180),s=Math.sin(a*Math.PI/180);return stride===3?[c,s,0,-s,c,0,0,0,1,0,0,0]:[c,s,0,0,-s,c,0,0,0,0,1,0,100,200,0,1]};
+  Autodesk.Viewing.Document.getAecModelData=async(...args)=>({...await originalAEC(...args),refPointTransformation:rot(70,3)});
+  const placedModel=NOP_VIEWER.model;placedModel.getModelToViewerTransform=()=>({elements:rot(30,4)});
+  await KeoBim.run({northMode:'auto'});assert.ok(Math.abs(KeoBim.st().north.rot+40)<1e-8);assert.equal(KeoBim.st().north.source,'model');
+  const modeInput={dataset:{s:'northMode'},type:'select-one',value:'manual'},angleInput={dataset:{s:'northDeg'},type:'text',value:'0'};
+  KeoBim._bindSettings({querySelectorAll:()=>[modeInput,angleInput],querySelector:()=>({})});
+  modeInput.onchange();assert.equal(KeoBim.S.northMode,'manual');assert.equal(KeoBim.st().north.rot,0);
+  for(const [raw,expected] of [['0',0],['90',90],['180',180],['270',270],['-90',270],['360',0]]){angleInput.value=raw;angleInput.onchange();assert.equal(KeoBim.st().north.rot,expected);assert.ok(KeoBim.st().res.some(r=>r.kind==='calc'));assert.match(KeoBim._northHTML(),/<svg/);}
+  angleInput.value='90';angleInput.onchange();modeInput.value='auto';modeInput.onchange();assert.ok(Math.abs(KeoBim.st().north.rot+40)<1e-8);
+  assert.equal(JSON.parse(localStorage.getItem('keo-bim:decisions:'+KeoBim.st().model)).northMode,'auto');
+  NOP_VIEWER.model=makeModel('test-purpose:north-source-new');await KeoBim.run({region:'г. Москва'});assert.equal(KeoBim.S.northMode,'auto');assert.ok(Math.abs(KeoBim.st().north.rot+70)<1e-8);
+  NOP_VIEWER.model=placedModel;await KeoBim.run();assert.equal(KeoBim.S.northMode,'auto');assert.equal(KeoBim.S.northDeg,'90');assert.ok(Math.abs(KeoBim.st().north.rot+40)<1e-8);
+  modeInput.value='manual';modeInput.onchange();assert.equal(KeoBim.st().north.rot,90);await KeoBim.run();assert.equal(KeoBim.S.northMode,'manual');assert.equal(KeoBim.st().north.rot,90);
+  Autodesk.Viewing.Document.getAecModelData=async(...args)=>({...await originalAEC(...args),refPointTransformation:null});
+  await KeoBim.run({northMode:'auto'});assert.equal(KeoBim.st().north.rot,null);assert.equal(KeoBim.st().res.some(r=>r.kind==='calc'),false);assert.match(KeoBim._northHTML(),/Нулевой угол автоматически не подставляется/);
+  modeInput.value='manual';modeInput.onchange();angleInput.value='';angleInput.onchange();assert.equal(KeoBim.st().north.unknown,true);assert.equal(KeoBim.st().res.some(r=>r.kind==='calc'),false);
+  angleInput.value='0';angleInput.onchange();assert.equal(KeoBim.st().north.rot,0);assert.ok(KeoBim.st().res.some(r=>r.kind==='calc'));
+  Autodesk.Viewing.Document.getAecModelData=originalAEC;delete placedModel.getModelToViewerTransform;await KeoBim.run({northDeg:'0'});
+  KeoBim._restoreDec({merge:[],northDeg:'90'},KeoBim.S.bGroup,{...KeoBim.S,northMode:'auto'});assert.equal(KeoBim.S.northMode,'manual');
+  KeoBim._restoreDec({merge:[],northDeg:'90',northMode:'auto'},KeoBim.S.bGroup,KeoBim.S);assert.equal(KeoBim.S.northMode,'auto');
+  assert.throws(()=>KeoBim._validateDec({merge:[],northMode:'invalid'}),/формат/);
+  await KeoBim.run({northDeg:'0'});
   assert.throws(()=>KeoBim._exportOne({}),/Результат устарел/);
   const setCuts=NOP_VIEWER.setCutPlanes;NOP_VIEWER.setCutPlanes(cuts);NOP_VIEWER.setCutPlanes=p=>{if(!p.length)setCuts(p)};regionInput.value='Краснодарский край';regionInput.onchange();assert.equal(KeoBim.st().res.length,0);assert.ok(/восстановить/.test(statusElement.textContent));assert.equal(KeoBim.st().dirty,true);assert.equal(KeoBim._roomDiagnosticData().available,false);assert.deepEqual(KeoBim._roomDiagnosticData().unplacedReasons,{});assert.throws(()=>KeoBim._exportDec(),/полный пересчёт/);assert.throws(()=>KeoBim._exportJSON(),/полный пересчёт/);NOP_VIEWER.setCutPlanes=setCuts;setCuts(cuts);await KeoBim.run({region:'г. Москва'});groupInput.value='1';groupInput.onchange();
   const normKey=KeoBim.st().res[0].key;KeoBim.st().normOv[normKey]='obsolete-id';await KeoBim.setBuildingGroup('');assert.equal(KeoBim.st().res.length,0);

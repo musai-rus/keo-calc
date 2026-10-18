@@ -8,7 +8,7 @@ const KeoBim = (function () {
 
   const S = {
     cell: 0.05, cut: 1.0, bGroup: '', rho: 0.55, t1: 3, t2: 0, t4: 0, rhoF: 0.4, region: '', group: null,
-    lt1: 3, lt2: 0, lrho: 0.7, northDeg: '',
+    lt1: 3, lt2: 0, lrho: 0.7, northDeg: '', northMode: 'auto',
     exclude: 'лестни|\\bЛК\\b|коридор|холл|вестибюл', glassExclude: 'stemalit|эмал', code: '', object: ''
   };
   let st = { levels: [], res: [], sel: null, filter: 'all', level: null, plan: false, dec: { merge: [], split: [], assign: [], lanterns: {} }, normOv: {}, sections: {}, sectionDrafts: {} };
@@ -30,11 +30,12 @@ const KeoBim = (function () {
     if (d.lanterns !== undefined && (!map(d.lanterns) || !Object.values(d.lanterns).every(v => v === 'b3' || v === 'skip'))) fail();
     if (d.normOv !== undefined && (!map(d.normOv) || !Object.values(d.normOv).every(v => v === '-' || LIB.DATA.rooms.some(r => r.id === v)))) fail();
     if (d.shortSections !== undefined) BimSections.validateRecords(d.shortSections);
-    if (d.northDeg !== undefined) northOf(null, d.northDeg);
+    if (d.northMode !== undefined && !['auto','manual'].includes(d.northMode)) fail();
+    if (d.northDeg !== undefined) northOf(null, d.northDeg, d.northMode || BimNorth.modeOf(d.northDeg));
     return d;
   }
   function loadDec() { if (!modelKey()) return null; try { const j = JSON.parse(localStorage.getItem(decKey()) || 'null'); if (j) return validateDec(j); } catch (e) { st.storageWarning = 'Не удалось прочитать сохранённые решения этой модели.'; } return null; }
-  function decisionsData() { return { model: modelKey(), bGroup: S.bGroup, northDeg: S.northDeg, climate: Cc.climate(S, LIB.DATA.regions), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv, shortSections: st.sections }; }
+  function decisionsData() { return { model: modelKey(), bGroup: S.bGroup, northDeg: S.northDeg, northMode: S.northMode, climate: Cc.climate(S, LIB.DATA.regions), merge: st.dec.merge, split: st.dec.split, assign: st.dec.assign, lanterns: st.dec.lanterns, normOv: st.normOv, shortSections: st.sections }; }
   function restoreDec(d, initialGroup = '', initialClimate = null) {
     st.dec = { merge: d && d.merge || [], split: d && d.split || [], assign: d && d.assign || [], lanterns: d && d.lanterns || {} };
     st.normOv = d && d.normOv || {};
@@ -45,6 +46,7 @@ const KeoBim = (function () {
     const cl = Cc.climate((d && Object.prototype.hasOwnProperty.call(d, 'climate') ? d.climate : initialClimate) || {}, LIB.DATA.regions);
     S.region = cl ? cl.region : ''; S.group = cl ? cl.group : null;
     S.northDeg = d && Object.prototype.hasOwnProperty.call(d, 'northDeg') ? d.northDeg : initialClimate && initialClimate.northDeg !== undefined ? initialClimate.northDeg : '';
+    S.northMode = d && d.northMode || (d && Object.prototype.hasOwnProperty.call(d,'northDeg') ? BimNorth.modeOf(d.northDeg) : initialClimate && initialClimate.northMode || BimNorth.modeOf(S.northDeg));
   }
   function saveDec() {
     st.storageWarning = '';
@@ -215,7 +217,8 @@ const KeoBim = (function () {
       if (up !== null) l.shaded = `над фонарём непрозрачная конструкция (${f2(up, 1)} м выше стекла)`;
       const n45 = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([a, b]) => G.hitDir(C, top, [a, b, 1], 40) !== null).length;
       if (!l.shaded && n45 >= 2) l.note = (l.note ? l.note + '; ' : '') + `фонарь ${f2(l.av)}×${f2(l.bv)} м: окружающие конструкции выше 45° с ${n45} сторон из 4 — в методе Б.3 затенение фонаря не учитывается, результат может быть завышен`;
-      const az = Cc.azimuth(l.t, st.north.rot); l.ori = `${Math.round(az)}°/${Math.round((az + 90) % 360)}°`;
+      if (st.north.unknown) l.ori='север не задан';
+      else { const az = Cc.azimuth(l.t, st.north.rot); l.ori = `${Math.round(az)}°/${Math.round((az + 90) % 360)}°`; }
     });
   }
   // тип фонаря: «b3» — зенитный/шахтный по Б.3 (подтверждён автоматически: горизонтальное стекло в семействе с именем фонаря,
@@ -229,16 +232,14 @@ const KeoBim = (function () {
     if (rm) return isExcluded(rm) ? `под фонарём помещение ${rm.num} «${rm.name}» — исключено из расчёта (настройка)` : `под фонарём помещение ${rm.num} «${rm.name}» не входит в рассчитываемое пространство`;
     return id > 0 ? 'под фонарём часть без помещения Revit (контур не опознан)' : 'точка под фонарём попадает в стену или перегородку на высоте среза';
   }
-  // север: ручная поправка (настройка) или поворот из refPointTransformation (внутренние координаты Revit → общие, истинный север)
-  function northOf(T, raw = S.northDeg) {
-    const text = raw === null || raw === undefined ? '' : String(raw).trim();
-    if (text !== '') {
-      const rot = Number(text.replace(',', '.'));
-      if (!['string', 'number'].includes(typeof raw) || !Number.isFinite(rot)) throw new Error('Поправка на север должна быть конечным числом градусов.');
-      return { rot, src: `задан вручную: поправка ${f2(rot, 1)}°` };
+  // Manual angles replace auto and refer to the loaded Viewer world axes.
+  function northOf(T, raw = S.northDeg, mode = S.northMode) {
+    let world=null;
+    if (mode==='auto' && C?.m) {
+      try { const m=C.m, d=m.getData(); const matrix=m.getModelToViewerTransform?.() || d.placementWithOffset || d.placementTransform; world=matrix ? matrix.elements || [] : null; }
+      catch (_) { world=[]; }
     }
-    if (T && T.length >= 5 && Number.isFinite(T[0]) && Number.isFinite(T[1]) && (T[0] || T[1])) { const rot = -Math.atan2(T[1], T[0]) * 180 / Math.PI; return { rot, src: `истинный север Revit (refPointTransformation модели): поворот осей модели ${f2(rot, 1)}°` }; }
-    return { rot: 0, src: 'сведения о севере в модели не переданы — принят север по оси +Y Viewer (проверьте и задайте поправку в настройках)', unknown: true };
+    return BimNorth.resolve(T,raw,mode,world);
   }
   // нормы: назначение помещения по табл. А.1 (или выбор пользователя для пространства)
   function overrideRow(ov) { if (ov === '-') return null; const row = LIB.DATA.rooms.find(x => x.id === ov); if (!row) throw new Error('Сохранённое назначение помещения отсутствует в таблице норм: ' + ov + '. Выберите назначение заново.'); return row; }
@@ -262,6 +263,7 @@ const KeoBim = (function () {
       ls.forEach(l => { l.conf = lanConf(l); });
       const lsCalc = ls.filter(l => l.conf === 'b3'), lanPending = ls.filter(l => !l.conf).length;
       if (!o.length && !lsCalc.length) { out.push({ ...base, kind: 'dark', lans: ls, lanPending }); return; }
+      if (st.north.unknown) { out.push({...base,kind:'err',err:'Север не подтверждён. '+st.north.src,ops:o,lans:ls,lanPending}); return; }
       const env = { KEO: LIB.KEO, Engine: LIB.Engine, DATA: LIB.DATA, settings: { ...S, bGroup: st.group }, floor: L.floor, pts: L.cells.pts[i], Rp: L.Rp, T: st.T, north: st.north.rot,
         containsPoint: p => { const R = L.R, x = Math.floor((p[0] - R.minx) / R.cell), y = Math.floor((p[1] - R.miny) / R.cell); return x >= 0 && y >= 0 && x < R.W && y < R.H && L.lab[y * R.W + x] === i; },
         rows: rowsOf(sp), roomPts: rm => regPts.get(rm.reg !== undefined ? rm.reg : rm.sub) || [], shade: (f, A) => shade(f, A, L.floor) };
@@ -622,7 +624,7 @@ const KeoBim = (function () {
       ${categoryOverview()}
       ${lanOverview()}
       <p class="muted" style="font-size:11px">${esc(PRELIM)} Север: ${esc(st.north ? st.north.src : '—')}.</p>
-      <details class="kb-set"><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
+      <details class="kb-set"${st.north?.unknown ? ' open' : ''}><summary>Исходные допущения и настройки</summary>${settingsHTML()}</details>
       <div class="kb-row" style="margin-top:10px"><button class="kb-btn" data-a="csv">Таблица (CSV)</button><button class="kb-btn" data-a="json">Все исходные (JSON)</button><button class="kb-btn" data-a="dexp">Решения по составу (JSON)</button><button class="kb-btn" data-a="dimp">Загрузить решения</button>${st.dec.merge.length || st.dec.split.length || (st.dec.assign || []).length || Object.keys(st.dec.lanterns || {}).length || Object.keys(st.normOv).length || Object.keys(st.sections).length || Object.keys(st.sectionDrafts).length ? '<button class="kb-btn" data-a="dclr">Сбросить решения</button>' : ''}</div>
       <p class="muted" style="font-size:11px">Контуры восстановлены по срезу модели на высоте ${f2(S.cut, 1)} м над полом: помещения Revit опознаются по контуру с линиями разделения, состав расчётного пространства и затенение — по физическим стенам, перегородкам и витражам (линии разделения не считаются стенами). Расчёт — ядром калькулятора КЕО (СП 367.1325800.2025, прил. Б: Б.1 — боковое, Б.3 — верхнее, Б.4 — комбинированное). Экспериментальная версия: нормативная точность на модели не подтверждена.</p>`;
     main.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => planView(b.dataset.lv));
@@ -637,24 +639,28 @@ const KeoBim = (function () {
     main.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { if (!decisionReady()) return; const [k, v] = [b.dataset.lt, b.dataset.v]; st.dec.lanterns = st.dec.lanterns || {}; if (v) st.dec.lanterns[k] = v; else delete st.dec.lanterns[k]; saveDec(); rebuild(); });
     main.querySelectorAll('[data-lid]').forEach(b => b.onclick = () => focusLantern(+b.dataset.lid));
     const dc = main.querySelector('[data-a=dclr]'); if (dc) dc.onclick = () => { if (!decisionReady()) return; st.dec = { merge: [], split: [], assign: [], lanterns: {} }; st.normOv = {}; st.sections = {}; st.sectionDrafts = {}; saveDec(); rebuild(); };
+    main.querySelectorAll('[data-purpose-confirm]').forEach(b=>b.onclick=()=>setBuildingGroup(b.dataset.purposeConfirm).catch(e=>statusLine(e.message)));
     main.querySelector('[data-a=purpose]').onclick = () => setBuildingGroup(main.querySelector('[data-purpose]').value).catch(e => statusLine(e.message));
     bindSettings(main);
     renderDetail();
   }
   function purposeHTML() {
     const p = st.purpose, groups = [...new Set(LIB.DATA.rooms.map(r => r.g))];
-    const source = S.bGroup ? 'Задано вручную для этой модели' : 'Определено автоматически — первый прогон';
+    const source = S.bGroup ? 'Задано вручную для этой модели' : purposeGate().allowed ? 'Определено автоматически — первый прогон' : 'Предположение по названиям — требуется подтверждение';
     const notice = !p || p.status === 'unknown' ? 'Характерных названий недостаточно. Выберите назначение здания.'
       : p.status === 'ambiguous' ? 'Есть признаки нескольких назначений. Проверьте выбранный вариант и назначения отдельных помещений.'
       : p.status === 'tentative' ? 'Вывод по ограниченному набору признаков — проверьте назначение.' : 'Вывод по совокупности характерных помещений. Проверьте результат первого прогона.';
-    const evidence = p && p.candidates.slice(0, 3).map(c => `<li><b>${esc(c.group)}</b>: ${c.evidence.slice(0, 5).map(e => `${esc(e.name)}${e.count > 1 ? ` × ${e.count}` : ''}`).join('; ')}</li>`).join('');
+    const evidence = p && p.candidates.slice(0, 3).map(c => `<li><b>${esc(c.group)}</b> — балл ${f2(c.score,1)}: ${c.evidence.slice(0, 5).map(e => `${esc(e.name)}${e.count > 1 ? ` × ${e.count}` : ''} (${e.strong ? 'характерный' : 'слабый'} признак)`).join('; ')}${!S.bGroup ? ` <button class="kb-btn" data-purpose-confirm="${esc(c.group)}">Подтвердить этот вариант</button>` : ''}</li>`).join('');
+    const departments=Object.entries((st.rooms||[]).reduce((m,r)=>{const k=String(r.dep||'').trim();if(k)m[k]=(m[k]||0)+1;return m;},{})).sort((a,b)=>b[1]-a[1]).slice(0,12);
+    const structure=departments.length ? `<p>Группы/отделы из свойств Rooms: ${departments.map(([k,n])=>`${esc(k)} × ${n}`).join('; ')}. Эти значения показаны для проверки структуры, их смысл автоматически не подтверждён.</p>` : '';
     return `<section class="kb-purpose kb-set" aria-label="Назначение здания">
-      <b>Назначение здания: ${esc(st.group || 'не определено')}</b>
+      <b>${S.bGroup ? 'Назначение здания' : 'Предположение о назначении'}: ${esc(st.group || 'не определено')}</b>
       <p class="muted" style="font-size:12px;margin:4px 0">${source}. ${S.bGroup ? 'Автоматический анализ: ' + esc(p && p.group || 'не определено') + '.' : notice}</p>
       ${purposeGate().allowed ? '' : '<p class="kb-warn">Назначение не подтверждено: КЕО показан предварительно; норма и соответствие не определены. Выберите назначение ниже и нажмите «Применить и пересчитать». Расчётная точка и КЕО могут измениться после подтверждения.</p>'}
       <label>Уточнить назначение <select data-purpose style="max-width:100%;width:100%"><option value="">Автоматически по всем помещениям</option>${groups.map(g => `<option value="${esc(g)}"${S.bGroup === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select></label>
       <button class="kb-btn pri" data-a="purpose">Применить и пересчитать</button>
-      <details><summary>Почему выбрано это назначение</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Это предположение по названиям, а не подтверждённая классификация.</p>${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
+      <p class="muted">Если в здании разные функции, один общий выбор не подтверждает назначение каждой части. Проверьте состав и назначение отдельных расчётных пространств.</p>
+      <details><summary>Основания и альтернативы назначения</summary><p class="muted">Проанализировано помещений: ${p ? p.total : 0}, с названиями: ${p ? p.named : 0}. Общие служебные помещения не определяют тип здания; повторяющиеся названия имеют ограниченный вес. Баллы эвристические; повторения ограничены по весу, равные баллы не доказывают преимущество. Это предположение по названиям, а не подтверждённая классификация.</p>${structure}${evidence ? `<ul>${evidence}</ul>` : '<p>Характерные признаки не найдены.</p>'}</details>
       ${st.storageWarning ? `<p class="kb-warn">${esc(st.storageWarning)}</p>` : ''}
     </section>`;
   }
@@ -683,7 +689,7 @@ const KeoBim = (function () {
       const j = JSON.parse(t);
       validateDec(j);
       if (j.model && modelKey() && j.model !== modelKey()) throw new Error('файл относится к другой модели');
-      const north = northOf(st.T, Object.prototype.hasOwnProperty.call(j, 'northDeg') ? j.northDeg : S.northDeg);
+      const north = northOf(st.T, Object.prototype.hasOwnProperty.call(j, 'northDeg') ? j.northDeg : S.northDeg, j.northMode || (Object.prototype.hasOwnProperty.call(j,'northDeg') ? BimNorth.modeOf(j.northDeg) : S.northMode));
       restoreDec(j, S.bGroup, S); st.north = north; refreshPurpose(); saveDec(); rebuild();
     }).catch(e => { if (closeVersion === importedVersion) statusLine('Не удалось прочитать решения: ' + e.message); }); };
     inp.click();
@@ -700,6 +706,14 @@ const KeoBim = (function () {
       ${evidence.length ? `<details><summary>Местоположение из модели — проверьте</summary><ul>${evidence.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : '<p class="muted">Надёжное местоположение из модели не получено.</p>'}
       ${st.locationWarning ? `<p>${esc(st.locationWarning)}</p>` : ''}</section>`;
   }
+  function northHTML() {
+    const n=st.north, known=n && !n.unknown, rotation=known ? -n.rot : null;
+    return `<section aria-label="Истинный север"><b>Север: ${esc(n?.src || 'ещё не проверен')}</b>
+      <label>Источник севера <select data-s="northMode"><option value="auto"${S.northMode==='auto'?' selected':''}>Из модели (авто)</option><option value="manual"${S.northMode==='manual'?' selected':''}>Задать вручную</option></select></label>
+      <label>Поправка азимута α, ° (+Y Viewer → азимут α) <input type="text" inputmode="decimal" data-s="northDeg" value="${esc(S.northDeg)}"${S.northMode==='auto'?' disabled':''}></label>
+      ${known ? `<svg width="112" height="112" viewBox="0 0 112 112" role="img" aria-label="Истинный север в плоскости XY Viewer, поправка ${f2(n.rot,1)} градусов"><path d="M48 86V14M12 50H90" stroke="#8995a3" fill="none"/><text x="52" y="13" font-size="10">+Y</text><text x="89" y="54" font-size="10">+X</text><g transform="rotate(${rotation} 48 50)"><path d="M48 50V23M42 29L48 20L54 29" stroke="#187694" stroke-width="3" fill="none"/><text x="44" y="18" font-size="12">N</text></g></svg>` : '<p class="kb-warn">Север не задан: КЕО и нормативный результат не вычисляются. Нулевой угол автоматически не подставляется.</p>'}
+      <p class="muted">Схема в осях загруженного Viewer, независимо от поворота камеры: +Y вверх, +X вправо. При α=0° север совпадает с +Y; при α=90° направление +Y имеет азимут 90°, север направлен к −X. Азимут проёма = его угол по часовой от +Y + α. Ручной угол заменяет авто, а не прибавляется к нему. Связанные элементы уже размещены в координатах Viewer. Укажите ориентацию по подтверждённому плану; адрес и координаты не задают север.</p></section>`;
+  }
   function settingsHTML() {
     const opt = (list, cur) => list.map((x, i) => `<option value="${i}"${+cur === i ? ' selected' : ''}>${esc(x.t)} — ${f2(x.v)}</option>`).join('');
     return `<label>Регион строительства (справочник СП 52, прил. Е) <select data-s="region"><option value="">Не выбран / группа вручную</option>${LIB.DATA.regions.map(r => `<option value="${esc(r.name)}"${S.region === r.name ? ' selected' : ''}>${esc(r.name)} — группа ${r.g}</option>`).join('')}</select></label>
@@ -713,8 +727,8 @@ const KeoBim = (function () {
       <label>ρф — отражение фасадов противостоящих зданий <input type="number" step="0.05" data-s="rhoF" value="${S.rhoF}"></label>
       <label>Не рассчитывать и не объединять автоматически (имя содержит) <input type="text" data-s="exclude" value="${esc(S.exclude)}"></label>
       <label>Высота среза для контуров, м <input type="number" step="0.1" data-s="cut" value="${S.cut}"></label>
-      <label>Поправка на север, ° по часовой (пусто — из модели) <input type="text" data-s="northDeg" value="${esc(S.northDeg)}"></label>
-      <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по истинному северу из модели. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
+      ${northHTML()}
+      <p class="muted" style="font-size:11px">Тип здания для норм: ${esc(st.group || 'не определён')}. Норма пространства из нескольких помещений — наибольшая из норм входящих помещений. Ориентация — по выбранному источнику истинного севера; источник и угол показаны выше. Затенение окон: козырьки и балконы — лучами по модели (K, табл. Б.19), противостоящие здания — по карте высот (схема № 1, εзд, bф, Kзд); перегородки внутри пространства закрывают часть окна для расчётной точки. Фонари — прозрачные элементы, обращённые вверх (окна и панели в кровле, стеклянные кровли, обобщённые модели с «фонарь/зенит/skylight» в имени); перекрытия и потолки фонарями не считаются.</p>
       <div class="kb-row"><button class="kb-btn pri" data-a="rerun">Пересчитать</button></div>`;
   }
   function bindSettings(root) {
@@ -729,9 +743,10 @@ const KeoBim = (function () {
         root.querySelector('[data-s=group]').value = S.group ?? '';
       } else if (k === 'group') {
         S.region = ''; S.group = el.value === '' ? null : +el.value; root.querySelector('[data-s=region]').value = '';
-      } else S[k] = (el.type === 'text' || k === 'bGroup') ? el.value : +el.value;
-      if (!['region', 'group', 'northDeg'].includes(k)) { st.dirty = true; st.res = []; st.sel = null; draw(); renderList(); statusLine('Настройки изменены — нажмите «Пересчитать».'); }
-      if (k === 'northDeg') {
+      } else S[k] = (el.type === 'text' || k === 'bGroup' || k === 'northMode') ? el.value : +el.value;
+      if (!['region', 'group', 'northDeg', 'northMode'].includes(k)) { st.dirty = true; st.res = []; st.sel = null; draw(); renderList(); statusLine('Настройки изменены — нажмите «Пересчитать».'); }
+      if (k === 'northDeg' || k === 'northMode') {
+        if (k === 'northDeg') S.northMode='manual';
         try { st.north = northOf(st.T); saveDec(); rebuild(); }
         catch (e) { st.res = []; st.dirty = true; draw(); renderList(); statusLine('Ошибка поправки на север: ' + e.message); }
       }
@@ -923,7 +938,7 @@ const KeoBim = (function () {
   }
   function exportJSON() {
     if (!decisionReady()) return;
-    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { confidence: purposeGate(), selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), categoryDiagnostics: st.categoryDiagnostics, calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, normative: { confidence: purposeGate(), norm: enOf(r), status: status(r).t }, state: normPending(r) ? undefined : r.st, previewInputs: normPending(r) ? { warning: 'Назначение и расчётная точка не подтверждены; это предварительные исходные, не файл калькулятора', input: r.st } : undefined, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
+    download('КЕО_по_модели.json', JSON.stringify({ model: modelKey(), climate: Cc.climate(S, LIB.DATA.regions), locationEvidence: { aec: st.aecLoc, properties: st.location }, purpose: { confidence: purposeGate(), selected: S.bGroup, effective: st.group, source: S.bGroup ? 'manual' : 'auto', analysis: st.purpose }, north: st.north, settings: S, decisions: st.dec, normOv: st.normOv, shortSections: st.sections, roomDiagnostics: roomDiagnosticData(), categoryDiagnostics: st.categoryDiagnostics, calculationErrors: st.res.filter(r => r.kind === 'err').map(r => ({ level: r.level, key: r.key, rooms: r.rooms.map(rm => ({ key: rm.key, num: rm.num, name: rm.name })), error: r.err, notes: r.notes || [], section: r.section })), spaces: st.res.filter(r => r.st).map(r => ({ level: r.level, rooms: r.rooms.map(x => ({ key: x.key, num: x.num, name: x.name, area: x.area, areaRaw: x.areaRaw, areaUnit: x.areaUnit })), mode: r.mode, e: eOf(r), comb: r.comb ? { eTop: r.comb.eTop, eSide: r.comb.eSide, e: r.comb.e, eAvgR: r.comb.eAvgR, uni: r.comb.uni } : undefined, normative: { confidence: purposeGate(), norm: enOf(r), status: status(r).t }, state: normPending(r) ? undefined : r.st, previewInputs: normPending(r) ? { warning: 'Назначение и расчётная точка не подтверждены; это предварительные исходные, не файл калькулятора', input: r.st } : undefined, notes: r.notes, section: r.section })) }, null, 1), 'application/json');
   }
 
   /* ---------- запуск ---------- */
@@ -937,6 +952,7 @@ const KeoBim = (function () {
     stopBindingWatch(); binding = null; clearVisuals();
     const { bGroup, ...otherOpts } = opts || {};
     Object.assign(S, otherOpts);
+    if (opts && Object.prototype.hasOwnProperty.call(opts,'northDeg') && !Object.prototype.hasOwnProperty.call(opts,'northMode')) S.northMode=BimNorth.modeOf(opts.northDeg);
     if (!ui || !document.body.contains(ui)) mount();
     const t0 = performance.now();
     try {

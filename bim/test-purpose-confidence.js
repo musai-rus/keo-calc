@@ -29,13 +29,13 @@ bundle=bundle.replace(/  function download\(name, text, type\) \{[^\n]+\}/,'  fu
 vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context);
 (async()=>{
  await vm.runInContext(`(async()=>{
-  const originalRooms=G.rooms;G.rooms=async C=>(await originalRooms(C)).map((r,i)=>({...r,name:i%2?'Спальня':'Мастер-спальня'}));G.location=async()=>[];
+  const originalRooms=G.rooms;G.rooms=async C=>(await originalRooms(C)).map((r,i)=>({...r,name:i%2?'Спальня':'Мастер-спальня',dep:'Synthetic apartment group'}));G.location=async()=>[];
   await KeoBim.run({region:'г. Москва'});
   assert.ok(['tentative','unknown'].includes(KeoBim.st().purpose.status));assert.equal(KeoBim.S.bGroup,'');
   const rs=KeoBim.st().res.filter(r=>r.kind==='calc');assert.ok(rs.length);
   const numbers=rs.map(r=>r.comb?.eAvgR??r.C.res.eFinal);
   rs.forEach(r=>{assert.equal(r.C.pass,null);assert.equal(r.C.norm.v,null);assert.equal(KeoBim._en(r),null);assert.equal(KeoBim._status(r).t,'подтвердите назначение здания')});
-  assert.match(KeoBim._purposeHTML(),/Назначение не подтверждено/);assert.match(document.getElementById('kb-status').textContent,/Норма и соответствие не определены/);
+  assert.match(KeoBim._purposeHTML(),/Назначение не подтверждено/);assert.match(KeoBim._purposeHTML(),/Предположение по названиям/);assert.match(KeoBim._purposeHTML(),/Подтвердить этот вариант/);assert.match(KeoBim._purposeHTML(),/слабый признак/);assert.match(KeoBim._purposeHTML(),/один общий выбор не подтверждает/);assert.match(KeoBim._purposeHTML(),/Synthetic apartment group × 4/);assert.match(document.getElementById('kb-status').textContent,/Норма и соответствие не определены/);
   KeoBim.st().sel=rs[0];KeoBim._detail();const html=document.getElementById('kb-detail').innerHTML;assert.match(html,/Вычисленный КЕО предварительный/);assert.equal(html.includes('Полный разбор: формулы'),false);assert.equal(html.includes('Исходные для калькулятора (.json)'),false);assert.equal(html.includes('Норма: табл.'),false);
   assert.throws(()=>KeoBim._exportOne(rs[0]),/Подтвердите назначение/);
   KeoBim._exportJSON();const out=JSON.parse(capturedDownload.text);assert.equal(out.purpose.confidence.allowed,false);out.spaces.forEach(r=>{assert.equal(r.state,undefined);assert.equal(r.normative.norm,null);assert.ok(r.previewInputs.warning);assert.equal(r.normative.status,'подтвердите назначение здания')});
