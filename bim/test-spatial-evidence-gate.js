@@ -34,7 +34,7 @@ c.document={querySelector:()=>({}),getElementById:id=>id==='kb-status'?status:nu
 c.localStorage={getItem:()=>null,setItem(){}};require('./fixture-binding-dom.js')(c);
 vm.runInContext(scripts[0],c);
 let bundle=fs.readFileSync(__dirname+'/keo-bim.js','utf8');
-bundle=bundle.replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){},querySelector:s=>document.getElementById(s.slice(1))}};draw=()=>{};renderList=()=>{};\n  return { run, st: () => st, S,');
+bundle=bundle.replace('  return { run, st: () => st, S,','  mount=()=>{ui={remove(){},querySelector:s=>document.getElementById(s.slice(1))}};draw=()=>{};renderList=()=>{};\n  return { _census:census, run, st: () => st, S,');
 vm.runInContext(bundle,c);vm.runInContext(scripts[1].split('const log=document.querySelector')[0],c);
 (async()=>{
  await vm.runInContext(`(async()=>{
@@ -44,6 +44,7 @@ vm.runInContext(bundle,c);vm.runInContext(scripts[1].split('const log=document.q
   assert.ok(Number.isFinite(KeoBim.st().elapsedMs));assert.equal(calculations,0);assert.ok(KeoBim.st().res.some(r=>r.kind==='nogeo'));
   assert.ok(KeoBim.st().res.every(r=>r.kind!=='calc'&&!r.C&&!r.st));
   assert.ok(KeoBim.st().levels.every(l=>l.spaces.length===0));
+  assert.equal(KeoBim._census().lans,2);assert.equal(KeoBim._census().lansLevel,2);assert.equal(KeoBim._census().lansIn,0);
   await KeoBim.setBuildingGroup(DATA.rooms.find(r=>r.id==='A57').g);
   assert.equal(calculations,0);assert.ok(KeoBim.st().res.every(r=>r.kind!=='calc'));
  })()`,c);

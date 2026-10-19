@@ -98,6 +98,12 @@ const KeoBim = (function () {
       st.storageWarning = ''; restoreDec(loadDec(), opts && opts.bGroup, opts);
       st.model = key; st.modelRef = C.m;
     }
+    // Explicit launch settings belong to this bookmark, even on a model with
+    // saved decisions. A normal rerun without options retains the current choice.
+    if (opts && (Object.prototype.hasOwnProperty.call(opts,'region') || Object.prototype.hasOwnProperty.call(opts,'group'))) {
+      const cl = Cc.climate(opts, LIB.DATA.regions);
+      S.region = cl ? cl.region : ''; S.group = cl ? cl.group : null;
+    }
     // лучи Viewer (наружная область, затенение, фонари) не видят геометрию за секущей плоскостью: анализ — без сечения
     // (повторный запуск из «План L01» давал 43 рассчитанных пространства вместо 63)
     progress('Каталог элементов…');
@@ -619,7 +625,9 @@ const KeoBim = (function () {
     st.res.forEach(r => r.kind !== 'nogeo' && r.rooms.forEach(rm => cnt.set(rm.key, (cnt.get(rm.key) || 0) + 1)));
     const ex = all.filter(isExcluded).length, inSp = [...cnt.values()].filter(n => n === 1).length, dup = [...cnt.values()].filter(n => n > 1).length;
     const nogeo = st.res.filter(r => r.kind === 'nogeo').length, units = all.filter(r => r.warn && r.warn.length).length;
-    return { all: all.length, ex, inSp, dup, nogeo, units, noLevel: (st.noLevel || []).length, lans: LANS.length, lansIn: LANS.filter(l => l.lvl).length };
+    return { all: all.length, ex, inSp, dup, nogeo, units, noLevel: (st.noLevel || []).length, lans: LANS.length,
+      lansLevel: LANS.filter(l => l.lvl).length,
+      lansIn: LANS.filter(l => l.lvl && Number.isInteger(l.space) && l.space >= 0 && st.levels.some(L => L.name === l.lvl && L.spaces[l.space]?.rooms.length)).length };
   }
   function renderList() {
     if (!ownsPanel()) return;

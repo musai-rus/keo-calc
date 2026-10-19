@@ -14,6 +14,7 @@ h1{font-size:26px;margin:0 0 6px}p.lead{color:var(--muted);margin:0 0 24px}
 .bm{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:12px 18px;border-radius:10px;cursor:grab}
 ol{padding-left:22px}li{margin:6px 0}code{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:14px}
 .muted{color:var(--muted);font-size:14px}a{color:var(--accent)}
+label{display:block;font-weight:600}select{display:block;box-sizing:border-box;width:100%;margin:8px 0 12px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font:inherit}.bm{max-width:100%;box-sizing:border-box}
 </style>
 </head>
 <body>
@@ -22,9 +23,106 @@ ol{padding-left:22px}li{margin:6px 0}code{background:var(--bg);border:1px solid 
 <p class="lead">Проверочный расчёт КЕО всех помещений модели Revit прямо в окне Autodesk Viewer: заливка помещений на плане, метки КЕО, таблица и разбор по СП 367.1325800.2025. Ручной калькулятор — <a href="./">здесь</a>.</p>
 
 <div class="card">
-<p><b>1. Установите кнопку.</b> Перетащите её мышью на панель закладок Chrome (если панели не видно — <code>Ctrl + Shift + B</code>):</p>
-<p><a class="bm" href="javascript:(async () =&gt; { const key = Symbol.for(&#x27;keo-bim:loader&#x27;); const previous = window[key]; if (previous) previous.controller.abort(); const request = {controller:new AbortController()}; window[key] = request; try { const response = await fetch(&#x27;https://musai-rus.github.io/keo-calc/keo-bim.js?&#x27; + Date.now(), {signal:request.controller.signal,cache:&#x27;no-store&#x27;}); if (window[key] !== request) return; if (!response.ok) throw new Error(&#x27;HTTP &#x27; + response.status); const code = await response.text(); if (window[key] !== request) return; const oldApp = window.KeoBim; (0,eval)(code); const app = window.KeoBim; if (!app || app === oldApp || typeof app.run !== &#x27;function&#x27;) throw new Error(&#x27;загруженный файл не создал новую версию КЕО&#x27;); await app.run(); } catch (error) { if (window[key] === request) alert(&#x27;КЕО: запуск не выполнен. &#x27; + (error?.message || String(error))); } finally { if (window[key] === request) delete window[key]; } })();">КЕО по модели</a></p>
+<p><b>1. Выберите регион и установите кнопку.</b> Регион сохранится в закладке при перетаскивании.</p>
+<label for="bookmark-region">Регион строительства</label>
+<select id="bookmark-region" aria-describedby="bookmark-summary bookmark-help">
+<option value="">Выбрать позже в Viewer</option>
+<!-- KEO_REGION_OPTIONS -->
+<option value="Республика Адыгея">Республика Адыгея — группа 5</option>
+<option value="Алтайский край">Алтайский край — группа 2</option>
+<option value="Амурская обл.">Амурская обл. — группа 5</option>
+<option value="Архангельская обл.">Архангельская обл. — группа 4</option>
+<option value="Астраханская обл.">Астраханская обл. — группа 5</option>
+<option value="Республика Башкортостан">Республика Башкортостан — группа 1</option>
+<option value="Белгородская обл.">Белгородская обл. — группа 2</option>
+<option value="Брянская обл.">Брянская обл. — группа 2</option>
+<option value="Республика Бурятия">Республика Бурятия — группа 2</option>
+<option value="Владимирская обл.">Владимирская обл. — группа 1</option>
+<option value="Волгоградская обл.">Волгоградская обл. — группа 2</option>
+<option value="Вологодская обл.">Вологодская обл. — группа 3</option>
+<option value="Воронежская обл.">Воронежская обл. — группа 2</option>
+<option value="Республика Дагестан">Республика Дагестан — группа 5</option>
+<option value="Еврейская АО">Еврейская АО — группа 2</option>
+<option value="Забайкальский край">Забайкальский край — группа 2</option>
+<option value="Ивановская обл.">Ивановская обл. — группа 3</option>
+<option value="Республика Ингушетия">Республика Ингушетия — группа 2</option>
+<option value="Иркутская обл.">Иркутская обл. — группа 2</option>
+<option value="Кабардино-Балкарская Республика">Кабардино-Балкарская Республика — группа 2</option>
+<option value="Калининградская обл.">Калининградская обл. — группа 3</option>
+<option value="Республика Калмыкия">Республика Калмыкия — группа 5</option>
+<option value="Калужская обл.">Калужская обл. — группа 1</option>
+<option value="Камчатский край">Камчатский край — группа 1</option>
+<option value="Карачаево-Черкесская Республика">Карачаево-Черкесская Республика — группа 5</option>
+<option value="Республика Карелия">Республика Карелия — группа 3</option>
+<option value="Кемеровская обл.">Кемеровская обл. — группа 1</option>
+<option value="Кировская обл.">Кировская обл. — группа 3</option>
+<option value="Республика Коми">Республика Коми — группа 2</option>
+<option value="Костромская обл.">Костромская обл. — группа 3</option>
+<option value="Краснодарский край">Краснодарский край — группа 5</option>
+<option value="Красноярский край (севернее 63° с.ш.)">Красноярский край (севернее 63° с.ш.) — группа 1</option>
+<option value="Красноярский край (южнее 63° с.ш.)">Красноярский край (южнее 63° с.ш.) — группа 2</option>
+<option value="Республика Крым">Республика Крым — группа 5</option>
+<option value="Курганская обл.">Курганская обл. — группа 1</option>
+<option value="Курская обл.">Курская обл. — группа 2</option>
+<option value="Ленинградская обл.">Ленинградская обл. — группа 3</option>
+<option value="Липецкая обл.">Липецкая обл. — группа 2</option>
+<option value="Магаданская обл.">Магаданская обл. — группа 2</option>
+<option value="Республика Марий Эл">Республика Марий Эл — группа 1</option>
+<option value="Республика Мордовия">Республика Мордовия — группа 1</option>
+<option value="г. Москва">г. Москва — группа 1</option>
+<option value="Московская обл.">Московская обл. — группа 1</option>
+<option value="Мурманская обл.">Мурманская обл. — группа 4</option>
+<option value="Ненецкий АО">Ненецкий АО — группа 3</option>
+<option value="Нижегородская обл.">Нижегородская обл. — группа 1</option>
+<option value="Новгородская обл.">Новгородская обл. — группа 3</option>
+<option value="Новосибирская обл.">Новосибирская обл. — группа 1</option>
+<option value="Омская обл.">Омская обл. — группа 2</option>
+<option value="Оренбургская обл.">Оренбургская обл. — группа 2</option>
+<option value="Орловская обл.">Орловская обл. — группа 2</option>
+<option value="Пензенская обл.">Пензенская обл. — группа 2</option>
+<option value="Пермский край">Пермский край — группа 1</option>
+<option value="Приморский край">Приморский край — группа 5</option>
+<option value="Псковская обл.">Псковская обл. — группа 3</option>
+<option value="Ростовская обл.">Ростовская обл. — группа 5</option>
+<option value="Рязанская обл.">Рязанская обл. — группа 1</option>
+<option value="Самарская обл.">Самарская обл. — группа 2</option>
+<option value="г. Санкт-Петербург">г. Санкт-Петербург — группа 3</option>
+<option value="Саратовская обл.">Саратовская обл. — группа 2</option>
+<option value="Республика Саха (Якутия) (севернее 63° с.ш.)">Республика Саха (Якутия) (севернее 63° с.ш.) — группа 1</option>
+<option value="Республика Саха (Якутия) (южнее 63° с.ш.)">Республика Саха (Якутия) (южнее 63° с.ш.) — группа 2</option>
+<option value="Сахалинская обл.">Сахалинская обл. — группа 2</option>
+<option value="Свердловская обл.">Свердловская обл. — группа 1</option>
+<option value="г. Севастополь">г. Севастополь — группа 5</option>
+<option value="Республика Северная Осетия — Алания">Республика Северная Осетия — Алания — группа 2</option>
+<option value="Смоленская обл.">Смоленская обл. — группа 1</option>
+<option value="Ставропольский край">Ставропольский край — группа 5</option>
+<option value="Тамбовская обл.">Тамбовская обл. — группа 2</option>
+<option value="Республика Татарстан">Республика Татарстан — группа 1</option>
+<option value="Тверская обл.">Тверская обл. — группа 3</option>
+<option value="Томская обл.">Томская обл. — группа 2</option>
+<option value="Тульская обл.">Тульская обл. — группа 1</option>
+<option value="Республика Тыва">Республика Тыва — группа 2</option>
+<option value="Тюменская обл.">Тюменская обл. — группа 1</option>
+<option value="Удмуртская Республика">Удмуртская Республика — группа 1</option>
+<option value="Ульяновская обл.">Ульяновская обл. — группа 2</option>
+<option value="Хабаровский край (севернее 55° с.ш.)">Хабаровский край (севернее 55° с.ш.) — группа 1</option>
+<option value="Хабаровский край (южнее 55° с.ш.)">Хабаровский край (южнее 55° с.ш.) — группа 2</option>
+<option value="Республика Хакасия">Республика Хакасия — группа 2</option>
+<option value="Ханты-Мансийский АО — Югра">Ханты-Мансийский АО — Югра — группа 2</option>
+<option value="Челябинская обл.">Челябинская обл. — группа 1</option>
+<option value="Чеченская Республика">Чеченская Республика — группа 2</option>
+<option value="Чувашская Республика">Чувашская Республика — группа 1</option>
+<option value="Чукотский АО">Чукотский АО — группа 1</option>
+<option value="Ямало-Ненецкий АО">Ямало-Ненецкий АО — группа 3</option>
+<option value="Ярославская обл.">Ярославская обл. — группа 3</option>
+<!-- /KEO_REGION_OPTIONS -->
+</select>
+<p class="muted" id="bookmark-help">Сочи — Краснодарский край. Для территорий, разделённых по широте, выберите подходящую часть региона. Группы — по справочнику СП 52, приложение Е.</p>
+<p id="bookmark-summary" class="muted" role="status" aria-live="polite">Регион в кнопку не записан.</p>
+<p>Перетащите кнопку на панель закладок Chrome (если панели не видно — <code>Ctrl + Shift + B</code>):</p>
+<p><a class="bm" href="javascript:(async (options = {}) =&gt; { const key = Symbol.for(&#x27;keo-bim:loader&#x27;); const previous = window[key]; if (previous) previous.controller.abort(); const request = {controller:new AbortController()}; window[key] = request; try { const response = await fetch(&#x27;https://musai-rus.github.io/keo-calc/keo-bim.js?&#x27; + Date.now(), {signal:request.controller.signal,cache:&#x27;no-store&#x27;}); if (window[key] !== request) return; if (!response.ok) throw new Error(&#x27;HTTP &#x27; + response.status); const code = await response.text(); if (window[key] !== request) return; const oldApp = window.KeoBim; (0,eval)(code); const app = window.KeoBim; if (!app || app === oldApp || typeof app.run !== &#x27;function&#x27;) throw new Error(&#x27;загруженный файл не создал новую версию КЕО&#x27;); await app.run(options); } catch (error) { if (window[key] === request) alert(&#x27;КЕО: запуск не выполнен. &#x27; + (error?.message || String(error))); } finally { if (window[key] === request) delete window[key]; } })({});">КЕО по модели</a></p>
 <p class="muted">Кнопка каждый раз загружает последнюю версию скрипта. Ошибка загрузки не запускает оставшуюся в памяти старую версию. При повторном нажатии во время загрузки используется последний запрос.</p>
+<p class="muted">Изменение выбора на этой странице не меняет уже установленную закладку. Чтобы записать другой регион, перетащите кнопку заново и замените прежнюю закладку.</p>
 </div>
 
 <div class="card">
@@ -32,9 +130,9 @@ ol{padding-left:22px}li{margin:6px 0}code{background:var(--bg);border:1px solid 
 <ol>
 <li>Откройте модель на <a href="https://viewer.autodesk.com">viewer.autodesk.com</a> и дождитесь загрузки.</li>
 <li>Слева в «Просмотрах» выберите <b>3D</b> (на листах расчёт не работает).</li>
-<li>Нажмите закладку «КЕО по модели». Справа появится панель анализа. При первом запуске КЕО ожидает подтверждения региона — число рассчитанных пространств до выбора равно нулю.</li>
+<li>Нажмите закладку «КЕО по модели». Справа появится панель анализа. Если регион записан в кнопке, он применится сразу. Без него и без сохранённого выбора модели КЕО ожидает подтверждения региона.</li>
 </ol>
-<p><b>3. Подтвердите регион.</b> Нажмите «Выбрать регион» в предупреждении панели: откроются «Исходные допущения и настройки». Выберите регион из справочника СП 52 или явно задайте группу светового климата 1–5 — КЕО пересчитается автоматически. До выбора КЕО не рассчитывается. Адрес и координаты модели — сведения для проверки, а не автоматическое определение группы; значение 0/0 может означать незаданные координаты. Выбор сохраняется для этой модели в текущем профиле браузера. В новом профиле или окне инкогнито его может не быть: подтвердите регион заново.</p>
+<p><b>3. Проверьте регион.</b> В панели показаны применённый регион и группа светового климата. Если регион не задан, нажмите «Выбрать регион»: откроются настройки со справочником СП 52 и ручным выбором группы 1–5. Выбор сохраняется для модели в текущем профиле браузера. Регион, записанный в закладке, применяется при каждом её запуске, в том числе в новом профиле. Адрес и координаты модели не определяют группу автоматически. Наличие региона не отменяет проверок геометрии и принадлежности помещений.</p>
 <p><b>4. Проверьте назначение здания.</b> Автоматический анализ показывает предположение в «Основания и альтернативы назначения». При слабых или противоречивых признаках норма и соответствие не определены. Проверьте назначение, выберите нужный вариант и нажмите <b>«Применить и пересчитать»</b>. Результаты всех этажей обновятся в той же панели. Выбор сохраняется для этой модели; пункт «Автоматически по всем помещениям» возвращает автоматический режим.</p>
 <p class="muted">Для разных функций внутри одного здания можно уточнить назначение отдельного пространства в его карточке. Сообщение «уточните назначение» означает, что программа не распознала функцию помещения, а не что КЕО не нормируется.</p>
 <p class="muted">Нажмите на метку или строку таблицы — откроется разбор помещения: окна, затенение, формулы, схема. После подтверждения назначения кнопка «Исходные для калькулятора» сохраняет файл, который открывается в ручном калькуляторе (там же — PDF со штампом).</p>
@@ -58,5 +156,29 @@ ol{padding-left:22px}li{margin:6px 0}code{background:var(--bg);border:1px solid 
 </ul>
 </div>
 </main>
+<!-- KEO_BOOKMARKLET_SETUP -->
+<script>
+/* Installation page only. Embed the selection in the dragged link itself. */
+(() => {
+  const loader = "(async (options = {}) => { const key = Symbol.for('keo-bim:loader'); const previous = window[key]; if (previous) previous.controller.abort(); const request = {controller:new AbortController()}; window[key] = request; try { const response = await fetch('https://musai-rus.github.io/keo-calc/keo-bim.js?' + Date.now(), {signal:request.controller.signal,cache:'no-store'}); if (window[key] !== request) return; if (!response.ok) throw new Error('HTTP ' + response.status); const code = await response.text(); if (window[key] !== request) return; const oldApp = window.KeoBim; (0,eval)(code); const app = window.KeoBim; if (!app || app === oldApp || typeof app.run !== 'function') throw new Error('загруженный файл не создал новую версию КЕО'); await app.run(options); } catch (error) { if (window[key] === request) alert('КЕО: запуск не выполнен. ' + (error?.message || String(error))); } finally { if (window[key] === request) delete window[key]; } })";
+  const region = document.getElementById('bookmark-region');
+  const button = document.querySelector('a.bm');
+  const summary = document.getElementById('bookmark-summary');
+  function update() {
+    const selected = [...region.options].find(o => o.value === region.value);
+    const name = selected?.value || '';
+    const options = name ? {region:name} : {};
+    button.setAttribute('href', 'javascript:' + loader + '(' + JSON.stringify(options) + ');');
+    button.textContent = 'КЕО по модели' + (name ? ' — ' + name : '');
+    summary.textContent = name
+      ? 'В кнопке сохранён регион: ' + selected.textContent + '. При запуске он заменит прежний выбор региона этой модели.'
+      : 'Регион в кнопку не записан. Выберите его в Viewer; сохранённый выбор модели будет использован повторно.';
+  }
+  region.addEventListener('change', update);
+  update();
+})();
+
+</script>
+<!-- /KEO_BOOKMARKLET_SETUP -->
 </body>
 </html>

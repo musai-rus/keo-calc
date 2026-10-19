@@ -1,5 +1,5 @@
 /* Source for the public installation button. No prior console setup required. */
-(async () => {
+(async (options = {}) => {
   const key = Symbol.for('keo-bim:loader');
   const previous = window[key];
   if (previous) previous.controller.abort();
@@ -15,10 +15,10 @@
     (0,eval)(code);
     const app = window.KeoBim;
     if (!app || app === oldApp || typeof app.run !== 'function') throw new Error('загруженный файл не создал новую версию КЕО');
-    await app.run();
+    await app.run(options);
   } catch (error) {
     if (window[key] === request) alert('КЕО: запуск не выполнен. ' + (error?.message || String(error)));
   } finally {
     if (window[key] === request) delete window[key];
   }
-})();
+})

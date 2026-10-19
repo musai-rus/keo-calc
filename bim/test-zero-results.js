@@ -21,6 +21,14 @@ vm.runInContext(bundle,context);vm.runInContext(scripts[1].split('const log=docu
   region.value='Краснодарский край';region.onchange();assert.ok(KeoBim.st().res.some(r=>r.kind==='calc'));assert.match(statusElement.textContent,/Пересчёт завершён: рассчитано пространств — [1-9]/);
   assert.equal(KeoBim._climateHTML().includes('data-a="climate"'),false);const results=()=>JSON.stringify(KeoBim.st().res.map(r=>r.comb?.eAvgR??r.C?.res?.eFinal));const initial=results();
   await KeoBim.run();assert.equal(results(),initial);assert.match(statusElement.textContent,/Готово.*рассчитано пространств — [1-9]/);
+  // A newly loaded bookmark has an explicit region even when storage says Moscow.
+  await KeoBim.run({region:'г. Москва'});assert.equal(KeoBim.S.group,1);
+  KeoBim.st().model=null;
+  await KeoBim.run({region:'Краснодарский край'});assert.equal(KeoBim.S.region,'Краснодарский край');assert.equal(KeoBim.S.group,5);assert.equal(results(),initial);
+  await KeoBim.run();assert.equal(KeoBim.S.group,5);assert.equal(results(),initial);
+  KeoBim.st().model=null;await KeoBim.run();assert.equal(KeoBim.S.group,5);
+  await KeoBim.run({region:'Unknown region',group:5});assert.equal(KeoBim.S.group,null);assert.match(statusElement.textContent,/КЕО не рассчитан.*регион/);
+  await KeoBim.run({region:'Краснодарский край'});
   G.openings=allOpenings;await KeoBim.run();assert.match(statusElement.textContent,/КЕО не рассчитан.*Недостаточно данных/);assert.equal(statusElement.textContent.includes('Готово'),false);G.openings=supportedOpenings;
   // Incognito/new model/profile has no inherited climate choice.
   NOP_VIEWER.model=makeModel('test-purpose:fresh-profile');await KeoBim.run();assert.match(statusElement.textContent,/КЕО не рассчитан.*регион/);
