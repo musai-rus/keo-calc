@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict'),S=require('./native-spaces'),H=require('./native-shaft-sections');
+const quad=(a,b,c,d)=>[[a,b,c],[a,c,d]];
+function wall(loop,z0=0,z1=3){return loop.flatMap((a,i)=>{const b=loop[(i+1)%loop.length];return quad([...a,z0],[...b,z0],[...b,z1],[...a,z1]);});}
+const square=(a,b)=>[[a,a],[b,a],[b,b],[a,b]],tube=[...wall(square(0,4)),...wall(square(1,3))];
+const run=(triangles=tube,levels=[1,2],unitScale=1)=>H.inspect({triangles,levels,unitScale},S);
+assert.equal(run().sections.length,2);assert.equal(run().sections[0].voids[0].area,4);
+assert.equal(run().continuousShaftVerified,false);assert.equal(run().hostOpeningVerified,false);
+assert.equal(run([...tube,...wall(square(1.5,2.5))]).sections[0].voids[0].area,3);
+assert.equal(run(wall(square(0,4))).sections[0].status,'no-enclosed-void-in-section');
+assert.equal(run(tube,[4]).sections[0].status,'unavailable');
+assert.equal(run(tube.slice(1)).sections[0].reason,'open-or-branching-section');
+const transform=p=>[20+.6*p[0]-.8*p[1],-40+.8*p[0]+.6*p[1],p[2]+10];
+assert.ok(Math.abs(run(tube.map(t=>t.map(transform)),[11]).sections[0].voids[0].area-4)<1e-10);
+assert.deepEqual(run(tube.slice().reverse().map(t=>t.slice().reverse())).sections,run().sections);
+assert.deepEqual(run(tube.map(t=>t.map(p=>p.map(v=>v*1000))),[1,2],.001).sections,run().sections);
+assert.deepEqual(run(tube,[2,1,1]).sections,run().sections);
+assert.equal(run([],[]).status,'unavailable');assert.equal(run(tube,[NaN]).status,'unavailable');
+assert.equal(H.inspect({triangles:tube,levels:[1,2],unitScale:1,maxLevels:1},S).reason,'shaft-section-resource-limit');
+assert.equal(run([...tube,...quad([0,0,1],[4,0,1],[4,4,1],[0,4,1])]).sections[0].reason,'cut-coincides-with-surface');
+console.log('Shaft section diagnostics passed: inner void, solid island, open/solid section, units, transforms, ordering and limits; no shaft or host opening inferred');

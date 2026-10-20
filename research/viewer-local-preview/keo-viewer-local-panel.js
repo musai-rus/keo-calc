@@ -53,7 +53,7 @@
   const modelKey=typeof sourceHash==='string'&&/^[a-f\d]{64}$/i.test(sourceHash)&&typeof modelUrn==='string'&&modelUrn?sourceHash+'|'+modelUrn:null;
   const optics=window.KeoNativeOpticsSettings?.modelKey===modelKey?window.KeoNativeOpticsSettings:{version:1,modelKey,common:{},types:{},elements:{}};
   if(modelKey)window.KeoNativeOpticsSettings=optics;
-  let apertureGroup='upper',apertureId=null,opticsScope='type',prismRoomGuid=null;
+  let apertureGroup='upper',apertureId=null,opticsScope='type',prismRoomGuid=null,shaftCutKey=null;
   const kindOf=r=>r.ifcClass==='IfcWindow'?(r.face?.inclinationDeg<45?'upper':'window'):r.ifcClass==='IfcPlate'?'panel':'door';
   const levels=[...new Set(rooms.map(r=>r.level))].sort();
   const reasonText={'open-or-branching-section':'Сечение не образует замкнутые контуры: есть разрывы или ветвления.','no-height-for-diagnostic-cut':'Для сечения на выбранной высоте не хватает геометрии по высоте.','missing-native-geometry':'Не получена треугольная геометрия IfcSpace.','self-intersecting-section':'Контур пересекает сам себя.','intersecting-contours':'Контуры пересекаются.','crossing-or-touching-contours':'Контуры пересекаются или касаются; алгоритм не может однозначно отделить внутреннюю область от отверстий.','cut-coincides-with-surface':'Плоскость сечения совпала с поверхностью геометрии. На этой отметке однозначный замкнутый контур не получен.','missing-or-duplicate-guid':'Отсутствует уникальный IFC GlobalId.'};
@@ -179,11 +179,20 @@
     <div class="actions"><button class="calc-json">JSON для калькулятора</button><button class="json">Диагностика теста · JSON</button></div><p class="muted">Для импорта в калькулятор скачайте «JSON для калькулятора» и выберите файл через «Открыть». Диагностический пакет калькулятор не принимает.</p><details><summary>Полный расчёт: формулы, коэффициенты, схемы</summary><div class="sample-report">${lib.Report&&lib.Schemes?reportHTML(lib.KEO.buildModel(r.state,r.calculation)):'Подробный отчёт не загружен.'}</div></details>`;
     $('#keo-sample-choice').onchange=e=>{sample=e.target.value;sampleView();};$('.json').onclick=()=>download(current,'keo-synthetic-diagnostic-'+sample+'.json');$('.calc-json').onclick=()=>download(r.state,'keo-calculator-synthetic-'+sample+'.json');
   }
-  function prismData(row){
-    const a=window.KeoNativePrismAudit,m=boundModel;
+  function currentAudit(name,material=false){
+    const a=window[name],m=boundModel;
     const now={urn:m?.getData()?.urn,unit:m?.getUnitScale(),offset:m?.getData()?.globalOffset,placement:m?.getData()?.placementTransform?.elements,world:m?.getModelTransform?.()?.elements,fragments:m?.getFragmentList()?.getCount()};
-    if(!a||a.busy||a.errors?.length||viewer.model!==m||Object.keys(now).some(k=>JSON.stringify(a.source?.[k])!==JSON.stringify(now[k])))return null;
-    return a.rows.find(r=>r.fragment===row.fragment)||null;
+    const stamp=material?a?.source?.viewerSnapshot:a?.source;
+    if(!a||a.busy||a.errors?.length||viewer.model!==m||(material&&a.source?.sha256!==sourceHash)||Object.keys(now).some(k=>JSON.stringify(stamp?.[k])!==JSON.stringify(now[k])))return null;
+    return a;
+  }
+  function prismData(row){
+    return currentAudit('KeoNativePrismAudit')?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid)||null;
+  }
+  function materialHTML(hit){
+    const r=currentAudit('KeoNativeMaterialAudit',true)?.rows.find(r=>String(r.fragment)===String(hit.id)&&r.guid===hit.guid);
+    if(!r?.sourceMaterialMatched)return 'Материал части не сопоставлен';
+    return `Материал IFC: ${esc(r.material.name)}${r.material.category?' · '+esc(r.material.category):''}<br>Часть: ${esc(r.aspectName)}`;
   }
   function prismHTML(data){
     if(!data)return '<p class="muted">Диагностика вертикальной проекции для этого фрагмента не выполнена либо устарела.</p>';
@@ -193,17 +202,33 @@
     const c=q.coverage,unknown=q.status==='unavailable',reason=q.reason==='nonconvex-or-crossing-footprint'?'Контур не выпуклый либо пересекает себя: этот диагностический алгоритм его пока не поддерживает.':q.reason==='degenerate-source-triangles'?'Внутри проверяемого объёма есть вырожденные треугольники.':q.reason;
     return `<h3>Что находится под проёмом</h3><p class="small">Проверяется весь объём вертикальной проекции от сечения помещения до грани проёма. Это геометрическая диагностика, не расчёт КЕО.</p>
       <label for="keo-prism-room">Помещение под проекцией · ${tests.length} вариантов</label><select id="keo-prism-room">${tests.map(t=>`<option value="${esc(t.spaceGuid)}" ${t===q?'selected':''}>${esc(t.number)} · ${esc(t.level)}</option>`).join('')}</select>
-      <p class="notice">${unknown?esc(reason||'Геометрия требует уточнения.'):q.status==='intersected'?'Найдены пересекающие поверхности. Их материалы ещё не подтверждены; среди геометрии могут быть воздушные слои.':'Пересечения поверхностей не обнаружены либо есть только касание. Это не подтверждает свободный путь света.'}</p>
+      <p class="notice">${unknown?esc(reason||'Геометрия требует уточнения.'):q.status==='intersected'?'Найдены пересекающие поверхности. Материалы частей показаны ниже по данным IFC; физические свойства и отверстия в ограждениях ещё не подтверждены.':'Пересечения поверхностей не обнаружены либо есть только касание. Это не подтверждает свободный путь света.'}</p>
       <table><tr><td>Диапазон высот</td><td>${fmt(q.zMin)}–${fmt(q.zMax)} м</td></tr><tr><td>Фрагменты с пересечением</td><td>${q.hits?.filter(h=>h.interiorTriangles).length??'—'}</td></tr><tr><td>Площадь проекции</td><td>${fmt(c?.sourceArea)} м²</td></tr><tr><td>Не перекрыто проекциями поверхностей</td><td>${fmt(c?.remainingArea)} м²</td></tr></table>
       ${c?.status==='computed'?projectionDiagram(data.footprintLoops,c.remainingCells):`<p class="small">Площадь не определена: ${esc(reason||c?.reason||'нет геометрического результата')}.</p>`}
-      <p class="muted">Серый — исходная проекция, синий — её остаток. Площадь в м² не является КЕО или долей прошедшего света. Проверены только стены, плиты и крыши; наклонные направления света, материалы и границы шахты ещё не определены.</p>
+      <p class="muted">Серый — исходная проекция, синий — её остаток. Площадь в м² не является КЕО или долей прошедшего света. Проверены только стены, плиты и крыши. Воздушные слои пока не исключены из этой геометрической проекции; её остаток не означает светопропускание.</p>
       <div class="actions"><button class="show-prism" ${q.hits?.length?'':'disabled'}>Показать пересечения</button><button class="restore-prism">Вернуть вид</button></div>
-      <details><summary>Пересечённые элементы · ${q.hits?.length||0}</summary><table>${(q.hits||[]).map(h=>`<tr><td>${esc(h.ifcClass)} · фр. ${esc(h.id)}<br><span class="muted">Материал не проверен</span></td><td>${h.zRange?.map(fmt).join('–')||'Касание / неопределённость'} м</td></tr>`).join('')}</table></details>`;
+      <details open><summary>Пересечённые элементы · ${q.hits?.length||0}</summary><table>${(q.hits||[]).map(h=>`<tr><td>${esc(h.ifcClass)} · фр. ${esc(h.id)}<br><span class="muted">${materialHTML(h)}</span></td><td>${h.zRange?.map(fmt).join('–')||'Касание / неопределённость'} м</td></tr>`).join('')}</table><p class="muted">Сопоставлены объявленные части и материалы IFC. Совпадение ревизии конвертации отдельно не проверено. Цвет, видимость и прозрачность рендера не используются как физическое светопропускание.</p></details>`;
   }
-  function projectionDiagram(loops,cells){
+  function shaftHTML(row){
+    const a=currentAudit('KeoNativeShaftAudit'),s=a?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid);
+    if(!s)return '<p class="muted">Сечения деталей этого фонаря ещё не проверены либо устарели.</p>';
+    const cuts=(s.bands||[]).flatMap(b=>(b.sections||[]).map((cut,i)=>({band:b,cut,key:String(b.hostFragment)+':'+i})));
+    const outside=(s.bands||[]).filter(b=>b.status==='outside-assembly-height').length;
+    if(!cuts.length)return '<h3>Внутренний контур фонаря</h3><p class="notice">Нет доступных сечений на высотах пересекающихся ограждений. Причины исходной проверки показаны выше. Это не подтверждает наличие отверстия или отсутствие света.</p>';
+    const chosen=cuts.find(c=>c.key===shaftCutKey)||cuts[0];shaftCutKey=chosen.key;
+    return `<h3>Внутренний контур фонаря</h3><p class="small">Сечение существующих деталей всей сборки фонаря. Внутренняя пустота получена из геометрии, а не из проекции стекла.</p><label for="keo-shaft-section">Сечение на высоте пересекающего слоя</label><select id="keo-shaft-section">${cuts.map(c=>`<option value="${esc(c.key)}" ${c===chosen?'selected':''}>${fmt(c.cut.z)} м · слой фр. ${esc(c.band.hostFragment)}</option>`).join('')}</select><div class="shaft-drawing"></div><p class="notice">Контур внутри фонаря не вырезает отверстие в потолке. Три сечения на слой не доказывают непрерывность шахты между ними. КЕО пока не рассчитан.</p>${outside?`<p class="muted">Ещё ${outside} пересечённых фрагментов находятся вне высоты этой сборки. Проём в них автоматически не продолжается.</p>`:''}`;
+  }
+  function shaftDrawing(row){
+    const s=currentAudit('KeoNativeShaftAudit')?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid);
+    const cut=(s?.bands||[]).flatMap(b=>(b.sections||[]).map((c,i)=>({c,key:String(b.hostFragment)+':'+i}))).find(e=>e.key===shaftCutKey)?.c;
+    const host=$('.shaft-drawing');if(!host)return;
+    if(!cut){host.textContent='Результат сечения недоступен либо устарел.';return;}
+    host.innerHTML=cut.status==='void-contours-found'?`${projectionDiagram(cut.loops,cut.voids.flatMap(v=>v.loops),'Сечение деталей фонаря и внутренние пустоты')}<p class="small">Внутренних контуров: ${cut.voids.length} · площадь пустот ${fmt(cut.voids.reduce((sum,v)=>sum+v.area,0))} м².</p><p class="muted">Серый — детали фонаря, синий — пустота между ними на этой высоте. Это не отверстие в плите и не расчётная световая площадь.</p>`:`<p class="notice">${cut.status==='no-enclosed-void-in-section'?'Замкнутой внутренней пустоты на этой высоте нет.':esc(reasonText[cut.reason]||cut.reason)}</p>`;
+  }
+  function projectionDiagram(loops,cells,label='Вертикальная проекция проёма и остаток после пересечения геометрии'){
     const ps=loops.flat(),lo=[0,1].map(k=>Math.min(...ps.map(p=>p[k]))),hi=[0,1].map(k=>Math.max(...ps.map(p=>p[k]))),s=Math.min(360/Math.max(hi[0]-lo[0],.001),170/Math.max(hi[1]-lo[1],.001));
     const path=ls=>ls.map(l=>'M'+l.map(p=>`${210+(p[0]-(lo[0]+hi[0])/2)*s},${110-(p[1]-(lo[1]+hi[1])/2)*s}`).join('L')+'Z').join(' ');
-    return `<svg viewBox="0 0 420 220" role="img" aria-label="Вертикальная проекция проёма и остаток после пересечения геометрии"><path d="${path(loops)}" fill="#b6c0c6" stroke="#637780"/><path d="${path(cells||[])}" fill="#399aca" stroke="none"/></svg>`;
+    return `<svg viewBox="0 0 420 220" role="img" aria-label="${esc(label)}"><path d="${path(loops)}" fill="#b6c0c6" fill-rule="evenodd" stroke="#637780"/><path d="${path(cells||[])}" fill="#399aca" fill-rule="evenodd" stroke="none"/></svg>`;
   }
   function showPrism(data){
     const q=data?.tests.find(t=>t.spaceGuid===prismRoomGuid);if(!q)return;
@@ -232,7 +257,8 @@
     const roomName=guid=>{const r=rooms.find(r=>r.guid===guid);return r?r.number+' · '+r.name:guid;};
     const holder=opticsScope==='common'?optics.common:opticsScope==='type'?(optics.types[typeGuid]||{}):(optics.elements[row.guid]||{});
     const prism=prismData(row);
-    current={kind:'aperture geometry and explicit optics diagnostic',row,ifc:c,optics:resolved,modelKey,prism,prismScope:window.KeoNativePrismAudit?.limits,keo:null,pass:null};
+    const shaftAudit=currentAudit('KeoNativeShaftAudit'),materialAudit=currentAudit('KeoNativeMaterialAudit',true),hitIds=new Set((prism?.tests||[]).flatMap(t=>t.hits||[]).map(h=>String(h.id)));
+    current={kind:'aperture geometry and explicit optics diagnostic',row,ifc:c,optics:resolved,modelKey,prism,prismScope:window.KeoNativePrismAudit?.limits,shaft:shaftAudit?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid)||null,shaftScope:shaftAudit?.limits,materialParts:materialAudit?{source:materialAudit.source,rows:materialAudit.rows.filter(r=>hitIds.has(String(r.fragment)))}:null,hostOpeningVerified:false,continuousShaftVerified:false,normativeVerified:false,keo:null,pass:null};
     body.innerHTML=`<p class="notice"><b>Контуры получены алгоритмом.</b> Это кандидаты в световые проёмы: прозрачность рендера и IFC-класс не подтверждают физическое светопропускание.</p>
       <div class="filters">${Object.entries(groups).map(([k,v])=>`<button data-aperture-group="${k}" aria-pressed="${k===apertureGroup}">${v} · ${apertureRows.filter(r=>kindOf(r)===k).length}</button>`).join('')}</div>
       <label for="keo-aperture-choice">Элемент и фрагмент</label><select id="keo-aperture-choice">${list.map(r=>`<option value="${r.fragment}" ${r.fragment===apertureId?'selected':''}>${esc(relationMap.get(r.guid)?.declaredType?.name||relationMap.get(r.guid)?.name||r.ifcClass)} · фр. ${r.fragment}</option>`).join('')}</select>
@@ -241,6 +267,7 @@
       <table><tr><td>Площадь грани</td><td>${fmt(face?.area)} м²</td></tr><tr><td>Наклон к горизонтали</td><td>${fmt(face?.inclinationDeg)}°</td></tr><tr><td>Плоские участки фрагмента</td><td>${row.result.patchCount??row.result.patches.length}</td></tr><tr><td>Тип IFC</td><td>${esc(type?.name||'Не указан')}</td></tr><tr><td>Связи с помещениями</td><td>${direct.length} прямых · ${container.length} через всю сборку</td></tr></table>
       <div class="actions"><button class="show-aperture">Показать в Viewer</button><button class="aperture-json">Диагностика · JSON</button></div>
       ${prismHTML(prism)}
+      ${shaftHTML(row)}
       <details><summary>Связи IFC и ограничения</summary><p class="small">${direct.length?'Записаны связи с: '+direct.map(roomName).map(esc).join('; '):'Прямой связи с помещением в IFC нет.'}</p>${container.length?`<p class="small">Вся сборка граничит с: ${container.map(roomName).map(esc).join('; ')}. Эти связи не назначают данную панель всем перечисленным помещениям.</p>`:''}<p class="small">${c?.external===false?'В IFC указан IsExternal=false. Одного этого поля недостаточно для решения о наружной стороне. ':''}Принадлежность, наружная сторона, шахта и путь через ограждения требуют геометрической проверки. GUID сопоставлен с Viewer; совпадение ревизии исходного файла и конвертации отдельно не подтверждено.</p><p class="muted">Плоскость: допуск ${fmt(row.result.planarityTolerance*1000)} мм; это настройка диагностики, не подтверждённая точность IFC. Верхняя группа определяется наклоном крупнейшей грани менее 45°, только для просмотра, не для выбора формулы СП.</p></details>
       <h3>Остекление и переплёт</h3><label for="keo-optics-scope">Применить выбор</label><select id="keo-optics-scope"><option value="type" ${opticsScope==='type'?'selected':''} ${!typeGuid?'disabled':''}>К этому типу IFC${!typeGuid?' — тип не найден':''}</option><option value="element" ${opticsScope==='element'?'selected':''}>К этому элементу</option><option value="common" ${opticsScope==='common'?'selected':''}>Общие параметры модели</option></select>
       ${['t1','t2'].map(f=>`<label for="keo-optics-${f}">${f==='t1'?'Остекление · τ₁':'Переплёт · τ₂'}</label><select id="keo-optics-${f}"><option value="">${opticsScope==='common'?'Не задано':'По общим параметрам'}</option>${lib.DATA[f==='t1'?'tau1':'tau2'].map((t,i)=>`<option value="${i}" ${holder[f]?.index===i?'selected':''}>${esc(t.t)} · ${fmt(t.v)}${t.r?' (табл.: '+esc(t.r)+')':''}</option>`).join('')}</select>`).join('')}
@@ -256,6 +283,8 @@
     if($('#keo-prism-room'))$('#keo-prism-room').onchange=e=>{prismRoomGuid=e.target.value;apertureView();};
     if($('.show-prism'))$('.show-prism').onclick=()=>{try{showPrism(prismData(row));}catch(e){body.insertAdjacentHTML('afterbegin',`<p class="notice">${esc(e.message)}</p>`);}};
     if($('.restore-prism'))$('.restore-prism').onclick=restoreView;
+    shaftDrawing(row);
+    if($('#keo-shaft-section'))$('#keo-shaft-section').onchange=e=>{shaftCutKey=e.target.value;shaftDrawing(row);};
     $('.aperture-json').onclick=()=>download(current,'keo-aperture-diagnostic-'+row.fragment+'.json');
     $('.optics-json').onclick=()=>download(optics,'keo-model-optics.json');
   }
@@ -263,7 +292,7 @@
   function open(value){$('.panel').hidden=!value;$('.launch').setAttribute('aria-expanded',String(value));if(value)render();else{ $('.plan').hidden=true;restoreView();}}
   $('.launch').onclick=()=>open($('.panel').hidden);$('.close').onclick=()=>open(false);
   root.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{active=b.dataset.tab;render();});
-  window.KeoLocalPreview={remove:()=>{disposed=true;clearInterval(staleTimer);restoreView();root.remove();},getReport:()=>current,version:4};
+  window.KeoLocalPreview={remove:()=>{disposed=true;clearInterval(staleTimer);restoreView();root.remove();},getReport:()=>current,version:5};
   const staleTimer=setInterval(()=>{if(disposed||viewer.model===boundModel)return;clearInterval(staleTimer);clearOverlay();root.querySelectorAll('button,select,input').forEach(el=>el.disabled=true);$('.plan').hidden=true;body.innerHTML='<p class="notice">Модель изменилась. Эти результаты больше не относятся к открытому виду; нужен новый анализ.</p>';},1000);
   return {installed:true,rooms:rooms.length};
 })
