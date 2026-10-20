@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict'),A=require('./native-projected-area');
+const rect=(x,y,w,h=w)=>[[x,y],[x+w,y],[x+w,y+h],[x,y+h]],fp=rect(0,0,4),area=(cutters,footprint=fp)=>A.remainder({footprint,cutters});
+const close=(a,b)=>assert(Math.abs(a-b)<1e-8,`${a} != ${b}`);
+close(area([]).remainingArea,16);close(area([rect(-1,-1,6)]).remainingArea,0);
+close(area([rect(1,1,2)]).remainingArea,12);close(area([rect(1,1,2),rect(1,1,2)]).remainingArea,12);
+close(area([rect(0,0,3),rect(1,1,3)]).remainingArea,2);
+close(area([rect(4,0,2)]).remainingArea,16);
+close(area([rect(0,0,1,4),rect(3,0,1,4),rect(1,0,2,1),rect(1,3,2,1)]).remainingArea,4);
+const cuts=[rect(0,0,3),rect(1,1,3)];close(area(cuts).remainingArea,area(cuts.slice().reverse()).remainingArea);
+close(area(cuts.map(p=>p.slice().reverse()),fp.slice().reverse()).remainingArea,2);
+const move=p=>p.map(([x,y])=>[100+x*.6-y*.8,-200+x*.8+y*.6]);close(area(cuts.map(move),move(fp)).remainingArea,2);
+const tiny=area([rect(.1,.1,.01)]);close(tiny.remainingArea,15.9999);
+assert.equal(area([[[0,0],[1,0],[2,0]]]).status,'computed');
+assert.equal(area([],[[0,0],[2,0],[1,1],[2,2],[0,2]]).status,'unavailable');
+assert.equal(A.remainder({footprint:fp,cutters:cuts,maxOperations:1}).status,'unavailable');
+assert.equal(A.remainder({footprint:fp,cutters:[rect(1,1,2)],maxCells:1}).status,'unavailable');
+assert.equal(area(cuts).normativeVerified,false);
+console.log('Projected area tests passed: union without double counting, inner opening, thin rib, contact, transforms and resource limits');
