@@ -39,13 +39,17 @@ const BimNativeSpaces = (() => {
     }
     return inside?'inside':'outside';
   }
-  function section({triangles,unitScale,z,maxSegments=20000}={}) {
+  function section({triangles,unitScale,z,maxSegments=20000,diagnostics=false}={}) {
     const base={reference:'supplied-decoded-mesh',sourceAccuracyVerified:false,normativeVerified:false};
     const fail=(reason,details={})=>({...base,status:'unavailable',reason,loops:[],segments:[],...details});
     if(!Array.isArray(triangles)||!triangles.length)return fail('missing-native-geometry');
     if(!finite(unitScale)||unitScale<=0||!finite(z))return fail('unknown-units-or-cut');
     if(!Number.isSafeInteger(maxSegments)||maxSegments<3)return fail('invalid-resource-limit');
+    if(typeof diagnostics!=='boolean')return fail('invalid-diagnostics-option');
     const edges=new Map();let coplanar=0,duplicates=0;
+    // Separate evidence from accepted geometry. Consumers must never promote
+    // these lines/loops to a room polygon, an area or a calculation input.
+    const debug=(candidateLoops=[],contacts=[])=>diagnostics?{diagnostic:{status:'unverified-section-lines',segments:[...edges.values()].map(([a,b])=>[...a,...b]),candidateLoops,contacts}}:{};
     for(const tri of triangles){
       if(!Array.isArray(tri)||tri.length!==3||tri.some(p=>!Array.isArray(p)||p.length!==3||!p.every(finite)))return fail('invalid-triangle');
       const ps=tri.map(p=>p.map(x=>x*unitScale));if(ps.some(p=>!p.every(finite)))return fail('nonfinite-scaled-coordinate');
@@ -68,15 +72,15 @@ const BimNativeSpaces = (() => {
       if(edges.has(k))duplicates++;else edges.set(k,hits);
       if(edges.size>maxSegments)return fail('section-resource-limit');
     }
-    if(coplanar)return fail('cut-coincides-with-surface',{coplanarTriangles:coplanar});
-    if(duplicates)return fail('overlapping-section-segments',{duplicateSegments:duplicates});
+    if(coplanar)return fail('cut-coincides-with-surface',{coplanarTriangles:coplanar,...debug()});
+    if(duplicates)return fail('overlapping-section-segments',{duplicateSegments:duplicates,...debug()});
     if(edges.size<3)return fail('empty-or-degenerate-section');
     const ordered=[...edges.values()].sort((a,b)=>compare(a[0],b[0])||compare(a[1],b[1]));
     const nodes=new Map();
     const node=p=>{const k=key(p);if(!nodes.has(k))nodes.set(k,{point:p,edges:[]});return k;};
     const graph=ordered.map(([a,b],i)=>{const ka=node(a),kb=node(b);nodes.get(ka).edges.push(i);nodes.get(kb).edges.push(i);return [ka,kb];});
     const badNodes=[...nodes.values()].filter(n=>n.edges.length!==2);
-    if(badNodes.length)return fail('open-or-branching-section',{invalidVertices:badNodes.map(n=>({point:n.point,degree:n.edges.length}))});
+    if(badNodes.length)return fail('open-or-branching-section',{invalidVertices:badNodes.map(n=>({point:n.point,degree:n.edges.length})),...debug()});
     const loops=[],used=new Set();
     for(let start=0;start<graph.length;start++){
       if(used.has(start))continue;
@@ -98,7 +102,7 @@ const BimNativeSpaces = (() => {
       if(ordered[j][0][0]>Math.max(ordered[i][0][0],ordered[i][1][0]))break;
       if(++pairChecks>2000000)return fail('intersection-resource-limit');
       if(graph[i].some(k=>graph[j].includes(k)))continue;
-      if(segmentContact(...ordered[i],...ordered[j]))return fail('crossing-or-touching-contours');
+      if(segmentContact(...ordered[i],...ordered[j]))return fail('crossing-or-touching-contours',debug(loops,[{segments:[ordered[i].flat(),ordered[j].flat()],loopIndices:[i,j].map(k=>loops.findIndex(l=>l.some(p=>same(p,ordered[k][0]))))}]));
     }
     const contours=loops.map((points,i)=>{
       const depth=loops.filter((other,j)=>j!==i&&locate([other],points[0])==='inside').length;

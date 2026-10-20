@@ -34,4 +34,14 @@ assert.equal(make([]).reason,'missing-native-geometry');assert.equal(make(rect,{
 assert.equal(make([[[0,0,0],[Infinity,0,1],[0,1,0]]]).reason,'invalid-triangle');
 assert.equal(make(rect,{maxSegments:3}).reason,'section-resource-limit');
 assert.equal(N.locate(a.loops,[NaN,0]),'unavailable');
+// Diagnostic evidence never bypasses acceptance or supplies usable loops/area.
+const crossing=[...rect,...shell(rectangle(3,1,4,2))],d=make(crossing,{diagnostics:true});
+assert.equal(d.reason,'crossing-or-touching-contours');assert.equal(d.status,'unavailable');
+assert.deepEqual(d.loops,[]);assert.deepEqual(d.segments,[]);assert.equal(d.area,undefined);
+assert.equal(d.diagnostic.status,'unverified-section-lines');assert.equal(d.diagnostic.candidateLoops.length,2);
+assert.equal(d.diagnostic.contacts[0].segments.length,2);assert.equal(new Set(d.diagnostic.contacts[0].loopIndices).size,2);
+assert.equal(make(crossing).diagnostic,undefined);assert.deepEqual(make(rect,{diagnostics:true}),make(rect));
+const open=make(rect.slice(2),{diagnostics:true});assert(open.diagnostic.segments.length);assert(open.invalidVertices.length);assert.deepEqual(open.loops,[]);
+const coplanar=make([...rect,[[0,0,1],[1,0,1],[1,1,1]]],{diagnostics:true});assert.equal(coplanar.coplanarTriangles,1);assert(coplanar.diagnostic.segments.length);
+assert.equal(make(rect,{diagnostics:'yes'}).reason,'invalid-diagnostics-option');
 console.log('OK: native mesh sections; concavity, holes, islands, separate components, winding/order/diagonal/units/transforms; invalid geometry fails closed; no source or normative claims');
