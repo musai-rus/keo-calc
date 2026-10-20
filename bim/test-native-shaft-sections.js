@@ -18,3 +18,17 @@ assert.equal(run([],[]).status,'unavailable');assert.equal(run(tube,[NaN]).statu
 assert.equal(H.inspect({triangles:tube,levels:[1,2],unitScale:1,maxLevels:1},S).reason,'shaft-section-resource-limit');
 assert.equal(run([...tube,...quad([0,0,1],[4,0,1],[4,4,1],[0,4,1])]).sections[0].reason,'cut-coincides-with-surface');
 console.log('Shaft section diagnostics passed: inner void, solid island, open/solid section, units, transforms, ordering and limits; no shaft or host opening inferred');
+const U=require('./native-section-union'),parts=[{id:'outer',triangles:tube},{id:'overlapping',triangles:[...wall(square(.5,4.5)),...wall(square(1.5,3.5))]}];
+const multi=(p=parts,levels=[1])=>H.inspectParts({parts:p,levels,unitScale:1},S,U);
+assert.equal(run(parts.flatMap(p=>p.triangles),[1]).sections[0].reason,'crossing-or-touching-contours');
+let m=multi();assert.equal(m.sections[0].status,'void-contours-found');assert.equal(m.sections[0].voids[0].area,2.25);
+for(const k of ['normativeVerified','continuousShaftVerified','ownershipVerified','hostOpeningVerified'])assert.equal(m[k],false);
+assert.equal(multi([{id:'part',triangles:tube.slice(1)}]).sections[0].reason,'unavailable-part-section');
+assert.equal(multi(parts,[4]).sections[0].reason,'no-part-at-section-height');
+assert.equal(multi([...parts,{id:'cap',triangles:quad([0,0,1],[4,0,1],[4,4,1],[0,4,1])}]).sections[0].reason,'unavailable-part-section');
+assert.equal(multi([parts[0],parts[0]]).reason,'invalid-shaft-parts-input');
+assert.equal(multi([{id:'bad',triangles:[[[0,0,0],[1,0,0],[0,Infinity,0]]]}]).reason,'invalid-part-triangle');
+assert.equal(H.inspectParts({parts,levels:[1],unitScale:1,maxTriangles:1},S,U).reason,'shaft-section-resource-limit');
+const mm=H.inspectParts({parts:parts.map(p=>({...p,triangles:p.triangles.map(t=>t.map(v=>v.map(x=>x*1000)))})),levels:[1],unitScale:.001},S,U);
+assert.deepEqual(mm.sections,m.sections);
+console.log('Separate part union integration passed; missing/ambiguous sections never become empty space or a continuous shaft');

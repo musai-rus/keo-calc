@@ -228,21 +228,37 @@
       <div class="actions"><button class="show-prism" ${q.hits?.length?'':'disabled'}>Показать пересечения</button><button class="restore-prism">Вернуть вид</button></div>
       <details open><summary>Пересечённые элементы · ${q.hits?.length||0}</summary><table>${(q.hits||[]).map(h=>`<tr><td>${esc(h.ifcClass)} · фр. ${esc(h.id)}<br><span class="muted">${materialHTML(h)}</span></td><td>${h.zRange?.map(fmt).join('–')||'Касание / неопределённость'} м</td></tr>`).join('')}</table><p class="muted">Сопоставлены объявленные части и материалы IFC. Совпадение ревизии конвертации отдельно не проверено. Цвет, видимость и прозрачность рендера не используются как физическое светопропускание.</p></details>`;
   }
+  Object.assign(reasonText,{
+    'unavailable-part-section':'Не у всех деталей получено замкнутое сечение; пустота не подтверждена.',
+    'no-part-at-section-height':'На этой высоте нет деталей проверяемой сборки.',
+    'section-union-operation-limit':'Объединение остановлено из-за сложности сечения. Нужен дополнительный разбор.',
+    'section-union-segment-limit':'Слишком много границ для текущего обработчика сечения.',
+    'point-contact-or-open-union-boundary':'После объединения границы касаются в точке или не замкнуты.',
+    'union-output-rounding-contact':'При выводе координат границы становятся неразличимы. Сечение требует проверки точности.',
+    'union-output-rounding-collapse':'При выводе координат разные вершины становятся неразличимы.',
+    'union-output-rounding-orientation':'Малый контур теряет ориентацию при выводе координат.',
+    'union-output-containment-ambiguous':'Вложенность полученных контуров неоднозначна при текущей точности.'
+  });
+  function shaftCuts(row){
+    const s=currentAudit('KeoNativeShaftAudit')?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid);
+    const u=currentAudit('KeoNativeShaftUnionAudit')?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid);
+    return [...(u?.sections||[]).map((cut,i)=>({cut,key:'union:'+i,label:'объединение деталей'})),...(s?.bands||[]).flatMap(b=>(b.sections||[]).map((cut,i)=>({cut,key:String(b.hostFragment)+':'+i,label:'слой фр. '+b.hostFragment})))];
+  }
   function shaftHTML(row){
     const a=currentAudit('KeoNativeShaftAudit'),s=a?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid);
     if(!s)return '<p class="muted">Сечения деталей этого фонаря ещё не проверены либо устарели.</p>';
-    const cuts=(s.bands||[]).flatMap(b=>(b.sections||[]).map((cut,i)=>({band:b,cut,key:String(b.hostFragment)+':'+i})));
+    const cuts=shaftCuts(row);
     const outside=(s.bands||[]).filter(b=>b.status==='outside-assembly-height').length;
     if(!cuts.length)return '<h3>Внутренний контур фонаря</h3><p class="notice">Нет доступных сечений на высотах пересекающихся ограждений. Причины исходной проверки показаны выше. Это не подтверждает наличие отверстия или отсутствие света.</p>';
     const chosen=cuts.find(c=>c.key===shaftCutKey)||cuts[0];shaftCutKey=chosen.key;
-    return `<h3>Внутренний контур фонаря</h3><p class="small">Сечение существующих деталей всей сборки фонаря. Внутренняя пустота получена из геометрии, а не из проекции стекла.</p><label for="keo-shaft-section">Сечение на высоте пересекающего слоя</label><select id="keo-shaft-section">${cuts.map(c=>`<option value="${esc(c.key)}" ${c===chosen?'selected':''}>${fmt(c.cut.z)} м · слой фр. ${esc(c.band.hostFragment)}</option>`).join('')}</select><div class="shaft-drawing"></div><p class="notice">Контур внутри фонаря не вырезает отверстие в потолке. Три сечения на слой не доказывают непрерывность шахты между ними. КЕО пока не рассчитан.</p>${outside?`<p class="muted">Ещё ${outside} пересечённых фрагментов находятся вне высоты этой сборки. Проём в них автоматически не продолжается.</p>`:''}`;
+    return `<h3>Внутренний контур фонаря</h3><p class="small">Сечение существующих деталей всей сборки фонаря. В пробах «объединение деталей» каждая часть проверена отдельно, затем занятые области объединены. Все оставшиеся внутренние пустоты сохранены.</p><label for="keo-shaft-section">Высота и способ проверки сечения</label><select id="keo-shaft-section">${cuts.map(c=>`<option value="${esc(c.key)}" ${c===chosen?'selected':''}>${fmt(c.cut.z)} м · ${esc(c.label)}</option>`).join('')}</select><div class="shaft-drawing"></div><p class="notice">Отдельные сечения не доказывают непрерывность шахты. Внутренняя пустота может быть полостью детали, а не световым каналом; отверстие в потолке проверяется отдельно. КЕО пока не рассчитан.</p>${outside?`<p class="muted">Ещё ${outside} пересечённых фрагментов находятся вне высоты этой сборки. Проём в них автоматически не продолжается.</p>`:''}`;
   }
   function shaftDrawing(row){
-    const s=currentAudit('KeoNativeShaftAudit')?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid);
-    const cut=(s?.bands||[]).flatMap(b=>(b.sections||[]).map((c,i)=>({c,key:String(b.hostFragment)+':'+i}))).find(e=>e.key===shaftCutKey)?.c;
+    const cut=shaftCuts(row).find(e=>e.key===shaftCutKey)?.cut;
     const host=$('.shaft-drawing');if(!host)return;
     if(!cut){host.textContent='Результат сечения недоступен либо устарел.';return;}
     host.innerHTML=cut.status==='void-contours-found'?`${projectionDiagram(cut.loops,cut.voids.flatMap(v=>v.loops),'Сечение деталей фонаря и внутренние пустоты')}<p class="small">Внутренних контуров: ${cut.voids.length} · площадь пустот ${fmt(cut.voids.reduce((sum,v)=>sum+v.area,0))} м².</p><p class="muted">Серый — детали фонаря, синий — пустота между ними на этой высоте. Это не отверстие в плите и не расчётная световая площадь.</p>`:`<p class="notice">${cut.status==='no-enclosed-void-in-section'?'Замкнутой внутренней пустоты на этой высоте нет.':esc(reasonText[cut.reason]||cut.reason)}</p>`;
+    if(cut.partSections)host.insertAdjacentHTML('beforeend',`<p class="small">Замкнутых сечений частей: ${cut.partSections.filter(p=>p.status==='closed-section').length}; вне высоты: ${cut.partSections.filter(p=>p.status==='outside-part-height').length}; требуют разбора: ${cut.partSections.filter(p=>p.status==='unavailable').length}. ${cut.previousReason==='crossing-or-touching-contours'&&cut.union?'Прежнее сложение линий отклонялось из-за пересечений; объединение областей выполнено.':''}</p>${cut.reason==='unavailable-part-section'?'<p class="notice">Хотя бы одна часть не дала надёжного сечения. Её нельзя пропустить и объявить это место свободным.</p>':''}`);
   }
   function projectionDiagram(loops,cells,label='Вертикальная проекция проёма и остаток после пересечения геометрии'){
     const ps=loops.flat(),lo=[0,1].map(k=>Math.min(...ps.map(p=>p[k]))),hi=[0,1].map(k=>Math.max(...ps.map(p=>p[k]))),s=Math.min(360/Math.max(hi[0]-lo[0],.001),170/Math.max(hi[1]-lo[1],.001));
@@ -276,8 +292,8 @@
     const roomName=guid=>{const r=rooms.find(r=>r.guid===guid);return r?r.number+' · '+r.name:guid;};
     const holder=opticsScope==='common'?optics.common:opticsScope==='type'?(optics.types[typeGuid]||{}):(optics.elements[row.guid]||{});
     const prism=prismData(row);
-    const shaftAudit=currentAudit('KeoNativeShaftAudit'),materialAudit=currentAudit('KeoNativeMaterialAudit',true),hitIds=new Set((prism?.tests||[]).flatMap(t=>t.hits||[]).map(h=>String(h.id)));
-    current={kind:'aperture geometry and explicit optics diagnostic',row,ifc:c,optics:resolved,modelKey,prism,prismScope:window.KeoNativePrismAudit?.limits,shaft:shaftAudit?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid)||null,shaftScope:shaftAudit?.limits,materialParts:materialAudit?{source:materialAudit.source,rows:materialAudit.rows.filter(r=>hitIds.has(String(r.fragment)))}:null,hostOpeningVerified:false,continuousShaftVerified:false,normativeVerified:false,keo:null,pass:null};
+    const shaftAudit=currentAudit('KeoNativeShaftAudit'),unionAudit=currentAudit('KeoNativeShaftUnionAudit'),materialAudit=currentAudit('KeoNativeMaterialAudit',true),hitIds=new Set((prism?.tests||[]).flatMap(t=>t.hits||[]).map(h=>String(h.id)));
+    current={kind:'aperture geometry and explicit optics diagnostic',row,ifc:c,optics:resolved,modelKey,prism,prismScope:window.KeoNativePrismAudit?.limits,shaft:shaftAudit?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid)||null,shaftScope:shaftAudit?.limits,shaftUnion:unionAudit?.rows.find(r=>r.fragment===row.fragment&&r.guid===row.guid)||null,shaftUnionScope:unionAudit?.limits,materialParts:materialAudit?{source:materialAudit.source,rows:materialAudit.rows.filter(r=>hitIds.has(String(r.fragment)))}:null,hostOpeningVerified:false,continuousShaftVerified:false,normativeVerified:false,keo:null,pass:null};
     body.innerHTML=`<p class="notice"><b>Контуры получены алгоритмом.</b> Это кандидаты в световые проёмы: прозрачность рендера и IFC-класс не подтверждают физическое светопропускание.</p>
       <div class="filters">${Object.entries(groups).map(([k,v])=>`<button data-aperture-group="${k}" aria-pressed="${k===apertureGroup}">${v} · ${apertureRows.filter(r=>kindOf(r)===k).length}</button>`).join('')}</div>
       <label for="keo-aperture-choice">Элемент и фрагмент</label><select id="keo-aperture-choice">${list.map(r=>`<option value="${r.fragment}" ${r.fragment===apertureId?'selected':''}>${esc(relationMap.get(r.guid)?.declaredType?.name||relationMap.get(r.guid)?.name||r.ifcClass)} · фр. ${r.fragment}</option>`).join('')}</select>
@@ -311,7 +327,7 @@
   function open(value){$('.panel').hidden=!value;$('.launch').setAttribute('aria-expanded',String(value));if(value)render();else{ $('.plan').hidden=true;restoreView();}}
   $('.launch').onclick=()=>open($('.panel').hidden);$('.close').onclick=()=>open(false);
   root.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{active=b.dataset.tab;render();});
-  window.KeoLocalPreview={remove:()=>{disposed=true;clearInterval(staleTimer);restoreView();root.remove();},getReport:()=>current,version:6};
+  window.KeoLocalPreview={remove:()=>{disposed=true;clearInterval(staleTimer);restoreView();root.remove();},getReport:()=>current,version:7};
   const staleTimer=setInterval(()=>{if(disposed||viewer.model===boundModel)return;clearInterval(staleTimer);clearOverlay();root.querySelectorAll('button,select,input').forEach(el=>el.disabled=true);$('.plan').hidden=true;body.innerHTML='<p class="notice">Модель изменилась. Эти результаты больше не относятся к открытому виду; нужен новый анализ.</p>';},1000);
   return {installed:true,rooms:rooms.length};
 })
