@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {webcrypto} from 'node:crypto';
+import {putResearchJson} from './browser-json-transfer.mjs';
+const create=()=>{
+  const context=vm.createContext({window:{KeoTestValue:{previous:true}},crypto:webcrypto,TextEncoder});
+  const commands=[];
+  const cdp={send:async(method,p)=>{commands.push(p.expression);try{return {result:{value:await vm.runInContext(p.expression,context)}};}catch(e){return {exceptionDetails:{text:e.message}};}}};
+  return {context,commands,cdp};
+};
+const data={text:'Комната 🪟 / \" окно'.repeat(100),nested:[1,null,{x:'\\'}]};
+let t=create(),r=await putResearchJson(t.cdp,'KeoTestValue',data,{chunkChars:7});
+assert.deepEqual(JSON.parse(JSON.stringify(t.context.window.KeoTestValue)),data);
+assert.equal(r.bytes,Buffer.byteLength(JSON.stringify(data)));assert.ok(r.parts>100);assert.equal(t.context.window.KeoResearchJsonTransfer,undefined);
+await assert.rejects(()=>putResearchJson(t.cdp,'location',{}),/invalid-transfer/);
+await assert.rejects(()=>putResearchJson(t.cdp,'KeoResearchJsonTransfer',{}),/invalid-transfer/);
+t=create();let sends=0,send=t.cdp.send;t.cdp.send=async(...args)=>{if(++sends===3)throw Error('transport-interrupted');return send(...args);};
+await assert.rejects(()=>putResearchJson(t.cdp,'KeoTestValue',data,{chunkChars:20}),/transport-interrupted/);
+assert.deepEqual(JSON.parse(JSON.stringify(t.context.window.KeoTestValue)),{previous:true});assert.equal(t.context.window.KeoResearchJsonTransfer,undefined);
+t=create();send=t.cdp.send;t.cdp.send=async(method,p)=>{if(p.expression.includes('crypto.subtle.digest'))t.context.window.KeoResearchJsonTransfer.parts[0]='broken';return send(method,p);};
+await assert.rejects(()=>putResearchJson(t.cdp,'KeoTestValue',data),/transfer-length-mismatch/);
+assert.deepEqual(JSON.parse(JSON.stringify(t.context.window.KeoTestValue)),{previous:true});
+t=create();send=t.cdp.send;t.cdp.send=async(method,p)=>{if(p.expression.includes('crypto.subtle.digest')){const parts=t.context.window.KeoResearchJsonTransfer.parts;parts[0]='!'+parts[0].slice(1);}return send(method,p);};
+await assert.rejects(()=>putResearchJson(t.cdp,'KeoTestValue',data),/transfer-integrity-mismatch/);
+assert.deepEqual(JSON.parse(JSON.stringify(t.context.window.KeoTestValue)),{previous:true});
+console.log('Research JSON transfer: Unicode/surrogate chunks, complete publication, interruption cleanup, integrity guard and destination validation passed.');

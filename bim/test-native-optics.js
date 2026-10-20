@@ -1,0 +1,14 @@
+const assert=require('node:assert/strict'),O=require('./native-optics');
+const D={tau1:[{t:'Synthetic glazing A',v:.8,r:'.8'},{t:'Synthetic glazing B',v:.6,r:'.6'}],tau2:[{t:'Synthetic frame A',v:.9}]};
+const s={modelKey:'test-model-revision',common:{},types:{},elements:{}},c={modelKey:s.modelKey,typeGuid:'type-1',elementGuid:'window-1'};
+assert.equal(O.resolve(s,c,D).status,'needs-input');
+s.common.t1=O.select('t1',0,D);s.common.t2=O.select('t2',0,D);
+assert.equal(O.resolve(s,c,D).status,'specified');assert.equal(O.resolve(s,c,D).values.t1,.8);
+s.types[c.typeGuid]={t1:O.select('t1',1,D)};assert.equal(O.resolve(s,c,D).values.t1,.6);assert.equal(O.resolve(s,c,D).sources.t1.scope,'type');
+s.elements[c.elementGuid]={t1:O.select('t1',0,D)};assert.equal(O.resolve(s,c,D).values.t1,.8);
+assert.equal(O.resolve(s,{...c,modelKey:'other'},D).status,'needs-input');
+s.elements[c.elementGuid].t1=null;assert(O.resolve(s,c,D).missing.includes('t1'));
+delete s.elements[c.elementGuid].t1;s.types[c.typeGuid].t1.value=.95;assert(O.resolve(s,c,D).issues.includes('changed-table-t1'));
+assert.throws(()=>O.select('t1',99,D));assert.throws(()=>O.select('t1','0',D));assert.throws(()=>O.select('opacity',0,D));
+assert.equal(O.resolve(JSON.parse(JSON.stringify({modelKey:'m',common:{t1:O.select('t1',0,D),t2:O.select('t2',0,D)}})),{modelKey:'m'},D).opticsVerified,false);
+console.log('Explicit optics tests passed: no defaults, type/element precedence, source and model binding');

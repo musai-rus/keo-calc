@@ -12,6 +12,22 @@ const app=id=>`window.KeoBim={run:async()=>runs.push(${JSON.stringify(id)})};`;
  let c=env(async(url,options)=>{assert.match(url,/^https:\/\/musai-rus.github.io\/keo-calc\/keo-bim.js\?\d+$/);assert.equal(options.cache,'no-store');return response(app('fresh'))});
  await vm.runInContext(source,c);assert.deepEqual(c.runs,['fresh']);assert.equal(c.alerts.length,0);
  await vm.runInContext(source,c);assert.deepEqual(c.runs,['fresh','fresh']);
+ // Execute the real generated installer script and each resulting dragged href.
+ // All regions come from the same directory as the calculator, with no group copy.
+ const decode=s=>s.replace(/&quot;/g,'"').replace(/&#x27;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+ const options=[...html.matchAll(/<option value="([^"]*)">([^<]*)<\/option>/g)].map(m=>({value:decode(m[1]),textContent:decode(m[2])}));
+ assert.deepEqual(options.slice(1).map(o=>o.value),require('../data.js').regions.map(r=>r.name));
+ const select={value:'',options,addEventListener:(event,fn)=>{assert.equal(event,'change');select.change=fn}},button={setAttribute:(name,value)=>{assert.equal(name,'href');button.href=value}},summary={};
+ const installer=vm.createContext({document:{getElementById:id=>id==='bookmark-region'?select:summary,querySelector:()=>button}});
+ vm.runInContext(html.match(/<!-- KEO_BOOKMARKLET_SETUP -->\s*<script>([\s\S]*?)<\/script>/)[1],installer);
+ assert.equal(button.href,href);
+ for(const region of require('../data.js').regions){
+  select.value=region.name;select.change();assert.ok(button.textContent.includes(region.name));assert.ok(summary.textContent.includes('группа '+region.g));
+  c=env(async()=>response('window.KeoBim={run:async options=>runs.push(JSON.stringify(options))}'));
+  await vm.runInContext(button.href.slice(11),c);assert.deepEqual(JSON.parse(c.runs[0]),{region:region.name});assert.equal(c.alerts.length,0);
+ }
+ const installedHref=button.href;select.value='';select.change();assert.equal(button.href,href);assert.notEqual(installedHref,button.href);
+ select.value='not in the directory';select.change();assert.equal(button.href,href);
  c=env(async()=>response(app('must-not-execute'),false,503));c.KeoBim={run:()=>c.runs.push('stale')};await vm.runInContext(source,c);assert.equal(c.runs.length,0);assert.match(c.alerts[0],/HTTP 503/);
  for(const code of ['/* empty response */','<html>error</html>','window.KeoBim={};']){
   c=env(async()=>response(code));c.KeoBim={run:()=>c.runs.push('stale')};await vm.runInContext(source,c);assert.equal(c.runs.length,0);assert.equal(c.alerts.length,1);

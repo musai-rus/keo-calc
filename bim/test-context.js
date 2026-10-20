@@ -92,8 +92,10 @@ vm.runInContext(scripts[1].split('const log=document.querySelector')[0],context)
   await KeoBim.run({region:'г. Москва'});
   NOP_VIEWER.impl.getAllCutPlanes=()=>cuts;await KeoBim.run();assert.equal(KeoBim.st().res.length,0);delete NOP_VIEWER.impl.getAllCutPlanes;
   localStorage.setItem('keo-bim:decisions:test-purpose:cleared',JSON.stringify({merge:[],climate:null}));
-  NOP_VIEWER.model=makeModel('test-purpose:cleared');await KeoBim.run({region:'г. Москва',group:1});assert.equal(KeoBim.S.group,null);
+  NOP_VIEWER.model=makeModel('test-purpose:cleared');await KeoBim.run();assert.equal(KeoBim.S.group,null);
   assert.ok(KeoBim.st().res.every(r=>r.kind==='err'));
+  // A region explicitly embedded in a bookmark overrides a saved cleared value.
+  await KeoBim.run({region:'г. Москва',group:1});assert.equal(KeoBim.S.group,1);assert.ok(KeoBim.st().res.every(r=>r.C.ok));
   const regionInput={dataset:{s:'region'},value:'',type:'select-one'}, groupInput={dataset:{s:'group'},value:'',type:'number'}, rerun={};
   const controls={querySelectorAll:()=>[regionInput,groupInput],querySelector:s=>s.includes('region')?regionInput:s.includes('group')?groupInput:rerun};
   KeoBim._bindSettings(controls);
