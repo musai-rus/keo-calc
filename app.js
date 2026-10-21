@@ -81,9 +81,9 @@
     const walls = S.side.walls, rule = KEO.rtOf(S);
     return `<section class="card" id="c-room"><header class="card-h"><span class="step">2</span><div><h2>Помещение и расчётная точка</h2><p>Размеры снимаются в Revit по плану и характерному разрезу через центр световых проёмов.</p></div></header>
       ${walls.map((w, wi) => `<div class="wallblock">${walls.length > 1 ? `<h3>Стена ${wi + 1} со светопроёмами</h3>` : ''}
-        <div class="row three">${inp(`side.walls.${wi}.dp`, 'Глубина помещения', 'd_{п}', 'м', { hint: 'от внутренней грани стены с окнами' })}${inp(`side.walls.${wi}.bp`, 'Ширина помещения', 'b_{п}', 'м', { hint: 'вдоль стены с окнами' })}${inp(`side.walls.${wi}.H`, 'Высота помещения', 'H', 'м', { hint: 'для схемы' })}</div>
+        <div class="row three">${inp(`side.walls.${wi}.dp`, 'Глубина помещения — перпендикулярно окнам', 'd_{п}', 'м', { hint: 'От внутренней грани стены с окнами до противоположной внутренней грани.' })}${inp(`side.walls.${wi}.bp`, 'Ширина помещения — вдоль окон', 'b_{п}', 'м', { hint: 'Вдоль стены с окнами, между внутренними гранями боковых стен.' })}${inp(`side.walls.${wi}.H`, 'Высота помещения', 'H', 'м', { hint: 'Не обязательна при ρср = 0,55 или ручном ρср; нужна для автоматических площадей поверхностей. Без H разрез условный, высота потолка не подтверждена.' })}</div>
         <div class="row three">${rule === 'manual' ? inp(`side.walls.${wi}.lt`, 'До расчётной точки', 'l_{т}', 'м') : `<div class="fld"><span class="lbl">До расчётной точки <i class="sym">l<sub>т</sub></i></span><div class="calc">${out('lt' + wi)} м</div><span class="hint">${KEO.RT_TEXT[rule]}</span></div>`}
-        ${inp(`side.walls.${wi}.ds`, 'Смещение точки от оси', 'Δs', 'м', { hint: 'вправо — плюс' })}
+        ${inp(`side.walls.${wi}.ds`, 'Смещение расчётной точки А от оси помещения', 'Δs', 'м', { hint: 'Вдоль стены с окнами: 0 — по центру ширины; вправо — плюс, если смотреть из помещения на окна. Это не смещение окна s и не смещение противостоящего фасада.' })}
         <div class="fld"><span class="lbl">Высота точки <i class="sym">h<sub>р</sub></i></span><div class="calc">${out('hp')} м</div><span class="hint">${out('hpNote')}</span></div></div></div>`).join('')}
       <div class="row two"><div class="fld"><span class="lbl">Двустороннее / угловое освещение</span><div class="btns">${walls.length < 2 ? `<button type="button" class="btn ghost" data-act="addWall">+ Вторая стена с окнами</button>` : `<button type="button" class="btn ghost" data-act="delWall">− Убрать вторую стену</button>`}</div><span class="hint">КЕО от проёмов разной ориентации суммируется (п. 8.4.1)</span></div><div></div></div>
       ${rhoField()}
@@ -130,7 +130,7 @@
     const t0m = md('tau0') === 'manual';
     const line = (k, lbl, vk, bk, note) => { const man = md(k) === 'manual', off = k === 't2' && t0m;
       return `<div class="exc-row${off ? ' off' : ''}"><span class="exc-l">${lbl}</span>${seg(`${p}.${OVR[k][0]}`, [['wall', 'По общим'], ['manual', 'Вручную']], { aria: `Проём ${i + 1}: ${lbl}` })}
-        <input class="exc-v" aria-label="Проём ${i + 1}: ${lbl} вручную" data-k="${p}.${vk}" data-t="coef" inputmode="decimal" value="${esc(fv(x[vk]))}" ${man && !off ? '' : 'disabled'} placeholder="${man ? 'значение' : 'не задано'}">
+        <input class="exc-v" aria-label="Проём ${i + 1}: ${lbl} ${man ? 'вручную' : 'по общим'}" data-common-coef="${k}" data-win="${wi}-${i}" data-k="${p}.${vk}" data-t="coef" inputmode="decimal" value="${man ? esc(fv(x[vk])) : ''}" ${man && !off ? '' : 'disabled'} placeholder="${man ? 'значение' : 'по общим'}">
         ${bk ? `<input class="exc-b" aria-label="Проём ${i + 1}: основание ${lbl}" data-k="${p}.${bk}" data-t="str" value="${esc(x[bk] || '')}" ${man ? '' : 'disabled'} placeholder="основание">` : ''}
         <button type="button" class="btn ghost sm" data-act="clrExc" data-w="${wi}" data-i="${i}" data-c="${k}" ${man || (x[vk] !== null && x[vk] !== '' && x[vk] !== undefined) ? '' : 'disabled'}>Очистить</button>${note ? `<span class="hint">${note}</span>` : ''}</div>`; };
     return `<details class="excd" ${any ? 'open' : ''}><summary>Исключения проёма ${i + 1}: ${any ? ['t2', 'tau0', 'K'].filter(k => md(k) === 'manual').map(k => ({ t2: 'τ2', tau0: 'τо', K: 'K' })[k]).join(', ') + ' — вручную' : 'нет (по общим параметрам стены)'}</summary>
@@ -173,11 +173,11 @@
     const walls = S.mode === 'comb' ? S.side.walls.slice(0, 1) : S.side.walls;
     return `<section class="card" id="c-bld"><header class="card-h"><span class="step">4</span><div><h2>Противостоящие здания</h2><p>Схема № 1 — фасад параллелен исследуемому (рис. Б.4). Иное расположение приводится к эквивалентной условной плоскости (п. Б.3.1).</p></div></header>
       ${walls.map((w, wi) => `<div class="wallblock">${walls.length > 1 ? `<h3>Перед стеной ${wi + 1}</h3>` : ''}
-        ${w.buildings.length ? `<div class="tblw"><table class="grid-t"><thead><tr><th>№</th><th>До фасада <i class="sym">l</i>, м</th><th>Высота <i class="sym">H<sub>р</sub></i>, м</th><th>Длина <i class="sym">a</i>, м</th><th>Смещение центра, м</th><th>Отражение фасада <i class="sym">ρ<sub>ф</sub></i></th><th></th></tr></thead><tbody>
+        ${w.buildings.length ? `<div class="tblw"><table class="grid-t"><thead><tr><th>№</th><th>До фасада <i class="sym">l</i>, м</th><th>Высота <i class="sym">H<sub>р</sub></i>, м</th><th>Длина <i class="sym">a</i>, м</th><th>Центр фасада относительно точки А, м</th><th>Отражение фасада <i class="sym">ρ<sub>ф</sub></i></th><th></th></tr></thead><tbody>
         ${w.buildings.map((b, i) => `<tr><td class="n">${i + 1}</td>${['l', 'Hp', 'a', 'off', 'rhoF'].map(k => `<td><input aria-label="Здание ${i + 1}: ${k}" data-k="side.walls.${wi}.buildings.${i}.${k}" data-t="num" inputmode="decimal" value="${fv(b[k])}"></td>`).join('')}<td><button type="button" class="icon" data-act="delBld" data-w="${wi}" data-i="${i}" aria-label="Удалить здание ${i + 1}">×</button></td></tr>`).join('')}
         </tbody></table></div>` : `<p class="empty">Затенения нет — небо видно до горизонта. Добавьте здание, если оно попадает в световой угол окон.</p>`}
         <div class="btns"><button type="button" class="btn ghost" data-act="addBld" data-w="${wi}">+ Здание</button></div></div>`).join('')}
-      ${more('Как задавать здание', `<ul class="sp"><li><b>l</b> — расстояние от наружной плоскости фасада исследуемого здания до фасада противостоящего.</li><li><b>Hр</b> — от уровня пола исследуемого помещения до верха парапета (затеняющих элементов) противостоящего здания.</li><li><b>a</b> — длина противостоящего фасада (или его проекции на плоскость, параллельную исследуемому фасаду).</li><li><b>Смещение</b> — центр фасада относительно расчётной точки вдоль фасада (вправо — плюс).</li><li><b>ρф</b> — средневзвешенный коэффициент отражения фасада с учётом окон (Б.5): светлая штукатурка ≈ 0,5–0,6, серый бетон ≈ 0,35–0,4, красный кирпич ≈ 0,25–0,3, тёмные фасады ≈ 0,2.</li><li>Если здание закрывает лишь часть окна по ширине, программа делит окно на участки и считает небо и фасад раздельно, как при ручном подсчёте лучей.</li></ul>`)}
+      ${more('Как задавать здание', `<ul class="sp"><li><b>l</b> — расстояние от наружной плоскости фасада исследуемого здания до фасада противостоящего.</li><li><b>Hр</b> — от уровня пола исследуемого помещения до верха парапета (затеняющих элементов) противостоящего здания.</li><li><b>a</b> — длина противостоящего фасада (или его проекции на плоскость, параллельную исследуемому фасаду).</li><li><b>Смещение центра фасада</b> — расстояние вдоль фасада от линии через расчётную точку А до середины противостоящего фасада. Вправо — плюс, если смотреть из помещения на окна. Если на плане заданы координаты от оси помещения: смещение фасада = координата его центра − Δs. Например, центр фасада +2 м, точка А +0,5 м: вводите +1,5 м. Это не Δs: Δs перемещает саму точку А.</li><li><b>ρф</b> — средневзвешенный коэффициент отражения фасада с учётом окон (Б.5): светлая штукатурка ≈ 0,5–0,6, серый бетон ≈ 0,35–0,4, красный кирпич ≈ 0,25–0,3, тёмные фасады ≈ 0,2.</li><li>Если здание закрывает лишь часть окна по ширине, программа делит окно на участки и считает небо и фасад раздельно, как при ручном подсчёте лучей.</li></ul>`)}
     </section>`;
   }
   const sysSwitch = () => `<div class="fld"><span class="lbl">Тип верхнего света</span>${seg('top.sys', [['shaft', 'Зенитные, шахтные (Б.3)'], ['b2', 'Надстройки, проёмы в покрытии (Б.2)']], { aria: 'Тип верхнего света' })}</div>`;
@@ -269,7 +269,7 @@
     C = KEO.compute(S);
     const n = KEO.normOf(S), g = KEO.groupOf(S), hp = KEO.hpOf(S), room = KEO.room(S);
     setOut('normCol', `<span class="muted">(${S.mode === 'side' ? 'боковое' : 'верхнее/комбинир.'})</span>`);
-    setOut('normVal', n.v === null || n.v === undefined ? '<b class="big">не нормируется</b>' : `<b class="big">${f(n.v)} %</b>${n.manual ? ' <span class="muted">задано вручную</span>' : ''}`);
+    setOut('normVal', n.v === null || n.v === undefined ? '<b class="big">норма не задана</b>' : `<b class="big">${f(n.v)} %</b>${n.manual ? ' <span class="muted">задано вручную</span>' : ''}`);
     setOut('facts', room ? `<span class="chip">Группа N = ${g}</span><span class="chip">Плоскость: ${room.h === 0 ? (room.water ? 'поверхность воды' : 'пол, 0,0 м') : 'УРП ' + f(room.h, 1) + ' м'}</span><span class="chip">${S.mode === 'side' ? 'Точка: ' + KEO.RT_TEXT[KEO.rtOf(S)] : 'Точки: по характерному разрезу, крайние — в 1 м от стен'}</span><span class="chip">Нормы ЕО: бок. ${room.eSideN ?? '—'} / верх. ${room.eTopN ?? '—'}; СО: ${room.eSideC ?? '—'} / ${room.eTopC ?? '—'}</span>`.replace(/(\d)\.(\d)/g, '$1,$2') : '');
     setOut('hp', f(hp)); setOut('hpNote', S.hpManual !== null && S.hpManual !== '' ? 'задано вручную' : (hp === 0 ? 'на полу (по норме)' : 'УРП по норме'));
     setOut('hr', f(+S.top.H - hp));
@@ -289,6 +289,7 @@
       w.windows.forEach((x, i) => {
         const c = KEO.winCoef(gen, x, i), mk = m => m === 'manual' ? ' · <b>вручную</b>' : '';
         const val = (v, n) => v === undefined || isNaN(v) ? '<span class="bad-t">ошибка</span>' : f(v, n);
+        document.querySelectorAll(`[data-win="${wi}-${i}"][data-common-coef]`).forEach(el => { const k = el.dataset.commonCoef; if (KEO.winMode(x, k) !== 'manual') { el.value = Number.isFinite(c[k].v) ? fc(c[k].v) : ''; el.title = 'Текущее общее значение; прежнее ручное значение сохранено отдельно.'; } });
         setOut(`we-${wi}-${i}`, `τо ${val(c.tau0.v, 4)}${mk(c.modes.tau0)}<br>K ${val(c.K.v)}${mk(c.modes.K)}`);
         setOut(`wsrc-${wi}-${i}`, c.err.length ? `<span class="bad-t">${esc(c.err.join('; '))}</span>` : `В расчёте: τо = ${f(c.tau0.v, 4)} — ${esc(c.tau0.src)}; K = ${f(c.K.v)} — ${esc(c.K.src)}.`);
       });
@@ -313,32 +314,48 @@
     const box = $('#result');
     if (!C.ok) {
       box.innerHTML = `<div class="stamp bad-in"><div class="st-h">Проверьте исходные данные</div><ul class="errs">${C.err.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
-      $('#schemes').innerHTML = ''; return;
+      renderSchemes(); return;
     }
     const r = C.res, n = C.norm, isSide = S.mode === 'side';
     const v = C.pass === null ? 'na' : C.pass ? 'ok' : 'bad';
     const e = r.eFinal;
+    const comparison = KEO.normComparison(S);
+    const normSummary = comparison.rows.map(x => `${x.system}: ${x.value == null ? 'не задана' : f(x.value) + ' %'}${x.manual ? ' (вручную)' : ''}${x.selected ? ' · выбрано' : ''}`).join('; ');
     box.innerHTML = `<div class="stamp ${v}">
       <div class="st-row"><div class="st-c"><span class="st-l">${isSide ? 'Расчётный КЕО' : 'Средний КЕО'} <span class="sy">${isSide ? 'e<sub>р</sub>' : 'e<sub>ср</sub>'}</span></span><span class="st-v">${f(e)}<small>%</small></span></div>
       <div class="st-c"><span class="st-l">Нормируемый <span class="sy">e<sub>н</sub></span></span><span class="st-v">${n.v === null || n.v === undefined ? '—' : f(n.v)}<small>%</small></span></div></div>
       ${!isSide ? `<div class="st-row"><div class="st-c"><span class="st-l">Равномерность <span class="sy">e<sub>min</sub>:e<sub>ср</sub></span></span><span class="st-v sm">1 : ${f(r.uniInv)}</span></div><div class="st-c"><span class="st-l">Требование</span><span class="st-v sm">не хуже 1 : 3</span></div></div>` : ''}
-      <div class="st-verdict">${v === 'ok' ? 'Соответствует' : v === 'bad' ? 'Не соответствует' : 'КЕО не нормируется'}</div>
+      <p class="small">${esc(normSummary)}</p><p class="small">${esc(comparison.note)}</p>
+      <div class="st-verdict">${v === 'ok' ? 'Соответствует' : v === 'bad' ? 'Не соответствует' : 'Норма не задана; соответствие не оценивалось'}</div>
       ${!isSide ? `<div class="pts">${r.e.map((x, j) => `<span><b>РТ${j + 1}</b> ${f(x)}</span>`).join('')}</div>` : (r.walls.length > 1 ? `<div class="pts">${r.walls.map((w, j) => `<span><b>Стена ${j + 1}</b> ${f(w.e)}</span>`).join('')}</div>` : '')}
     </div>
     ${C.warn.length ? `<div class="warns"><b>Обратите внимание</b><ul>${C.warn.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}`;
     renderSchemes();
   }
   function schemeList() {
-    if (!C || !C.ok) return [];
-    if (S.mode === 'side') { const w = C.res.walls[0]; return [['Разрез', Schemes.sideSection(w.inp, w)], ['План', Schemes.sidePlan(w.inp, w)]]; }
+    if (!C) return [];
+    if (!C.ok) {
+      // Geometry only: never call Engine.side to bypass failed validation.
+      if (S.mode !== 'side') return [];
+      try {
+        const input = KEO.sideInput(S);
+        return input.walls.flatMap((w, i) => {
+          w.hp = input.hp;
+          const valid = [w.dp, w.bp, w.lt].every(v => Number.isFinite(v) && v > 0) && Number.isFinite(w.dst) && w.dst >= 0 && Number.isFinite(w.hp) && w.windows.length && w.windows.every(x => [x.s, x.hpd, x.ho, x.bo].every(Number.isFinite) && x.ho > 0 && x.bo > 0 && x.hpd >= 0) && w.buildings.every(b => [b.l, b.Hp, b.a, b.off].every(Number.isFinite) && b.l > 0 && b.Hp > 0 && b.a > 0);
+          if (!valid) return [];
+          return [[`Разрез · стена ${i + 1}`, Schemes.sideSection(w, null)], [`План · стена ${i + 1}`, Schemes.sidePlan(w, null)]];
+        });
+      } catch (_) { return []; }
+    }
+    if (S.mode === 'side') return C.res.walls.flatMap((w, i) => { const suffix = C.res.walls.length > 1 ? ` · стена ${i + 1}` : ''; return [['Разрез' + suffix, Schemes.sideSection(w.inp, w)], ['План' + suffix, Schemes.sidePlan(w.inp, w)]]; });
     if (KEO.isB2(S)) { const R2 = S.mode === 'comb' ? C.res.top : C.res, mid = Math.floor(R2.inp.points.length / 2); return [['Разрез', Schemes.b2Sect(R2.inp, R2, mid, S.mode === 'comb' ? S.comb.wallSide : null)], ['План', Schemes.b2Plan(R2.inp, S.mode === 'comb' ? S.comb.wallSide : null)]]; }
     const inpT = KEO.topInput(S), pts = inpT.points;
     return [['План', Schemes.topPlan({ ...inpT, L: +S.top.L, B: +S.top.B, y0: pts[0].y, sideWall: S.mode === 'comb' ? S.comb.wallSide : null }, pts)], ['Разрез', Schemes.topSection({ ...inpT, L: +S.top.L }, pts)]];
   }
   function renderSchemes() {
-    const L = schemeList(); if (!L.length) return;
+    const L = schemeList(); if (!L.length) { $('#schemes').innerHTML = ''; return; }
     schemeTab = Math.min(schemeTab, L.length - 1);
-    $('#schemes').innerHTML = `<div class="tabs" role="tablist">${L.map(([t], i) => `<button type="button" role="tab" aria-selected="${i === schemeTab}" data-stab="${i}">${t}</button>`).join('')}</div><div class="svgw">${Schemes.toSVG(L[schemeTab][1], { label: L[schemeTab][0] })}</div>`;
+    $('#schemes').innerHTML = `${!C.ok ? '<p class="warn-t">Диагностическая схема введённой геометрии. Ошибки не устранены; КЕО и вердикт не рассчитаны.</p>' : ''}<div class="tabs" role="tablist">${L.map(([t], i) => `<button type="button" role="tab" aria-selected="${i === schemeTab}" data-stab="${i}">${t}</button>`).join('')}</div><div class="svgw">${Schemes.toSVG(L[schemeTab][1], { label: L[schemeTab][0] })}</div>`;
   }
 
   function renderBreakdown() {
