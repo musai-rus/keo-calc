@@ -51,6 +51,21 @@ const KEO = (function () {
     const colName = (isTop ? 'при верхнем или комбинированном' : 'при боковом') + ' ' + (st.lightSys === 'ЕО' ? 'естественном' : 'совмещённом') + ' освещении';
     return { v, manual: st.normManual !== null && st.normManual !== '', colName, room: r, src: r ? `СП 367.1325800.2025, табл. А.1, п. ${r.n} (= СП 52.13330.2016, табл. Л.1)` : '—' };
   }
+  // Справочное сопоставление норм не меняет систему освещения и не оценивает
+  // допустимость перехода на СО. Ручная норма относится только к выбранной системе.
+  function normComparison(st) {
+    const r = room(st), isTop = st.mode !== 'side';
+    const rows = ['ЕО', 'СО'].map(system => {
+      const selected = system === st.lightSys;
+      const n = normOf({ ...st, lightSys: system, normManual: null });
+      const effective = selected ? normOf(st) : n;
+      return { system, label: system === 'ЕО' ? 'Естественное освещение' : 'Совмещённое освещение',
+        selected, tableValue: n.v ?? null, value: effective.v ?? null,
+        manual: selected && effective.manual, src: n.src, colName: n.colName };
+    });
+    return { rows, room: r, mode: isTop ? 'верхнее или комбинированное' : 'боковое',
+      note: 'Нормы ЕО и СО приведены для справки. Вывод относится только к выбранной системе освещения и проверяемым показателям КЕО. Сравнение с нормой СО не подтверждает допустимость перехода на совмещённое освещение и выполнение требований к искусственному освещению.' };
+  }
   function hpOf(st) { const r = room(st); if (st.hpManual !== null && st.hpManual !== '' && !isNaN(st.hpManual)) return +st.hpManual; return r && r.h !== null ? r.h : 0.8; }
   const SIDE_POINT_MISSING = 'Недостаточно данных для выбора расчётной точки: несколько записей стен не подтверждают число физических световых сторон. Румб не задаёт плоскость стены. Проверьте геометрию и явно задайте положение точки.';
   function rtOf(st) {
@@ -506,7 +521,9 @@ const KEO = (function () {
     const roomTitle = [st.meta.room, n.room ? n.room.name : ''].filter(Boolean).join('. ');
     M.push({ type: 'h1', text: 'Расчёт коэффициента естественной освещённости', sub: [st.meta.object, roomTitle].filter(Boolean).join(' · ') });
     const eLbl = st.mode === 'side' ? 'e_{р}^{б}' : 'e_{ср}';
-    M.push({ type: 'verdict', ok: !!C.pass, left: `${st.mode === 'side' ? 'Расчётный КЕО' : 'Среднее значение КЕО'} ${eLbl} = ${f(r.eFinal)} %;   нормируемый e_{н} = ${n.v === null ? '—' : f(n.v)} %`, left2: st.mode === 'side' ? `Условие: e_{р} ≥ e_{н} — ${C.normOk ? 'выполняется' : 'не выполняется'}` : `Равномерность e_{min} : e_{ср} = 1 : ${f(r.uniInv)} (норма не более 1 : 3) — ${C.uniOk ? 'выполняется' : 'не выполняется'}` });
+    if (C.pass !== null) M.push({ type: 'verdict', ok: !!C.pass, left: `${st.mode === 'side' ? 'Расчётный КЕО' : 'Среднее значение КЕО'} ${eLbl} = ${f(r.eFinal)} %;   нормируемый e_{н} = ${n.v === null ? '—' : f(n.v)} %`, left2: st.mode === 'side' ? `Условие: e_{р} ≥ e_{н} — ${C.normOk ? 'выполняется' : 'не выполняется'}` : `Равномерность e_{min} : e_{ср} = 1 : ${f(r.uniInv)} (норма не более 1 : 3) — ${C.uniOk ? 'выполняется' : 'не выполняется'}` });
+
+    else M.push({ type: 'p', text: `Расчётный КЕО = ${f(r.eFinal)} %. Для выбранной системы норма КЕО не задана; вывод о соответствии не формируется.` });
 
     // 1. исходные
     M.push({ type: 'h2', text: '1. Нормативные требования' });
@@ -520,6 +537,12 @@ const KEO = (function () {
       ...(st.mode === 'side' ? [['Положение расчётной точки', '', '', `${RT_TEXT[rt]} (${RT_REF[rt]})`]] : [['Расчётные точки', 'N', String(r.e ? r.e.length : ''), 'на пересечении характерного разреза и УРП, первая и последняя — в 1 м от стен (п. 5.5 СП 52.13330.2016). ' + topPointPolicy(st).note]]),
       ['Средневзвешенный коэффициент отражения', 'ρ_{ср}', f(rh.v), rh.label + (st.mode === 'comb' ? '. В комбинированном режиме одно ρср применено и к r0 (табл. Б.6/Б.7: пол, стены, потолок, окна), и к r2 (табл. Б.21: пол, стены, потолок)' : '')]
     ] });
+    const nc = normComparison(st);
+    M.push({ type: 'table', title: `Нормы КЕО: ЕО и СО (${nc.mode} освещение)`,
+      cols: [{ h: 'Система', w: 40 }, { h: 'По таблице А.1, %', w: 24, a: 'center' }, { h: 'Применение', w: 66 }],
+      rows: nc.rows.map(x => [x.system + ' — ' + x.label, x.tableValue === null ? 'не задана' : f(x.tableValue),
+        x.selected ? (x.manual ? `Выбрана; ручная норма ${f(x.value)} % вместо табличной` : 'Выбрана для проверки') : 'Справочно; не используется в вердикте']),
+      note: `${nc.rows[0].src}. ${nc.note}` });
     if (rh.mode === 'surf') rhoTable(M, st, rh);
 
     if (st.mode === 'side') sideModel(M, st, C, r);
@@ -529,10 +552,13 @@ const KEO = (function () {
 
     // заключение
     M.push({ type: 'h2', text: 'Заключение' });
-    const concl = st.mode === 'side'
-      ? `Расчётное значение КЕО в расчётной точке eр = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %. Требования СП 52.13330.2016 и СП 367.1325800.2025 к естественному освещению помещения ${C.pass ? 'выполняются' : 'не выполняются'}.`
-      : `Среднее значение КЕО eср = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %; равномерность 1 : ${f(r.uniInv)} ${C.uniOk ? '(не более 1 : 3)' : '(хуже 1 : 3)'}. Требования к ${st.mode === 'top' ? 'верхнему' : 'комбинированному'} естественному освещению ${C.pass ? 'выполняются' : 'не выполняются'}.`;
+    const concl = C.pass === null
+      ? `Расчётный КЕО = ${f(r.eFinal)} %. Норма КЕО для выбранной системы не задана. Соответствие не оценивалось; отсутствие нормы не означает соответствие.`
+      : st.mode === 'side'
+      ? `Расчётное значение КЕО в расчётной точке eр = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %. Проверка КЕО для выбранной системы ${st.lightSys} по СП 52.13330.2016 и СП 367.1325800.2025: требования ${C.pass ? 'выполняются' : 'не выполняются'}.`
+      : `Среднее значение КЕО eср = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %; равномерность 1 : ${f(r.uniInv)} ${C.uniOk ? '(не более 1 : 3)' : '(хуже 1 : 3)'}. Проверка среднего КЕО и равномерности для выбранной системы ${st.lightSys}: требования ${C.pass ? 'выполняются' : 'не выполняются'}.`;
     M.push({ type: 'p', text: concl });
+    M.push({ type: 'p', small: true, text: `Выбрана система: ${st.lightSys === 'ЕО' ? 'ЕО — естественное освещение' : 'СО — совмещённое освещение'}. ${nc.note}` });
     if (C.warn.length) { M.push({ type: 'h3', text: 'Замечания' }); C.warn.forEach(w => M.push({ type: 'p', text: '• ' + w, small: true })); }
     M.push({ type: 'p', small: true, text: 'Нормативная база: СП 367.1325800.2025 «Здания жилые и общественные. Правила проектирования естественного и совмещённого освещения»; СП 52.13330.2016 «Естественное и искусственное освещение» (с изм. 1, 2). Расчёт выполнен без учёта мебели и оборудования, при 100 % использовании светопрозрачных заполнений (п. 5.9 СП 52.13330.2016). Значения КЕО округлены до сотых (п. Б.2.12 СП 367).' });
     return M;
@@ -813,6 +839,6 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { lanternCoord, topPointPolicy, danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { lanternCoord, topPointPolicy, danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, normComparison, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 if (typeof module !== 'undefined') module.exports = KEO;

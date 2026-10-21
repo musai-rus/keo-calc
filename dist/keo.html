@@ -933,10 +933,13 @@ const Schemes = (function () {
       it.push({ t: 'text', x: A.x - g.D * 0.55, y: A.y + zm * 0.55 + 0.12, s: 'γ = ' + r2(sg ? sg.gamma : Engine.deg(Math.atan2(zm, g.D))) + '°', c: 'txt', a: 'middle' });
     }
     // здания (условно, со сжатием расстояния)
-    (inp.buildings || []).forEach((b, i) => {
+    const buildings = inp.buildings || [];
+    const labelGap = Math.max(0.6, (dp + dst + ext) / 20, H / 14);
+    const labelBase = H + (buildings.length ? 1.6 : 0.7);
+    buildings.forEach((b, i) => {
       const xb = -dst - Math.min(ext - 0.3, 0.6 + i * 0.4);
       it.push({ t: 'rect', x: xb - 0.25, y: 0, w: 0.25, h: Math.min(b.Hp, H + 1.2), c: 'bld' });
-      it.push({ t: 'text', x: xb - 0.12, y: Math.min(b.Hp, H + 1.2) + 0.15, s: `здание ${i + 1}: l = ${r2(b.l, 1)} м`, c: 'txt', a: 'end' });
+      it.push({ t: 'text', x: 0.1, y: labelBase + (buildings.length - 1 - i) * labelGap, s: `Ф${i + 1}: l = ${r2(b.l, 1)} м (условно)`, c: 'txt' });
     });
     it.push({ t: 'circle', x: A.x, y: A.y, r: 0.08, c: 'pt' });
     it.push({ t: 'text', x: A.x + 0.12, y: A.y + 0.15, s: 'А', c: 'txtb' });
@@ -944,8 +947,8 @@ const Schemes = (function () {
     it.push({ t: 'dim', x1: 0, y1: -0.5, x2: inp.lt, y2: -0.5, s: 'lт = ' + r2(inp.lt) });
     it.push({ t: 'dim', x1: 0, y1: -1.05, x2: dp, y2: -1.05, s: 'dп = ' + r2(dp) });
     it.push({ t: 'dimv', x1: dp + 0.35, y1: 0, x2: dp + 0.35, y2: top, s: 'hв.о = ' + r2(top) });
-    it.push({ t: 'text', x: -dst - ext + 0.1, y: H + 0.1, s: 'Разрез', c: 'cap' });
-    return { box: [-dst - ext, -1.3, dp + 0.9, H + 1.6], it };
+    it.push({ t: 'text', x: -dst - ext + 0.1, y: labelBase + buildings.length * labelGap, s: 'Разрез' + (!(Number.isFinite(inp.H) && inp.H > 0) ? ' · H не задана, потолок условный' : ''), c: 'cap' });
+    return { box: [-dst - ext, -1.3, dp + 0.9, labelBase + (buildings.length + 1) * labelGap], it };
   }
 
   function sidePlan(inp, res) {
@@ -964,13 +967,37 @@ const Schemes = (function () {
     let cur = y0 - 0.3;
     ws.forEach(([a, b]) => { if (a > cur) it.push({ t: 'rect', x: -dst, y: cur, w: dst, h: a - cur, c: 'wall' }); it.push({ t: 'line', x1: -dst / 2, y1: a, x2: -dst / 2, y2: b, c: 'glass' }); cur = Math.max(cur, b); });
     if (cur < y1 + 0.3) it.push({ t: 'rect', x: -dst, y: cur, w: dst, h: y1 + 0.3 - cur, c: 'wall' });
-    it.push({ t: 'line', x1: -dst - 0.8, y1: A.y, x2: dp, y2: A.y, c: 'axis' });
+    // Фасады в том же масштабе, что помещение. off в существующем
+    // контракте sideSectors отсчитывается от оси через А (не от оси комнаты).
+    // Известна только плоскость фасада; глубина/контур здания не выдумываются.
+    const facades = (inp.buildings || []).filter(b => Number.isFinite(b.l) && b.l >= 0 && Number.isFinite(b.a) && b.a > 0 && Number.isFinite(b.off || 0));
+    let xmin = -dst - 0.9, ymin = Math.min(y0, A.y), ymax = Math.max(y1, A.y);
+    facades.forEach((b, i) => {
+      const x = -dst - b.l, cy = A.y + (b.off || 0), lo = cy - b.a / 2, hi = cy + b.a / 2;
+      xmin = Math.min(xmin, x - 0.9); ymin = Math.min(ymin, lo); ymax = Math.max(ymax, hi);
+      it.push({ t: 'line', x1: x, y1: lo, x2: x, y2: hi, c: 'bld' });
+      it.push({ t: 'circle', x, y: cy, r: 0.04, c: 'cpt' });
+      it.push({ t: 'text', x: x - 0.12, y: cy + 0.15, s: 'Ф' + (i + 1), c: 'txtb', a: 'end' });
+    });
+    // Отступы подписей зависят от охвата схемы: PDF использует фиксированный
+    // размер шрифта, поэтому постоянные доли метра давали наложение строк.
+    const gap = Math.max(0.75, (dp - xmin) / 20, (ymax - ymin) / 14);
+    it.push({ t: 'line', x1: xmin + 0.15, y1: A.y, x2: dp, y2: A.y, c: 'axis' });
+    if (A.y !== 0) {
+      it.push({ t: 'line', x1: 0, y1: 0, x2: dp, y2: 0, c: 'axis' });
+      it.push({ t: 'dimv', x1: dp + 2.4 * gap, y1: 0, x2: dp + 2.4 * gap, y2: A.y, s: 'Δs = ' + r2(A.y) });
+    }
     it.push({ t: 'circle', x: A.x, y: A.y, r: 0.08, c: 'pt' });
     it.push({ t: 'text', x: A.x + 0.12, y: A.y + 0.15, s: 'А', c: 'txtb' });
-    it.push({ t: 'dimv', x1: dp + 0.35, y1: y0, x2: dp + 0.35, y2: y1, s: 'bп = ' + r2(bp) });
+    it.push({ t: 'dimv', x1: dp + 0.7 * gap, y1: y0, x2: dp + 0.7 * gap, y2: y1, s: 'bп = ' + r2(bp) });
     it.push({ t: 'dim', x1: 0, y1: y0 - 0.45, x2: dp, y2: y0 - 0.45, s: 'dп = ' + r2(dp) });
-    it.push({ t: 'text', x: -dst - 0.7, y: y1 + 0.55, s: 'План', c: 'cap' });
-    return { box: [-dst - 0.9, y0 - 0.9, dp + 1.0, y1 + 0.85], it };
+    it.push({ t: 'text', x: xmin + 0.2, y: ymax + gap, s: 'План · +s вверх (вправо при взгляде на окна)', c: 'cap' });
+    const legendY = Math.min(ymin, y0 - 0.45) - gap;
+    facades.forEach((b, i) => {
+      it.push({ t: 'text', x: xmin + 0.2, y: legendY - i * 2.3 * gap, s: `Ф${i + 1}: l = ${r2(b.l)} м; a = ${r2(b.a)} м`, c: 'txt' });
+      it.push({ t: 'text', x: xmin + 0.2, y: legendY - (i * 2.3 + 1) * gap, s: `Центр от оси через А: ${r2(b.off || 0)} м (не Δs)`, c: 'txt' });
+    });
+    return { box: [xmin, facades.length ? legendY - facades.length * 2.3 * gap : ymin - gap, dp + 3.5 * gap, ymax + 1.8 * gap], it };
   }
 
   function topPlan(inp, pts) {
@@ -1465,6 +1492,21 @@ const KEO = (function () {
     const colName = (isTop ? 'при верхнем или комбинированном' : 'при боковом') + ' ' + (st.lightSys === 'ЕО' ? 'естественном' : 'совмещённом') + ' освещении';
     return { v, manual: st.normManual !== null && st.normManual !== '', colName, room: r, src: r ? `СП 367.1325800.2025, табл. А.1, п. ${r.n} (= СП 52.13330.2016, табл. Л.1)` : '—' };
   }
+  // Справочное сопоставление норм не меняет систему освещения и не оценивает
+  // допустимость перехода на СО. Ручная норма относится только к выбранной системе.
+  function normComparison(st) {
+    const r = room(st), isTop = st.mode !== 'side';
+    const rows = ['ЕО', 'СО'].map(system => {
+      const selected = system === st.lightSys;
+      const n = normOf({ ...st, lightSys: system, normManual: null });
+      const effective = selected ? normOf(st) : n;
+      return { system, label: system === 'ЕО' ? 'Естественное освещение' : 'Совмещённое освещение',
+        selected, tableValue: n.v ?? null, value: effective.v ?? null,
+        manual: selected && effective.manual, src: n.src, colName: n.colName };
+    });
+    return { rows, room: r, mode: isTop ? 'верхнее или комбинированное' : 'боковое',
+      note: 'Нормы ЕО и СО приведены для справки. Вывод относится только к выбранной системе освещения и проверяемым показателям КЕО. Сравнение с нормой СО не подтверждает допустимость перехода на совмещённое освещение и выполнение требований к искусственному освещению.' };
+  }
   function hpOf(st) { const r = room(st); if (st.hpManual !== null && st.hpManual !== '' && !isNaN(st.hpManual)) return +st.hpManual; return r && r.h !== null ? r.h : 0.8; }
   const SIDE_POINT_MISSING = 'Недостаточно данных для выбора расчётной точки: несколько записей стен не подтверждают число физических световых сторон. Румб не задаёт плоскость стены. Проверьте геометрию и явно задайте положение точки.';
   function rtOf(st) {
@@ -1920,7 +1962,9 @@ const KEO = (function () {
     const roomTitle = [st.meta.room, n.room ? n.room.name : ''].filter(Boolean).join('. ');
     M.push({ type: 'h1', text: 'Расчёт коэффициента естественной освещённости', sub: [st.meta.object, roomTitle].filter(Boolean).join(' · ') });
     const eLbl = st.mode === 'side' ? 'e_{р}^{б}' : 'e_{ср}';
-    M.push({ type: 'verdict', ok: !!C.pass, left: `${st.mode === 'side' ? 'Расчётный КЕО' : 'Среднее значение КЕО'} ${eLbl} = ${f(r.eFinal)} %;   нормируемый e_{н} = ${n.v === null ? '—' : f(n.v)} %`, left2: st.mode === 'side' ? `Условие: e_{р} ≥ e_{н} — ${C.normOk ? 'выполняется' : 'не выполняется'}` : `Равномерность e_{min} : e_{ср} = 1 : ${f(r.uniInv)} (норма не более 1 : 3) — ${C.uniOk ? 'выполняется' : 'не выполняется'}` });
+    if (C.pass !== null) M.push({ type: 'verdict', ok: !!C.pass, left: `${st.mode === 'side' ? 'Расчётный КЕО' : 'Среднее значение КЕО'} ${eLbl} = ${f(r.eFinal)} %;   нормируемый e_{н} = ${n.v === null ? '—' : f(n.v)} %`, left2: st.mode === 'side' ? `Условие: e_{р} ≥ e_{н} — ${C.normOk ? 'выполняется' : 'не выполняется'}` : `Равномерность e_{min} : e_{ср} = 1 : ${f(r.uniInv)} (норма не более 1 : 3) — ${C.uniOk ? 'выполняется' : 'не выполняется'}` });
+
+    else M.push({ type: 'p', text: `Расчётный КЕО = ${f(r.eFinal)} %. Для выбранной системы норма КЕО не задана; вывод о соответствии не формируется.` });
 
     // 1. исходные
     M.push({ type: 'h2', text: '1. Нормативные требования' });
@@ -1934,6 +1978,12 @@ const KEO = (function () {
       ...(st.mode === 'side' ? [['Положение расчётной точки', '', '', `${RT_TEXT[rt]} (${RT_REF[rt]})`]] : [['Расчётные точки', 'N', String(r.e ? r.e.length : ''), 'на пересечении характерного разреза и УРП, первая и последняя — в 1 м от стен (п. 5.5 СП 52.13330.2016). ' + topPointPolicy(st).note]]),
       ['Средневзвешенный коэффициент отражения', 'ρ_{ср}', f(rh.v), rh.label + (st.mode === 'comb' ? '. В комбинированном режиме одно ρср применено и к r0 (табл. Б.6/Б.7: пол, стены, потолок, окна), и к r2 (табл. Б.21: пол, стены, потолок)' : '')]
     ] });
+    const nc = normComparison(st);
+    M.push({ type: 'table', title: `Нормы КЕО: ЕО и СО (${nc.mode} освещение)`,
+      cols: [{ h: 'Система', w: 40 }, { h: 'По таблице А.1, %', w: 24, a: 'center' }, { h: 'Применение', w: 66 }],
+      rows: nc.rows.map(x => [x.system + ' — ' + x.label, x.tableValue === null ? 'не задана' : f(x.tableValue),
+        x.selected ? (x.manual ? `Выбрана; ручная норма ${f(x.value)} % вместо табличной` : 'Выбрана для проверки') : 'Справочно; не используется в вердикте']),
+      note: `${nc.rows[0].src}. ${nc.note}` });
     if (rh.mode === 'surf') rhoTable(M, st, rh);
 
     if (st.mode === 'side') sideModel(M, st, C, r);
@@ -1943,10 +1993,13 @@ const KEO = (function () {
 
     // заключение
     M.push({ type: 'h2', text: 'Заключение' });
-    const concl = st.mode === 'side'
-      ? `Расчётное значение КЕО в расчётной точке eр = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %. Требования СП 52.13330.2016 и СП 367.1325800.2025 к естественному освещению помещения ${C.pass ? 'выполняются' : 'не выполняются'}.`
-      : `Среднее значение КЕО eср = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %; равномерность 1 : ${f(r.uniInv)} ${C.uniOk ? '(не более 1 : 3)' : '(хуже 1 : 3)'}. Требования к ${st.mode === 'top' ? 'верхнему' : 'комбинированному'} естественному освещению ${C.pass ? 'выполняются' : 'не выполняются'}.`;
+    const concl = C.pass === null
+      ? `Расчётный КЕО = ${f(r.eFinal)} %. Норма КЕО для выбранной системы не задана. Соответствие не оценивалось; отсутствие нормы не означает соответствие.`
+      : st.mode === 'side'
+      ? `Расчётное значение КЕО в расчётной точке eр = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %. Проверка КЕО для выбранной системы ${st.lightSys} по СП 52.13330.2016 и СП 367.1325800.2025: требования ${C.pass ? 'выполняются' : 'не выполняются'}.`
+      : `Среднее значение КЕО eср = ${f(r.eFinal)} % ${C.normOk ? '≥' : '<'} нормируемого eн = ${n.v === null ? '—' : f(n.v)} %; равномерность 1 : ${f(r.uniInv)} ${C.uniOk ? '(не более 1 : 3)' : '(хуже 1 : 3)'}. Проверка среднего КЕО и равномерности для выбранной системы ${st.lightSys}: требования ${C.pass ? 'выполняются' : 'не выполняются'}.`;
     M.push({ type: 'p', text: concl });
+    M.push({ type: 'p', small: true, text: `Выбрана система: ${st.lightSys === 'ЕО' ? 'ЕО — естественное освещение' : 'СО — совмещённое освещение'}. ${nc.note}` });
     if (C.warn.length) { M.push({ type: 'h3', text: 'Замечания' }); C.warn.forEach(w => M.push({ type: 'p', text: '• ' + w, small: true })); }
     M.push({ type: 'p', small: true, text: 'Нормативная база: СП 367.1325800.2025 «Здания жилые и общественные. Правила проектирования естественного и совмещённого освещения»; СП 52.13330.2016 «Естественное и искусственное освещение» (с изм. 1, 2). Расчёт выполнен без учёта мебели и оборудования, при 100 % использовании светопрозрачных заполнений (п. 5.9 СП 52.13330.2016). Значения КЕО округлены до сотых (п. Б.2.12 СП 367).' });
     return M;
@@ -2227,7 +2280,7 @@ const KEO = (function () {
     combSideModel(M, st, C, r, 4);
   }
 
-  return { lanternCoord, topPointPolicy, danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
+  return { lanternCoord, topPointPolicy, danCheck, danBlocks, danSel, DAN_GEO_COLS, DAN_VAL_COLS, migrate, setRhoMode, readNum, coefCheck, COEF_RULES, winCoef, wallCoef, winMode, migrateWindows, rhoOf, rhoMode, roomShell, windowsArea, windowOverlaps, RHO_ROWS, B2_KINDS, CN_ROWS, cnRowDefault, defaultB2Type, b2Input, isB2, defaultState, defaultWall, defaultWindow, defaultType, compute, buildModel, normOf, normComparison, hpOf, rtOf, ltAuto, groupOf, room, topPoints, sideInput, topInput, ORIENTS, ORIENT_NAME, RT_TEXT, RT_REF, K_TITLES, mfOf, tau1Wall, round2 };
 })();
 if (typeof module !== 'undefined') module.exports = KEO;
 
@@ -2316,9 +2369,9 @@ if (typeof module !== 'undefined') module.exports = KEO;
     const walls = S.side.walls, rule = KEO.rtOf(S);
     return `<section class="card" id="c-room"><header class="card-h"><span class="step">2</span><div><h2>Помещение и расчётная точка</h2><p>Размеры снимаются в Revit по плану и характерному разрезу через центр световых проёмов.</p></div></header>
       ${walls.map((w, wi) => `<div class="wallblock">${walls.length > 1 ? `<h3>Стена ${wi + 1} со светопроёмами</h3>` : ''}
-        <div class="row three">${inp(`side.walls.${wi}.dp`, 'Глубина помещения', 'd_{п}', 'м', { hint: 'от внутренней грани стены с окнами' })}${inp(`side.walls.${wi}.bp`, 'Ширина помещения', 'b_{п}', 'м', { hint: 'вдоль стены с окнами' })}${inp(`side.walls.${wi}.H`, 'Высота помещения', 'H', 'м', { hint: 'для схемы' })}</div>
+        <div class="row three">${inp(`side.walls.${wi}.dp`, 'Глубина помещения — перпендикулярно окнам', 'd_{п}', 'м', { hint: 'От внутренней грани стены с окнами до противоположной внутренней грани.' })}${inp(`side.walls.${wi}.bp`, 'Ширина помещения — вдоль окон', 'b_{п}', 'м', { hint: 'Вдоль стены с окнами, между внутренними гранями боковых стен.' })}${inp(`side.walls.${wi}.H`, 'Высота помещения', 'H', 'м', { hint: 'Не обязательна при ρср = 0,55 или ручном ρср; нужна для автоматических площадей поверхностей. Без H разрез условный, высота потолка не подтверждена.' })}</div>
         <div class="row three">${rule === 'manual' ? inp(`side.walls.${wi}.lt`, 'До расчётной точки', 'l_{т}', 'м') : `<div class="fld"><span class="lbl">До расчётной точки <i class="sym">l<sub>т</sub></i></span><div class="calc">${out('lt' + wi)} м</div><span class="hint">${KEO.RT_TEXT[rule]}</span></div>`}
-        ${inp(`side.walls.${wi}.ds`, 'Смещение точки от оси', 'Δs', 'м', { hint: 'вправо — плюс' })}
+        ${inp(`side.walls.${wi}.ds`, 'Смещение расчётной точки А от оси помещения', 'Δs', 'м', { hint: 'Вдоль стены с окнами: 0 — по центру ширины; вправо — плюс, если смотреть из помещения на окна. Это не смещение окна s и не смещение противостоящего фасада.' })}
         <div class="fld"><span class="lbl">Высота точки <i class="sym">h<sub>р</sub></i></span><div class="calc">${out('hp')} м</div><span class="hint">${out('hpNote')}</span></div></div></div>`).join('')}
       <div class="row two"><div class="fld"><span class="lbl">Двустороннее / угловое освещение</span><div class="btns">${walls.length < 2 ? `<button type="button" class="btn ghost" data-act="addWall">+ Вторая стена с окнами</button>` : `<button type="button" class="btn ghost" data-act="delWall">− Убрать вторую стену</button>`}</div><span class="hint">КЕО от проёмов разной ориентации суммируется (п. 8.4.1)</span></div><div></div></div>
       ${rhoField()}
@@ -2365,7 +2418,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
     const t0m = md('tau0') === 'manual';
     const line = (k, lbl, vk, bk, note) => { const man = md(k) === 'manual', off = k === 't2' && t0m;
       return `<div class="exc-row${off ? ' off' : ''}"><span class="exc-l">${lbl}</span>${seg(`${p}.${OVR[k][0]}`, [['wall', 'По общим'], ['manual', 'Вручную']], { aria: `Проём ${i + 1}: ${lbl}` })}
-        <input class="exc-v" aria-label="Проём ${i + 1}: ${lbl} вручную" data-k="${p}.${vk}" data-t="coef" inputmode="decimal" value="${esc(fv(x[vk]))}" ${man && !off ? '' : 'disabled'} placeholder="${man ? 'значение' : 'не задано'}">
+        <input class="exc-v" aria-label="Проём ${i + 1}: ${lbl} ${man ? 'вручную' : 'по общим'}" data-common-coef="${k}" data-win="${wi}-${i}" data-k="${p}.${vk}" data-t="coef" inputmode="decimal" value="${man ? esc(fv(x[vk])) : ''}" ${man && !off ? '' : 'disabled'} placeholder="${man ? 'значение' : 'по общим'}">
         ${bk ? `<input class="exc-b" aria-label="Проём ${i + 1}: основание ${lbl}" data-k="${p}.${bk}" data-t="str" value="${esc(x[bk] || '')}" ${man ? '' : 'disabled'} placeholder="основание">` : ''}
         <button type="button" class="btn ghost sm" data-act="clrExc" data-w="${wi}" data-i="${i}" data-c="${k}" ${man || (x[vk] !== null && x[vk] !== '' && x[vk] !== undefined) ? '' : 'disabled'}>Очистить</button>${note ? `<span class="hint">${note}</span>` : ''}</div>`; };
     return `<details class="excd" ${any ? 'open' : ''}><summary>Исключения проёма ${i + 1}: ${any ? ['t2', 'tau0', 'K'].filter(k => md(k) === 'manual').map(k => ({ t2: 'τ2', tau0: 'τо', K: 'K' })[k]).join(', ') + ' — вручную' : 'нет (по общим параметрам стены)'}</summary>
@@ -2408,11 +2461,11 @@ if (typeof module !== 'undefined') module.exports = KEO;
     const walls = S.mode === 'comb' ? S.side.walls.slice(0, 1) : S.side.walls;
     return `<section class="card" id="c-bld"><header class="card-h"><span class="step">4</span><div><h2>Противостоящие здания</h2><p>Схема № 1 — фасад параллелен исследуемому (рис. Б.4). Иное расположение приводится к эквивалентной условной плоскости (п. Б.3.1).</p></div></header>
       ${walls.map((w, wi) => `<div class="wallblock">${walls.length > 1 ? `<h3>Перед стеной ${wi + 1}</h3>` : ''}
-        ${w.buildings.length ? `<div class="tblw"><table class="grid-t"><thead><tr><th>№</th><th>До фасада <i class="sym">l</i>, м</th><th>Высота <i class="sym">H<sub>р</sub></i>, м</th><th>Длина <i class="sym">a</i>, м</th><th>Смещение центра, м</th><th>Отражение фасада <i class="sym">ρ<sub>ф</sub></i></th><th></th></tr></thead><tbody>
+        ${w.buildings.length ? `<div class="tblw"><table class="grid-t"><thead><tr><th>№</th><th>До фасада <i class="sym">l</i>, м</th><th>Высота <i class="sym">H<sub>р</sub></i>, м</th><th>Длина <i class="sym">a</i>, м</th><th>Центр фасада относительно точки А, м</th><th>Отражение фасада <i class="sym">ρ<sub>ф</sub></i></th><th></th></tr></thead><tbody>
         ${w.buildings.map((b, i) => `<tr><td class="n">${i + 1}</td>${['l', 'Hp', 'a', 'off', 'rhoF'].map(k => `<td><input aria-label="Здание ${i + 1}: ${k}" data-k="side.walls.${wi}.buildings.${i}.${k}" data-t="num" inputmode="decimal" value="${fv(b[k])}"></td>`).join('')}<td><button type="button" class="icon" data-act="delBld" data-w="${wi}" data-i="${i}" aria-label="Удалить здание ${i + 1}">×</button></td></tr>`).join('')}
         </tbody></table></div>` : `<p class="empty">Затенения нет — небо видно до горизонта. Добавьте здание, если оно попадает в световой угол окон.</p>`}
         <div class="btns"><button type="button" class="btn ghost" data-act="addBld" data-w="${wi}">+ Здание</button></div></div>`).join('')}
-      ${more('Как задавать здание', `<ul class="sp"><li><b>l</b> — расстояние от наружной плоскости фасада исследуемого здания до фасада противостоящего.</li><li><b>Hр</b> — от уровня пола исследуемого помещения до верха парапета (затеняющих элементов) противостоящего здания.</li><li><b>a</b> — длина противостоящего фасада (или его проекции на плоскость, параллельную исследуемому фасаду).</li><li><b>Смещение</b> — центр фасада относительно расчётной точки вдоль фасада (вправо — плюс).</li><li><b>ρф</b> — средневзвешенный коэффициент отражения фасада с учётом окон (Б.5): светлая штукатурка ≈ 0,5–0,6, серый бетон ≈ 0,35–0,4, красный кирпич ≈ 0,25–0,3, тёмные фасады ≈ 0,2.</li><li>Если здание закрывает лишь часть окна по ширине, программа делит окно на участки и считает небо и фасад раздельно, как при ручном подсчёте лучей.</li></ul>`)}
+      ${more('Как задавать здание', `<ul class="sp"><li><b>l</b> — расстояние от наружной плоскости фасада исследуемого здания до фасада противостоящего.</li><li><b>Hр</b> — от уровня пола исследуемого помещения до верха парапета (затеняющих элементов) противостоящего здания.</li><li><b>a</b> — длина противостоящего фасада (или его проекции на плоскость, параллельную исследуемому фасаду).</li><li><b>Смещение центра фасада</b> — расстояние вдоль фасада от линии через расчётную точку А до середины противостоящего фасада. Вправо — плюс, если смотреть из помещения на окна. Если на плане заданы координаты от оси помещения: смещение фасада = координата его центра − Δs. Например, центр фасада +2 м, точка А +0,5 м: вводите +1,5 м. Это не Δs: Δs перемещает саму точку А.</li><li><b>ρф</b> — средневзвешенный коэффициент отражения фасада с учётом окон (Б.5): светлая штукатурка ≈ 0,5–0,6, серый бетон ≈ 0,35–0,4, красный кирпич ≈ 0,25–0,3, тёмные фасады ≈ 0,2.</li><li>Если здание закрывает лишь часть окна по ширине, программа делит окно на участки и считает небо и фасад раздельно, как при ручном подсчёте лучей.</li></ul>`)}
     </section>`;
   }
   const sysSwitch = () => `<div class="fld"><span class="lbl">Тип верхнего света</span>${seg('top.sys', [['shaft', 'Зенитные, шахтные (Б.3)'], ['b2', 'Надстройки, проёмы в покрытии (Б.2)']], { aria: 'Тип верхнего света' })}</div>`;
@@ -2504,7 +2557,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
     C = KEO.compute(S);
     const n = KEO.normOf(S), g = KEO.groupOf(S), hp = KEO.hpOf(S), room = KEO.room(S);
     setOut('normCol', `<span class="muted">(${S.mode === 'side' ? 'боковое' : 'верхнее/комбинир.'})</span>`);
-    setOut('normVal', n.v === null || n.v === undefined ? '<b class="big">не нормируется</b>' : `<b class="big">${f(n.v)} %</b>${n.manual ? ' <span class="muted">задано вручную</span>' : ''}`);
+    setOut('normVal', n.v === null || n.v === undefined ? '<b class="big">норма не задана</b>' : `<b class="big">${f(n.v)} %</b>${n.manual ? ' <span class="muted">задано вручную</span>' : ''}`);
     setOut('facts', room ? `<span class="chip">Группа N = ${g}</span><span class="chip">Плоскость: ${room.h === 0 ? (room.water ? 'поверхность воды' : 'пол, 0,0 м') : 'УРП ' + f(room.h, 1) + ' м'}</span><span class="chip">${S.mode === 'side' ? 'Точка: ' + KEO.RT_TEXT[KEO.rtOf(S)] : 'Точки: по характерному разрезу, крайние — в 1 м от стен'}</span><span class="chip">Нормы ЕО: бок. ${room.eSideN ?? '—'} / верх. ${room.eTopN ?? '—'}; СО: ${room.eSideC ?? '—'} / ${room.eTopC ?? '—'}</span>`.replace(/(\d)\.(\d)/g, '$1,$2') : '');
     setOut('hp', f(hp)); setOut('hpNote', S.hpManual !== null && S.hpManual !== '' ? 'задано вручную' : (hp === 0 ? 'на полу (по норме)' : 'УРП по норме'));
     setOut('hr', f(+S.top.H - hp));
@@ -2524,6 +2577,7 @@ if (typeof module !== 'undefined') module.exports = KEO;
       w.windows.forEach((x, i) => {
         const c = KEO.winCoef(gen, x, i), mk = m => m === 'manual' ? ' · <b>вручную</b>' : '';
         const val = (v, n) => v === undefined || isNaN(v) ? '<span class="bad-t">ошибка</span>' : f(v, n);
+        document.querySelectorAll(`[data-win="${wi}-${i}"][data-common-coef]`).forEach(el => { const k = el.dataset.commonCoef; if (KEO.winMode(x, k) !== 'manual') { el.value = Number.isFinite(c[k].v) ? fc(c[k].v) : ''; el.title = 'Текущее общее значение; прежнее ручное значение сохранено отдельно.'; } });
         setOut(`we-${wi}-${i}`, `τо ${val(c.tau0.v, 4)}${mk(c.modes.tau0)}<br>K ${val(c.K.v)}${mk(c.modes.K)}`);
         setOut(`wsrc-${wi}-${i}`, c.err.length ? `<span class="bad-t">${esc(c.err.join('; '))}</span>` : `В расчёте: τо = ${f(c.tau0.v, 4)} — ${esc(c.tau0.src)}; K = ${f(c.K.v)} — ${esc(c.K.src)}.`);
       });
@@ -2548,32 +2602,48 @@ if (typeof module !== 'undefined') module.exports = KEO;
     const box = $('#result');
     if (!C.ok) {
       box.innerHTML = `<div class="stamp bad-in"><div class="st-h">Проверьте исходные данные</div><ul class="errs">${C.err.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
-      $('#schemes').innerHTML = ''; return;
+      renderSchemes(); return;
     }
     const r = C.res, n = C.norm, isSide = S.mode === 'side';
     const v = C.pass === null ? 'na' : C.pass ? 'ok' : 'bad';
     const e = r.eFinal;
+    const comparison = KEO.normComparison(S);
+    const normSummary = comparison.rows.map(x => `${x.system}: ${x.value == null ? 'не задана' : f(x.value) + ' %'}${x.manual ? ' (вручную)' : ''}${x.selected ? ' · выбрано' : ''}`).join('; ');
     box.innerHTML = `<div class="stamp ${v}">
       <div class="st-row"><div class="st-c"><span class="st-l">${isSide ? 'Расчётный КЕО' : 'Средний КЕО'} <span class="sy">${isSide ? 'e<sub>р</sub>' : 'e<sub>ср</sub>'}</span></span><span class="st-v">${f(e)}<small>%</small></span></div>
       <div class="st-c"><span class="st-l">Нормируемый <span class="sy">e<sub>н</sub></span></span><span class="st-v">${n.v === null || n.v === undefined ? '—' : f(n.v)}<small>%</small></span></div></div>
       ${!isSide ? `<div class="st-row"><div class="st-c"><span class="st-l">Равномерность <span class="sy">e<sub>min</sub>:e<sub>ср</sub></span></span><span class="st-v sm">1 : ${f(r.uniInv)}</span></div><div class="st-c"><span class="st-l">Требование</span><span class="st-v sm">не хуже 1 : 3</span></div></div>` : ''}
-      <div class="st-verdict">${v === 'ok' ? 'Соответствует' : v === 'bad' ? 'Не соответствует' : 'КЕО не нормируется'}</div>
+      <p class="small">${esc(normSummary)}</p><p class="small">${esc(comparison.note)}</p>
+      <div class="st-verdict">${v === 'ok' ? 'Соответствует' : v === 'bad' ? 'Не соответствует' : 'Норма не задана; соответствие не оценивалось'}</div>
       ${!isSide ? `<div class="pts">${r.e.map((x, j) => `<span><b>РТ${j + 1}</b> ${f(x)}</span>`).join('')}</div>` : (r.walls.length > 1 ? `<div class="pts">${r.walls.map((w, j) => `<span><b>Стена ${j + 1}</b> ${f(w.e)}</span>`).join('')}</div>` : '')}
     </div>
     ${C.warn.length ? `<div class="warns"><b>Обратите внимание</b><ul>${C.warn.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}`;
     renderSchemes();
   }
   function schemeList() {
-    if (!C || !C.ok) return [];
-    if (S.mode === 'side') { const w = C.res.walls[0]; return [['Разрез', Schemes.sideSection(w.inp, w)], ['План', Schemes.sidePlan(w.inp, w)]]; }
+    if (!C) return [];
+    if (!C.ok) {
+      // Geometry only: never call Engine.side to bypass failed validation.
+      if (S.mode !== 'side') return [];
+      try {
+        const input = KEO.sideInput(S);
+        return input.walls.flatMap((w, i) => {
+          w.hp = input.hp;
+          const valid = [w.dp, w.bp, w.lt].every(v => Number.isFinite(v) && v > 0) && Number.isFinite(w.dst) && w.dst >= 0 && Number.isFinite(w.hp) && w.windows.length && w.windows.every(x => [x.s, x.hpd, x.ho, x.bo].every(Number.isFinite) && x.ho > 0 && x.bo > 0 && x.hpd >= 0) && w.buildings.every(b => [b.l, b.Hp, b.a, b.off].every(Number.isFinite) && b.l > 0 && b.Hp > 0 && b.a > 0);
+          if (!valid) return [];
+          return [[`Разрез · стена ${i + 1}`, Schemes.sideSection(w, null)], [`План · стена ${i + 1}`, Schemes.sidePlan(w, null)]];
+        });
+      } catch (_) { return []; }
+    }
+    if (S.mode === 'side') return C.res.walls.flatMap((w, i) => { const suffix = C.res.walls.length > 1 ? ` · стена ${i + 1}` : ''; return [['Разрез' + suffix, Schemes.sideSection(w.inp, w)], ['План' + suffix, Schemes.sidePlan(w.inp, w)]]; });
     if (KEO.isB2(S)) { const R2 = S.mode === 'comb' ? C.res.top : C.res, mid = Math.floor(R2.inp.points.length / 2); return [['Разрез', Schemes.b2Sect(R2.inp, R2, mid, S.mode === 'comb' ? S.comb.wallSide : null)], ['План', Schemes.b2Plan(R2.inp, S.mode === 'comb' ? S.comb.wallSide : null)]]; }
     const inpT = KEO.topInput(S), pts = inpT.points;
     return [['План', Schemes.topPlan({ ...inpT, L: +S.top.L, B: +S.top.B, y0: pts[0].y, sideWall: S.mode === 'comb' ? S.comb.wallSide : null }, pts)], ['Разрез', Schemes.topSection({ ...inpT, L: +S.top.L }, pts)]];
   }
   function renderSchemes() {
-    const L = schemeList(); if (!L.length) return;
+    const L = schemeList(); if (!L.length) { $('#schemes').innerHTML = ''; return; }
     schemeTab = Math.min(schemeTab, L.length - 1);
-    $('#schemes').innerHTML = `<div class="tabs" role="tablist">${L.map(([t], i) => `<button type="button" role="tab" aria-selected="${i === schemeTab}" data-stab="${i}">${t}</button>`).join('')}</div><div class="svgw">${Schemes.toSVG(L[schemeTab][1], { label: L[schemeTab][0] })}</div>`;
+    $('#schemes').innerHTML = `${!C.ok ? '<p class="warn-t">Диагностическая схема введённой геометрии. Ошибки не устранены; КЕО и вердикт не рассчитаны.</p>' : ''}<div class="tabs" role="tablist">${L.map(([t], i) => `<button type="button" role="tab" aria-selected="${i === schemeTab}" data-stab="${i}">${t}</button>`).join('')}</div><div class="svgw">${Schemes.toSVG(L[schemeTab][1], { label: L[schemeTab][0] })}</div>`;
   }
 
   function renderBreakdown() {

@@ -32,10 +32,13 @@ const Schemes = (function () {
       it.push({ t: 'text', x: A.x - g.D * 0.55, y: A.y + zm * 0.55 + 0.12, s: 'γ = ' + r2(sg ? sg.gamma : Engine.deg(Math.atan2(zm, g.D))) + '°', c: 'txt', a: 'middle' });
     }
     // здания (условно, со сжатием расстояния)
-    (inp.buildings || []).forEach((b, i) => {
+    const buildings = inp.buildings || [];
+    const labelGap = Math.max(0.6, (dp + dst + ext) / 20, H / 14);
+    const labelBase = H + (buildings.length ? 1.6 : 0.7);
+    buildings.forEach((b, i) => {
       const xb = -dst - Math.min(ext - 0.3, 0.6 + i * 0.4);
       it.push({ t: 'rect', x: xb - 0.25, y: 0, w: 0.25, h: Math.min(b.Hp, H + 1.2), c: 'bld' });
-      it.push({ t: 'text', x: xb - 0.12, y: Math.min(b.Hp, H + 1.2) + 0.15, s: `здание ${i + 1}: l = ${r2(b.l, 1)} м`, c: 'txt', a: 'end' });
+      it.push({ t: 'text', x: 0.1, y: labelBase + (buildings.length - 1 - i) * labelGap, s: `Ф${i + 1}: l = ${r2(b.l, 1)} м (условно)`, c: 'txt' });
     });
     it.push({ t: 'circle', x: A.x, y: A.y, r: 0.08, c: 'pt' });
     it.push({ t: 'text', x: A.x + 0.12, y: A.y + 0.15, s: 'А', c: 'txtb' });
@@ -43,8 +46,8 @@ const Schemes = (function () {
     it.push({ t: 'dim', x1: 0, y1: -0.5, x2: inp.lt, y2: -0.5, s: 'lт = ' + r2(inp.lt) });
     it.push({ t: 'dim', x1: 0, y1: -1.05, x2: dp, y2: -1.05, s: 'dп = ' + r2(dp) });
     it.push({ t: 'dimv', x1: dp + 0.35, y1: 0, x2: dp + 0.35, y2: top, s: 'hв.о = ' + r2(top) });
-    it.push({ t: 'text', x: -dst - ext + 0.1, y: H + 0.1, s: 'Разрез', c: 'cap' });
-    return { box: [-dst - ext, -1.3, dp + 0.9, H + 1.6], it };
+    it.push({ t: 'text', x: -dst - ext + 0.1, y: labelBase + buildings.length * labelGap, s: 'Разрез' + (!(Number.isFinite(inp.H) && inp.H > 0) ? ' · H не задана, потолок условный' : ''), c: 'cap' });
+    return { box: [-dst - ext, -1.3, dp + 0.9, labelBase + (buildings.length + 1) * labelGap], it };
   }
 
   function sidePlan(inp, res) {
@@ -63,13 +66,37 @@ const Schemes = (function () {
     let cur = y0 - 0.3;
     ws.forEach(([a, b]) => { if (a > cur) it.push({ t: 'rect', x: -dst, y: cur, w: dst, h: a - cur, c: 'wall' }); it.push({ t: 'line', x1: -dst / 2, y1: a, x2: -dst / 2, y2: b, c: 'glass' }); cur = Math.max(cur, b); });
     if (cur < y1 + 0.3) it.push({ t: 'rect', x: -dst, y: cur, w: dst, h: y1 + 0.3 - cur, c: 'wall' });
-    it.push({ t: 'line', x1: -dst - 0.8, y1: A.y, x2: dp, y2: A.y, c: 'axis' });
+    // Фасады в том же масштабе, что помещение. off в существующем
+    // контракте sideSectors отсчитывается от оси через А (не от оси комнаты).
+    // Известна только плоскость фасада; глубина/контур здания не выдумываются.
+    const facades = (inp.buildings || []).filter(b => Number.isFinite(b.l) && b.l >= 0 && Number.isFinite(b.a) && b.a > 0 && Number.isFinite(b.off || 0));
+    let xmin = -dst - 0.9, ymin = Math.min(y0, A.y), ymax = Math.max(y1, A.y);
+    facades.forEach((b, i) => {
+      const x = -dst - b.l, cy = A.y + (b.off || 0), lo = cy - b.a / 2, hi = cy + b.a / 2;
+      xmin = Math.min(xmin, x - 0.9); ymin = Math.min(ymin, lo); ymax = Math.max(ymax, hi);
+      it.push({ t: 'line', x1: x, y1: lo, x2: x, y2: hi, c: 'bld' });
+      it.push({ t: 'circle', x, y: cy, r: 0.04, c: 'cpt' });
+      it.push({ t: 'text', x: x - 0.12, y: cy + 0.15, s: 'Ф' + (i + 1), c: 'txtb', a: 'end' });
+    });
+    // Отступы подписей зависят от охвата схемы: PDF использует фиксированный
+    // размер шрифта, поэтому постоянные доли метра давали наложение строк.
+    const gap = Math.max(0.75, (dp - xmin) / 20, (ymax - ymin) / 14);
+    it.push({ t: 'line', x1: xmin + 0.15, y1: A.y, x2: dp, y2: A.y, c: 'axis' });
+    if (A.y !== 0) {
+      it.push({ t: 'line', x1: 0, y1: 0, x2: dp, y2: 0, c: 'axis' });
+      it.push({ t: 'dimv', x1: dp + 2.4 * gap, y1: 0, x2: dp + 2.4 * gap, y2: A.y, s: 'Δs = ' + r2(A.y) });
+    }
     it.push({ t: 'circle', x: A.x, y: A.y, r: 0.08, c: 'pt' });
     it.push({ t: 'text', x: A.x + 0.12, y: A.y + 0.15, s: 'А', c: 'txtb' });
-    it.push({ t: 'dimv', x1: dp + 0.35, y1: y0, x2: dp + 0.35, y2: y1, s: 'bп = ' + r2(bp) });
+    it.push({ t: 'dimv', x1: dp + 0.7 * gap, y1: y0, x2: dp + 0.7 * gap, y2: y1, s: 'bп = ' + r2(bp) });
     it.push({ t: 'dim', x1: 0, y1: y0 - 0.45, x2: dp, y2: y0 - 0.45, s: 'dп = ' + r2(dp) });
-    it.push({ t: 'text', x: -dst - 0.7, y: y1 + 0.55, s: 'План', c: 'cap' });
-    return { box: [-dst - 0.9, y0 - 0.9, dp + 1.0, y1 + 0.85], it };
+    it.push({ t: 'text', x: xmin + 0.2, y: ymax + gap, s: 'План · +s вверх (вправо при взгляде на окна)', c: 'cap' });
+    const legendY = Math.min(ymin, y0 - 0.45) - gap;
+    facades.forEach((b, i) => {
+      it.push({ t: 'text', x: xmin + 0.2, y: legendY - i * 2.3 * gap, s: `Ф${i + 1}: l = ${r2(b.l)} м; a = ${r2(b.a)} м`, c: 'txt' });
+      it.push({ t: 'text', x: xmin + 0.2, y: legendY - (i * 2.3 + 1) * gap, s: `Центр от оси через А: ${r2(b.off || 0)} м (не Δs)`, c: 'txt' });
+    });
+    return { box: [xmin, facades.length ? legendY - facades.length * 2.3 * gap : ymin - gap, dp + 3.5 * gap, ymax + 1.8 * gap], it };
   }
 
   function topPlan(inp, pts) {
