@@ -47,7 +47,8 @@
       sourceSchema: data?.schema ?? null,
       rooms: selected.map(room => ({ ...room, status: 'PENDING', color: 'gray' })),
       status: 'PENDING', color: 'gray',
-      captureStructureOk: !issues.some(x => !['geometry-not-accepted', 'norm-not-accepted'].includes(x.code)),
+      // Minimal ID checks only; NOT validation of the full Room evidence contract.
+      minimalIdentityOk: !issues.some(x => !['geometry-not-accepted', 'norm-not-accepted'].includes(x.code)),
       issues
     };
   }
