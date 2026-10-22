@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <DefineConstants>$(DefineConstants);KEO_REVIT_2027</DefineConstants>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Keo.RevitPrototype</AssemblyName>
@@ -16,7 +17,7 @@
     <Reference Include="RevitAPIUI"><HintPath>$(RevitInstallDir)/RevitAPIUI.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
   <Target Name="RequireOfficialLocalSdk" BeforeTargets="ResolveReferences">
-    <Error Condition="'$(RevitInstallDir)' == '' Or !Exists('$(RevitInstallDir)/RevitAPI.dll') Or !Exists('$(RevitInstallDir)/RevitAPIUI.dll')" Text="Supply an existing official Revit 2026 installation via RevitInstallDir. No DLL downloads are performed." />
+    <Error Condition="'$(RevitInstallDir)' == '' Or !Exists('$(RevitInstallDir)/RevitAPI.dll') Or !Exists('$(RevitInstallDir)/RevitAPIUI.dll')" Text="Supply an existing official Revit 2027 installation via RevitInstallDir. No DLL downloads are performed." />
     <Error Condition="'$(SourceCommit)' == ''" Text="Set SourceCommit to the exact source Git SHA; never label an unknown build as verified." />
   </Target>
 </Project>
