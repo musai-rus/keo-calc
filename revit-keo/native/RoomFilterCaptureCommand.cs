@@ -1,6 +1,7 @@
-// Experimental, read-only Revit 2027.3 source. NOT compiled or executed in Revit.
+// Experimental, read-only Revit 2027.3 command. Compiled on MRM; NOT executed in Revit.
 // Emits raw Room evidence only; it does NOT certify daylight geometry or compute KEO.
 using System.Globalization;
+using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -12,6 +13,8 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
 using Microsoft.Win32;
+using ComboBox = System.Windows.Controls.ComboBox;
+using Button = System.Windows.Controls.Button;
 
 namespace Keo.RoomEvidence;
 

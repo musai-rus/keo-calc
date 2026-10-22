@@ -1,5 +1,7 @@
-// SOURCE ONLY: not compiled or executed in Revit. See SDK.md before building.
+// Compiled via the Revit 2027.3 prototype target; NOT executed in Revit.
+// The standalone Revit 2026 target remains untested. See SDK.md before building.
 using System.Globalization;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Autodesk.Revit.Attributes;
