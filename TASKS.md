@@ -4,7 +4,7 @@
 
 | Направление | Единый источник требований | Учёт работ | Статус |
 |---|---|---|---|
-| **КЕО для Revit** (отдельный плагин) | [`tasks/KEO_REVIT.md`](tasks/KEO_REVIT.md) | [Issue #13](https://github.com/musai-rus/keo-calc/issues/13), ветка `feature/revit-keo-prototype` | ТЗ согласовано; опытная разработка, без подтверждённого запуска в Revit |
+| **КЕО для Revit** (отдельный плагин) | [`tasks/KEO_REVIT.md`](tasks/KEO_REVIT.md) | [Issue #13](https://github.com/musai-rus/keo-calc/issues/13), ветка `feature/revit-keo-prototype` | ТЗ согласовано; source-only прототип отбора Room и JSON replay, без подтверждённого запуска в Revit |
 | **КЕО по модели в Autodesk Viewer** | [`INSTRUCTION.md`, раздел 12](INSTRUCTION.md) и профильные контракты в [`bim/`](bim/) | Действующие PR/сценарии Viewer | Эксперимент, независимо от Revit |
 | **Основной ручной калькулятор** | [`INSTRUCTION.md`, разделы 1–11](INSTRUCTION.md) | Принятые решения и журнал в инструкции | Рабочее расчётное ядро; не менять в рамках Revit-прототипа |
 
