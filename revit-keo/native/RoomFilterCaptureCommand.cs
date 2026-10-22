@@ -1,4 +1,4 @@
-// Experimental, read-only Revit 2026 source. NOT compiled or executed in Revit.
+// Experimental, read-only Revit 2027.3 source. NOT compiled or executed in Revit.
 // Emits raw Room evidence only; it does NOT certify daylight geometry or compute KEO.
 using System.Globalization;
 using System.Reflection;
