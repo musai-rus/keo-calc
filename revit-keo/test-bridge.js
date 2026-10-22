@@ -42,14 +42,14 @@ const raw = { schema: B.SCHEMA, profile: 'horizontal-line-plan/0.1',
     { ref: { documentKey: 'root', uniqueId: 'UID2' } }
   ] } };
 let d = B.inspectRawCapture(raw);
-assert.equal(d.captureStructureOk, true);
+assert.equal(d.minimalIdentityOk, true);
 assert.deepEqual(d.rooms.map(x => x.status), ['PENDING', 'PENDING']);
 assert.ok(d.issues.some(x => x.code === 'geometry-not-accepted'));
 assert.ok(d.issues.some(x => x.code === 'norm-not-accepted'));
 // Equal display numbers must not ever be used for identity.
 raw.scope.rooms.push({ ref: { documentKey: 'root', uniqueId: 'UID1' } });
 d = B.inspectRawCapture(raw);
-assert.equal(d.captureStructureOk, false);
+assert.equal(d.minimalIdentityOk, false);
 assert.ok(d.issues.some(x => x.code === 'duplicate-room-identity'));
 // Spoofing "executedInRevit" alone cannot turn gray into green.
 raw.execution = { executedInRevit: true, readOnly: true };
