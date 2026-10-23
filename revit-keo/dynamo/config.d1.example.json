@@ -1,0 +1,10 @@
+{
+  "schema": "keo-dynamo-d1-config/v1",
+  "expected_rvt_path": "",
+  "expected_sha256": "",
+  "expected_revit_version": "2027",
+  "expected_revit_build": "27.3.0.28",
+  "evidence_jsonl": "",
+  "mode": "inventory",
+  "sample_element_id": ""
+}
