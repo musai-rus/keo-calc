@@ -9,7 +9,7 @@ const prefix = name => {
   if (text.split(marker).length !== 2) throw Error('Entry marker changed: ' + name);
   return text.split(marker)[0];
 };
-const source = prefix('d0_probe.py') + '\n\n' + prefix('d1_capture.py') + '\n\n' + read('d2_inspect.py');
+const source = prefix('d0_probe.py') + '\n\n' + prefix('d1_capture.py') + '\n\n' + read('d2_geometry.py') + '\n\n' + read('d2_inspect.py');
 const graph = JSON.parse(read('KEO_D1_RoomEvidence.dyn'));
 const ids = new Map();
 function walk(value) {

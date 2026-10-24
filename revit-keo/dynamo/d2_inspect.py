@@ -8,6 +8,8 @@ if "D1Host" not in globals():
     from d0_probe import canonical_path, json, os
 
 D2_SCHEMA = "keo-dynamo-d2-inspection/v1"
+if "PhysicalGeometryMixin" not in globals():
+    from d2_geometry import PhysicalGeometryMixin
 
 
 def overlaps_xy(a, b, padding=0.0):
@@ -32,7 +34,7 @@ def adapt_config(config):
     return result
 
 
-class D2Host(D1Host):
+class D2Host(PhysicalGeometryMixin, D1Host):
     def phase_room_ref(self, element, phase, side):
         room = phase_room(element, phase, side)
         return self.ref(room) if room is not None else None
@@ -130,7 +132,7 @@ class D2Host(D1Host):
             raise ProbeRefused("Room has no bounding box")
         categories = ("OST_Walls", "OST_Windows", "OST_Doors", "OST_CurtainWallPanels", "OST_CurtainWallMullions",
                       "OST_Floors", "OST_Roofs", "OST_Ceilings", "OST_Columns", "OST_StructuralColumns", "OST_GenericModel")
-        records, counts, missing_boxes = [], {}, []
+        records, counts, missing_boxes, physical = [], {}, [], []
         for category in categories:
             collector = self.DB.FilteredElementCollector(self.doc).OfCategory(getattr(self.DB.BuiltInCategory, category)).WhereElementIsNotElementType()
             try:
@@ -144,6 +146,9 @@ class D2Host(D1Host):
                         if len(records) >= 2000:
                             raise ProbeRefused("Candidate cap reached; no truncated acceptance")
                         records.append(rr("Element metadata", lambda: self.metadata(element, phase)))
+                        if category in ("OST_Windows", "OST_Doors", "OST_CurtainWallPanels"):
+                            physical.append({"ref": self.ref(element), "category": category,
+                                "geometry": rr("Physical geometry", lambda: self.physical_geometry(element, room))})
                         included += 1
                 counts[category] = {"wholeRootModel": total, "nearRoomAllHeights": included}
             finally:
@@ -158,7 +163,7 @@ class D2Host(D1Host):
                     "paddingFt": 4.0, "heightFilter": None, "phaseFilter": None, "designOptionFilter": None,
                     "counts": counts, "missingBoundingBoxes": missing_boxes,
                     "purpose": "reconnaissance only; excludes distant shading, linked and unlisted categories"},
-                "candidates": records, "imports": import_records,
+                "candidates": records, "imports": import_records, "physicalGeometry": physical,
                 "geometryAccepted": False, "normativeAccepted": False, "d2Complete": False,
                 "limits": ["No glazing faces or transmittance accepted", "No visibility rays or complete shading",
                            "Room solid may bridge openings; never substitute it for physical occluders"]}
