@@ -31,6 +31,9 @@ def pending_plan(config, evidence):
 
 
 class PendingHost(D1Host):
+    def note_text(self, plan):
+        return "КЕО: —   Норма: —\nУТОЧНИТЬ\n"+plan["reason"]
+
     def capture_still_matches(self, config, evidence):
         probe=InputHost()
         payload=probe.input_inventory({"selected_room_uid":config["room_uid"],
@@ -141,7 +144,7 @@ class PendingHost(D1Host):
                 p=room.Location.Point
                 mark=d.Create.NewRoomTag(DB.LinkElementId(room.Id),DB.UV(p.X,p.Y),view.Id)
                 mark.ChangeTypeId(tag_type.Id)
-                note_text="КЕО: —   Норма: —\nУТОЧНИТЬ\n"+plan["reason"]
+                note_text=self.note_text(plan)
                 # Width is paper-space feet, unlike the model-space placement.
                 note=DB.TextNote.Create(d,view.Id,DB.XYZ(p.X,p.Y-5,p.Z),0.16,note_text,text_type.Id)
                 changed={"view":self.ref(view),"room":self.ref(room),"scheme":self.ref(scheme),

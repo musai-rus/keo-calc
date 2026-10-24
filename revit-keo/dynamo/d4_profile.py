@@ -1,9 +1,25 @@
-"""Targeted read-only profile inspection after a recorded diagnostic D5 apply.
+"""Targeted read-only profile inspection on a clean file or recorded D5 state.
 
 No transactions, model writes or saving. The complete current snapshot must
 equal the successful apply evidence; all profile inputs are reread.
 This inspects candidate dimensions, not geometry/normative acceptance.
 """
+
+def profile_baseline(config, host):
+    mode=config.get("baseline_mode", "recorded-apply")
+    if mode=="recorded-apply":
+        return recorded_baseline(config,host)
+    if mode!="clean-file":
+        raise ProbeRefused("Unknown profile baseline mode")
+    if "apply_evidence_jsonl" in config or "apply_nonce" in config:
+        raise ProbeRefused("Clean-file baseline cannot include historical apply evidence")
+    guard=run_probe(config["documentGuard"],True,"profile-clean-file",lambda:host)
+    if guard["status"]!="READ_ONLY_OK":
+        raise ProbeRefused("Clean-file guard: "+guard.get("reason",guard["status"]))
+    current=host.snapshot()
+    if current!=guard["after"]:
+        raise ProbeRefused("Document changed after clean-file guard")
+    return current
 
 def recorded_baseline(config, host):
     validate_config(config["documentGuard"])
@@ -101,6 +117,9 @@ class ProfileHost(InputHost):
             out["windowDetails"]=[{"uid":uid,"location":rr("Location",lambda: self.xyz(self.doc.GetElement(uid).Location.Point)),
                 "geometry":rr("Selected window geometry",lambda:detail_host.physical_geometry(self.doc.GetElement(uid),room))}
                 for uid in selected]
+        if config.get("section_probe") is not None:
+            available=[w["ref"]["uniqueId"] for w in out["windows"]]+[e["ref"]["uniqueId"] for e in out["localShadingCandidates"]]
+            out["sectionProbe"]=read_section_probe(self,room,config["section_probe"],available)
         return out
 
 
@@ -113,7 +132,7 @@ def profile_entry(inputs):
     canonical_path(config["output_json"],".json")
     if inputs[1]:
         host=ProfileHost()
-        before=recorded_baseline(config,host)
+        before=profile_baseline(config,host)
         payload=host.profile(config)
         after=host.snapshot()
         if before!=after:raise ProbeRefused("Document changed during read")

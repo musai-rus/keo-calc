@@ -59,4 +59,22 @@ class ProfileReadTests(unittest.TestCase):
             with self.subTest(selected=selected):
                 with self.assertRaises(ns["ProbeRefused"]):ns["detail_selection"]({"detail_window_uids":selected},["captured"])
 
+    def test_clean_file_uses_d0_and_rechecks_snapshot(self):
+        config={"baseline_mode":"clean-file","documentGuard":self.config["documentGuard"]}
+        self.current["isModified"]=False
+        with patch.dict(ns,{"run_probe":lambda c,e,n,f:{"status":"READ_ONLY_OK","after":copy.deepcopy(self.current)}}):
+            self.assertEqual(ns["profile_baseline"](config,self.host),self.current)
+        with patch.dict(ns,{"run_probe":lambda *a:{"status":"READ_ONLY_OK","after":{"other":"snapshot"}}}):
+            with self.assertRaises(ns["ProbeRefused"]):ns["profile_baseline"](config,self.host)
+
+    def test_clean_file_never_falls_back_on_guard_refusal(self):
+        config={"baseline_mode":"clean-file","documentGuard":self.config["documentGuard"]}
+        for status in ("REFUSED","ERROR"):
+            with patch.dict(ns,{"run_probe":lambda *a:{"status":status,"reason":"dirty or wrong file"}}):
+                with self.assertRaises(ns["ProbeRefused"]):ns["profile_baseline"](config,self.host)
+
+    def test_baseline_mode_must_be_explicit_and_unambiguous(self):
+        for config in (dict(self.config,baseline_mode="clean-file"),dict(self.config,baseline_mode="unchecked")):
+            with self.assertRaises(ns["ProbeRefused"]):ns["profile_baseline"](config,self.host)
+
 if __name__=="__main__":unittest.main()

@@ -3,14 +3,14 @@ const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypt
 const read=n=>fs.readFileSync(path.join(__dirname,n),'utf8').replace(/\r\n/g,'\n');
 const cut=n=>read(n).split('\nif "IN" in globals():\n')[0];
 const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
-const source=cut('d0_probe.py')+'\n'+cut('d1_capture.py')+'\n'+read('d2_geometry.py')+'\n'+cut('d2_inspect.py')+'\n'+cut('d4_inputs.py')+'\n'+read('d4_profile.py');
+const source=cut('d0_probe.py')+'\n'+cut('d1_capture.py')+'\n'+read('d2_geometry.py')+'\n'+cut('d2_inspect.py')+'\n'+cut('d4_inputs.py')+'\n'+read('d4_section_probe.py')+'\n'+read('d4_profile.py');
 const graph=JSON.parse(read('KEO_D0_ReadOnly.dyn'));
 const ids=new Map();
 function visit(x){if(Array.isArray(x))x.forEach(visit);else if(x&&typeof x==='object')for(const[k,v]of Object.entries(x)){if(['Id','Uuid'].includes(k)&&typeof v==='string')ids.set(v,hash('keo-profile:'+v).slice(0,32));visit(v);}}
 function rewrite(x){if(Array.isArray(x))return x.map(rewrite);if(x&&typeof x==='object')return Object.fromEntries(Object.entries(x).map(([k,v])=>[k,rewrite(v)]));return ids.get(x)||x;}
 visit(graph);const g=rewrite(graph);
 g.Name='KEO D4 - Profile read';
-g.Description='Read-only candidate profile after an exact recorded D5 apply. No normative acceptance or RVT save.';
+g.Description='Read-only candidate profile on a D0-verified clean file or exact recorded D5 state. No normative acceptance or RVT save.';
 g.Nodes[3].Code='BUNDLE_SHA256 = "'+hash(source)+'"\n'+source;
 g.View.NodeViews[3].Name='D4 - Profile read';g.View.NodeViews[4].Name='D4 profile summary';
 const content=JSON.stringify(g,null,2)+'\n';

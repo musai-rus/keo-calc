@@ -11,5 +11,6 @@
   "room_uid": "",
   "phase_uid": "",
   "detail_window_uids": [],
-  "output_json": ""
+  "output_json": "",
+  "baseline_mode": "recorded-apply"
 }

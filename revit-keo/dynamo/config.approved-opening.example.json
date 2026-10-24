@@ -1,0 +1,42 @@
+{
+  "schema": "keo-approved-opening/v1",
+  "action": "preview",
+  "documentGuard": {
+    "schema": "keo-dynamo-d0-config/v1",
+    "expected_rvt_path": "",
+    "expected_sha256": "",
+    "expected_revit_version": "2027",
+    "expected_revit_build": "27.3.0.28"
+  },
+  "room_uid": "",
+  "source_view_uid": "",
+  "tag_type_uid": "",
+  "text_type_uid": "",
+  "view_name": "КЕО — проверка",
+  "reason": "",
+  "shared_parameters_path": "",
+  "evidence_path": "",
+  "result_path": "",
+  "result_sha256": "",
+  "evidence_jsonl": "",
+  "profile_config": {
+    "room_uid": "",
+    "phase_uid": "",
+    "detail_window_uids": []
+  },
+  "opening": {
+    "host_uid": "",
+    "center_m": [
+      null,
+      null,
+      null
+    ],
+    "diameter_m": null,
+    "z_range_m": [
+      null,
+      null
+    ],
+    "approval": ""
+  },
+  "approved_plan_sha256": ""
+}
