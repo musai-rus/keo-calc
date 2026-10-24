@@ -1,0 +1,16 @@
+{
+  "schema": "keo-dynamo-d2-config/v1",
+  "expected_sha256": "",
+  "expected_rvt_path": "",
+  "evidence_jsonl": "",
+  "expected_revit_build": "27.3.0.28",
+  "expected_revit_version": "2027",
+  "mode": "capture",
+  "phase_uid": "",
+  "selected_room_uid": "",
+  "parameter": {
+    "kind": "id",
+    "key": ""
+  },
+  "value": ""
+}

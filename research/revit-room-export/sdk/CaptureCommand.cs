@@ -1,5 +1,7 @@
-// SOURCE ONLY: not compiled or executed in Revit. See SDK.md before building.
+// Compiled via the Revit 2027.3 prototype target; NOT executed in Revit.
+// The standalone Revit 2026 target remains untested. See SDK.md before building.
 using System.Globalization;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Autodesk.Revit.Attributes;
@@ -94,9 +96,18 @@ internal sealed class Capture
     }
     internal D Read()
     {
-        if (ui.Application.VersionNumber != "2026" || Environment.Version.Major != 8 ||
-            typeof(Document).Assembly.GetName().Version?.Major != 26 || ui.Application.VersionBuild != request.ExpectedRevitBuild)
-            throw new NotSupportedException("Only explicit Revit 2026 build / API 26 / .NET 8 supported by this source target");
+#if KEO_REVIT_2027
+        const string targetRevit = "2027";
+        const int targetRuntime = 10;
+        const int targetApi = 27;
+#else
+        const string targetRevit = "2026";
+        const int targetRuntime = 8;
+        const int targetApi = 26;
+#endif
+        if (ui.Application.VersionNumber != targetRevit || Environment.Version.Major != targetRuntime ||
+            typeof(Document).Assembly.GetName().Version?.Major != targetApi || ui.Application.VersionBuild != request.ExpectedRevitBuild)
+            throw new NotSupportedException($"Only exact Revit {targetRevit} build / API {targetApi} / .NET {targetRuntime} supported by this source target");
         if (string.IsNullOrWhiteSpace(request.SourceCommit) || request.RoomUniqueIds is null ||
             request.RoomUniqueIds.Length is < 1 or > 256 || request.RoomUniqueIds.Distinct().Count() != request.RoomUniqueIds.Length)
             throw new InvalidOperationException("Explicit unique Room scope and producer commit required");

@@ -1,0 +1,21 @@
+{
+  "schema": "keo-pending-config/v1",
+  "documentGuard": {
+    "schema": "keo-dynamo-d0-config/v1",
+    "expected_rvt_path": "",
+    "expected_sha256": "",
+    "expected_revit_version": "2027",
+    "expected_revit_build": "27.3.0.28"
+  },
+  "action": "preview",
+  "room_uid": "",
+  "evidence_path": "",
+  "evidence_jsonl": "",
+  "shared_parameters_path": "",
+  "view_name": "КЕО — проверка",
+  "source_view_uid": "",
+  "tag_type_uid": "",
+  "text_type_uid": "",
+  "reason": "",
+  "approved_plan_sha256": ""
+}

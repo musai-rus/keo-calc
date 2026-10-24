@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <DefineConstants>$(DefineConstants);KEO_REVIT_2027</DefineConstants>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Keo.RevitPrototype</AssemblyName>
+    <Version>0.1.0</Version>
+    <!-- Compile with -p:SourceCommit=<actual 40-hex Git commit SHA>. -->
+    <InformationalVersion>$(SourceCommit)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../research/revit-room-export/sdk/CaptureCommand.cs" Link="CaptureCommand.cs" />
+    <Reference Include="RevitAPI"><HintPath>$(RevitInstallDir)/RevitAPI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="RevitAPIUI"><HintPath>$(RevitInstallDir)/RevitAPIUI.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="RequireOfficialLocalSdk" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(RevitInstallDir)' == '' Or !Exists('$(RevitInstallDir)/RevitAPI.dll') Or !Exists('$(RevitInstallDir)/RevitAPIUI.dll')" Text="Supply an existing official Revit 2027 installation via RevitInstallDir. No DLL downloads are performed." />
+    <Error Condition="'$(SourceCommit)' == ''" Text="Set SourceCommit to the exact source Git SHA; never label an unknown build as verified." />
+  </Target>
+</Project>

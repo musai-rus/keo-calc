@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Command">
+    <Name>КЕО для Revit — выбор Room (исследование)</Name>
+    <Assembly>C:\REPLACE_WITH_TEST_DLL\Keo.RevitPrototype.dll</Assembly>
+    <AddInId>F3BDE10D-1F17-4A33-8DF7-8224A45F6E70</AddInId>
+    <FullClassName>Keo.RoomEvidence.RoomFilterCaptureCommand</FullClassName>
+    <Text>КЕО — снять Room evidence</Text>
+    <VendorId>KEOP</VendorId>
+    <VendorDescription>Экспериментальное чтение Revit Rooms без расчёта и записи в модель</VendorDescription>
+  </AddIn>
+</RevitAddIns>
