@@ -1,12 +1,33 @@
 import copy
 import unittest
-from d2_inspect import overlaps_xy, adapt_config, run_d2, ProbeRefused, D2_SCHEMA
+from d2_inspect import overlaps_xy, adapt_config, run_d2, ProbeRefused, D2_SCHEMA, phase_room
 from test_d1_capture import CFG, CaptureHost
 
 CONFIG = dict(CFG, schema="keo-dynamo-d2-config/v1")
 
 
 class D2Tests(unittest.TestCase):
+    def test_phase_overload_without_parameterless_property(self):
+        phase, room = object(), object()
+        calls = []
+        class Instance:
+            @property
+            def FromRoom(self):
+                raise AssertionError("Parameterless property must not be used")
+            @property
+            def ToRoom(self):
+                raise AssertionError("Parameterless property must not be used")
+            def get_FromRoom(self, requested):
+                calls.append(requested)
+                return room
+            def get_ToRoom(self, requested):
+                calls.append(requested)
+                return None
+        instance = Instance()
+        self.assertIs(phase_room(instance, phase, "FromRoom"), room)
+        self.assertIsNone(phase_room(instance, phase, "ToRoom"))
+        self.assertEqual(calls, [phase, phase])
+
     def test_candidates_include_other_heights(self):
         self.assertTrue(overlaps_xy([[0, 0, 100], [1, 1, 200]], [[0, 0, 0], [1, 1, 2]]))
 

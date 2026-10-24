@@ -14,6 +14,14 @@ def overlaps_xy(a, b, padding=0.0):
     return all(a[0][i] <= b[1][i] + padding and a[1][i] >= b[0][i] - padding for i in (0, 1))
 
 
+def phase_room(element, phase, side):
+    # PythonNet3 resolves FromRoom/ToRoom as the parameterless property.
+    # Call the phase overload explicitly; a Room itself is not a phase indexer.
+    if side not in ("FromRoom", "ToRoom"):
+        raise ValueError("Expected FromRoom or ToRoom")
+    return getattr(element, "get_" + side)(phase)
+
+
 def adapt_config(config):
     if not isinstance(config, dict) or config.get("schema") != "keo-dynamo-d2-config/v1":
         raise ProbeRefused("D2 configuration required")
@@ -25,6 +33,10 @@ def adapt_config(config):
 
 
 class D2Host(D1Host):
+    def phase_room_ref(self, element, phase, side):
+        room = phase_room(element, phase, side)
+        return self.ref(room) if room is not None else None
+
     def box(self, element):
         box = element.get_BoundingBox(None)
         if box is None:
@@ -93,8 +105,8 @@ class D2Host(D1Host):
             data.update(host=self.ref(element.Host) if element.Host else None,
                         supercomponent=self.ref(element.SuperComponent) if element.SuperComponent else None,
                         children=[self.resolve(eid) for eid in element.GetSubComponentIds()],
-                        fromRoom=rr("FromRoom[phase]", lambda: self.ref(element.FromRoom[phase]) if element.FromRoom[phase] else None),
-                        toRoom=rr("ToRoom[phase]", lambda: self.ref(element.ToRoom[phase]) if element.ToRoom[phase] else None))
+                        fromRoom=rr("get_FromRoom(phase)", lambda: self.phase_room_ref(element, phase, "FromRoom")),
+                        toRoom=rr("get_ToRoom(phase)", lambda: self.phase_room_ref(element, phase, "ToRoom")))
         if isinstance(element, self.DB.HostObject):
             data["inserts"] = rr("FindInserts(True,False,True,True)",
                 lambda: [self.resolve(eid) for eid in element.FindInserts(True, False, True, True)])
