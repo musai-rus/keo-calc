@@ -1,0 +1,14 @@
+{
+  "schema": "keo-dynamo-d3-config/v1",
+  "documentGuard": {
+    "schema": "keo-dynamo-d0-config/v1",
+    "expected_rvt_path": "",
+    "expected_sha256": "",
+    "expected_revit_version": "2027",
+    "expected_revit_build": ""
+  },
+  "node_executable": "",
+  "runner_path": "",
+  "requests_path": "",
+  "evidence_jsonl": ""
+}

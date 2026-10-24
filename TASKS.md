@@ -4,7 +4,7 @@
 
 | Направление | Единый источник требований | Учёт работ | Статус |
 |---|---|---|---|
-| **КЕО для Revit** (Dynamo-прототип) | [`tasks/KEO_REVIT.md`](tasks/KEO_REVIT.md), v0.2.5 | [Issue #13](https://github.com/musai-rus/keo-calc/issues/13), [PR #15](https://github.com/musai-rus/keo-calc/pull/15), ветка `feature/revit-keo-prototype` | Основной путь — Dynamo/Python → геометрия → неизменённое JS-ядро. D0 и минимальный D1 выполнены: один Room, нативные Line/Arc, повтор и независимые метрики. D2: проверено чтение физических тел/материалов, два одинаковых захвата и отмена; неоднозначности геометрии сохраняются, проёмы/видимость/затенение не приняты; D3 runner открыт. Полная геометрия и КЕО не приняты, C# отложен |
+| **КЕО для Revit** (Dynamo-прототип) | [`tasks/KEO_REVIT.md`](tasks/KEO_REVIT.md), v0.3.0 | [Issue #13](https://github.com/musai-rus/keo-calc/issues/13), [PR #15](https://github.com/musai-rus/keo-calc/pull/15), ветка `feature/revit-keo-prototype` | Только активные входы калькулятора, без привязки к модели. D0/минимальный D1, D2.1 карта входов и D3.1 runner выполнены; пять синтетических вариантов дважды рассчитаны из Dynamo. Следующие — реальные входы D2.2 → Room D4 → цвета/марки D5. Универсальность/Player/write-back ещё не приняты; C# отложен |
 | **КЕО по модели в Autodesk Viewer** | [`INSTRUCTION.md`, раздел 12](INSTRUCTION.md) и профильные контракты в [`bim/`](bim/) | Действующие PR/сценарии Viewer | Эксперимент, независимо от Revit |
 | **Основной ручной калькулятор** | [`INSTRUCTION.md`, разделы 1–11](INSTRUCTION.md) | Принятые решения и журнал в инструкции | Рабочее расчётное ядро; не менять в рамках Revit-прототипа |
 

@@ -1,0 +1,265 @@
+{
+  "Uuid": "6fc136ff3da285e09d6c762bf3fcd357",
+  "IsCustomNode": false,
+  "Description": "Read-only synthetic Python -> original JS core. No real Room KEO or model writes.",
+  "Name": "KEO D3 - Synthetic core replay",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "Id": "8ea7661785c44ff9acb85da684425547",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "47f36c88d4f7a124d9780eeee0daa056",
+          "Name": "",
+          "Description": "Config JSON path (local only)",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Config JSON path (local only)",
+      "InputValue": ""
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "3b478761b24dcc46ba5c526cf6298eea",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "e741ba30105fa7efae3963bec6ea9ff3",
+          "Name": "",
+          "Description": "Read test RVT (False = cancel)",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Read test RVT (False = cancel)",
+      "InputValue": false
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.IntegerSlider, CoreNodeModels",
+      "Id": "14f662a54fb16f27f15622a39a54bc88",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "e29eec744d3fce0c1dad4a1f406faa01",
+          "Name": "",
+          "Description": "Run number (change to repeat)",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Run number (change to repeat)",
+      "InputValue": 0,
+      "NumberType": "Integer",
+      "MaximumValue": 1000,
+      "MinimumValue": 0,
+      "StepValue": 1
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "BUNDLE_SHA256 = \"14d7513cd042f43c731ff1d4d3b97e0366aedc118312920bbb74fabd9d4a790f\"\n\"\"\"D0: read-only environment probe for Dynamo PythonNet3. No model writes.\n\nIN: absolute config JSON path, enabled Boolean, run nonce (change to rerun).\nOUT: JSON evidence. Configuration and runtime evidence are private local files.\n\"\"\"\nimport datetime\nimport json\nimport ntpath\nimport os\nimport re\nimport sys\nimport uuid\n\nPROBE_VERSION = \"0.1.0\"\nSOURCE_SHA256 = globals().get(\"SOURCE_SHA256\", \"unbundled\")\n\n\nclass ProbeRefused(Exception):\n    pass\n\n\ndef canonical_path(value, extension):\n    if not isinstance(value, str) or not ntpath.isabs(value):\n        raise ProbeRefused(\"An absolute local path is required\")\n    path = ntpath.normpath(value)\n    if path.startswith(\"\\\\\\\\\") or ntpath.splitext(path)[1].lower() != extension:\n        raise ProbeRefused(\"Wrong file extension or non-local path\")\n    return ntpath.normcase(path)\n\n\ndef validate_config(config):\n    required = {\"schema\", \"expected_rvt_path\", \"expected_sha256\", \"expected_revit_version\", \"expected_revit_build\"}\n    optional = {\"evidence_jsonl\"}\n    if not isinstance(config, dict) or set(config) - required - optional or not required <= set(config):\n        raise ProbeRefused(\"Unexpected or missing configuration fields\")\n    if config[\"schema\"] != \"keo-dynamo-d0-config/v1\":\n        raise ProbeRefused(\"Unsupported configuration schema\")\n    target = canonical_path(config[\"expected_rvt_path\"], \".rvt\")\n    if not isinstance(config[\"expected_sha256\"], str) or not re.fullmatch(r\"[0-9a-fA-F]{64}\", config[\"expected_sha256\"]):\n        raise ProbeRefused(\"An independently recorded RVT SHA-256 is required\")\n    for key in (\"expected_revit_version\", \"expected_revit_build\"):\n        if not isinstance(config[key], str) or not config[key].strip():\n            raise ProbeRefused(\"An explicit Revit version/build is required\")\n    if config.get(\"evidence_jsonl\"):\n        canonical_path(config[\"evidence_jsonl\"], \".jsonl\")\n    return target\n\n\ndef run_probe(config, enabled, nonce, host_factory):\n    result = {\n        \"schema\": \"keo-dynamo-d0-evidence/v1\", \"probeVersion\": PROBE_VERSION,\n        \"sourceSha256\": SOURCE_SHA256, \"runId\": str(uuid.uuid4()),\n        \"runNonce\": str(nonce), \"utc\": datetime.datetime.now(datetime.timezone.utc).isoformat(),\n        \"status\": \"ERROR\", \"modelAccepted\": False, \"geometryAccepted\": False,\n        \"normativeAccepted\": False, \"modelWriteRequested\": False,\n    }\n    host = None\n    before = None\n    try:\n        target = validate_config(config)\n        if type(enabled) is not bool:\n            raise ProbeRefused(\"Enabled must be a Boolean\")\n        if not enabled:\n            result.update(status=\"CANCELLED\", reason=\"Disabled before accessing Revit\")\n            return result\n        host = host_factory()\n        identity = host.identity()\n        if canonical_path(identity[\"path\"], \".rvt\") != target:\n            raise ProbeRefused(\"Active document does not match the explicitly selected test RVT\")\n        if identity[\"revitVersion\"] != config[\"expected_revit_version\"] or identity[\"revitBuild\"] != config[\"expected_revit_build\"]:\n            raise ProbeRefused(\"Revit version/build mismatch\")\n        # Runtime metadata is diagnostic even if the document fails the guard.\n        result[\"environment\"] = host.environment()\n        before = host.snapshot()\n        result[\"before\"] = before\n        if any(before[key] for key in (\"isModified\", \"isModifiable\", \"isWorkshared\", \"isLinked\", \"isFamilyDocument\", \"isModelInCloud\")):\n            raise ProbeRefused(\"Only unchanged saved standalone local root RVT is supported by D0\")\n        if before[\"sha256\"].lower() != config[\"expected_sha256\"].lower():\n            raise ProbeRefused(\"RVT differs from the independently recorded SHA-256\")\n        result[\"document\"] = identity\n        result[\"roomCount\"] = host.room_count()\n        result[\"status\"] = \"READ_ONLY_OK\"\n    except ProbeRefused as exc:\n        result.update(status=\"REFUSED\", reason=str(exc))\n    except Exception as exc:\n        result.update(status=\"ERROR\", reason=type(exc).__name__ + \": \" + str(exc))\n    finally:\n        if host is not None and before is not None:\n            try:\n                after = host.snapshot()\n                result[\"after\"] = after\n                result[\"documentUnchanged\"] = before == after\n                if before != after:\n                    result.update(status=\"ERROR\", reason=\"Document/file changed during probe\")\n            except Exception as exc:\n                result.update(status=\"ERROR\", documentUnchanged=False,\n                              reason=\"Post-check failed: \" + type(exc).__name__ + \": \" + str(exc))\n    return result\n\n\nclass RevitHost:\n    def __init__(self):\n        import clr\n        clr.AddReference(\"RevitAPI\")\n        clr.AddReference(\"RevitServices\")\n        from RevitServices.Persistence import DocumentManager\n        from Autodesk.Revit import DB\n        self.DB = DB\n        self.manager = DocumentManager.Instance\n        self.doc = self.manager.CurrentDBDocument\n        self.ui = self.manager.CurrentUIApplication\n        if self.doc is None or self.ui is None or self.ui.ActiveUIDocument is None:\n            raise ProbeRefused(\"No active Revit document\")\n        if not self.doc.Equals(self.ui.ActiveUIDocument.Document):\n            raise ProbeRefused(\"Dynamo and Revit active documents differ\")\n\n    def identity(self):\n        app = self.ui.Application\n        return {\"path\": str(self.doc.PathName), \"title\": str(self.doc.Title),\n                \"revitVersion\": str(app.VersionNumber), \"revitBuild\": str(app.VersionBuild)}\n\n    def snapshot(self):\n        from System import BitConverter\n        from System.IO import FileStream, FileMode, FileAccess, FileShare\n        from System.Security.Cryptography import SHA256\n        if not self.doc.IsValidObject or not self.doc.Equals(self.manager.CurrentDBDocument) or not self.doc.Equals(self.ui.ActiveUIDocument.Document):\n            raise ProbeRefused(\"Active document changed\")\n        path = str(self.doc.PathName)\n        canonical_path(path, \".rvt\")\n        version = self.DB.Document.GetDocumentVersion(self.doc)\n        try:\n            result = {\"path\": path, \"versionGuid\": str(version.VersionGUID),\n                      \"numberOfSaves\": int(version.NumberOfSaves)}\n        finally:\n            version.Dispose()\n        for name in (\"IsModified\", \"IsModifiable\", \"IsWorkshared\", \"IsLinked\", \"IsFamilyDocument\", \"IsModelInCloud\"):\n            result[name[0].lower() + name[1:]] = bool(getattr(self.doc, name))\n        stream = FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)\n        hasher = SHA256.Create()\n        try:\n            result[\"fileLength\"] = int(stream.Length)\n            result[\"sha256\"] = str(BitConverter.ToString(hasher.ComputeHash(stream))).replace(\"-\", \"\").lower()\n        finally:\n            hasher.Dispose()\n            stream.Dispose()\n        return result\n\n    def environment(self):\n        import platform\n        from System import AppDomain, Environment\n        from System.Diagnostics import FileVersionInfo, Process\n        names = {\"DynamoCore\", \"DynamoRevitDS\", \"RevitAPI\", \"RevitServices\", \"Python.Runtime\", \"DSPythonNet3\"}\n        assemblies = []\n        for assembly in AppDomain.CurrentDomain.GetAssemblies():\n            name = str(assembly.GetName().Name)\n            if name in names:\n                info = FileVersionInfo.GetVersionInfo(assembly.Location)\n                assemblies.append({\"name\": name, \"assemblyVersion\": str(assembly.GetName().Version),\n                                   \"fileVersion\": str(info.FileVersion)})\n        return {\"python\": sys.version, \"pythonImplementation\": platform.python_implementation(),\n                \"dotnet\": str(Environment.Version), \"processId\": int(Process.GetCurrentProcess().Id),\n                \"assemblies\": sorted(assemblies, key=lambda item: item[\"name\"])}\n\n    def room_count(self):\n        collector = self.DB.FilteredElementCollector(self.doc).OfCategory(self.DB.BuiltInCategory.OST_Rooms).WhereElementIsNotElementType()\n        try:\n            return int(collector.GetElementCount())\n        finally:\n            collector.Dispose()\n\n\ndef dynamo_entry(inputs):\n    if len(inputs) != 3:\n        raise ProbeRefused(\"Expected configuration path, enabled Boolean and run nonce\")\n    path = inputs[0]\n    canonical_path(path, \".json\")\n    if os.path.getsize(path) > 65536:\n        raise ProbeRefused(\"Configuration exceeds 64 KiB\")\n    with open(path, \"r\", encoding=\"utf-8-sig\") as stream:\n        config = json.load(stream)\n    result = run_probe(config, inputs[1], inputs[2], RevitHost)\n    # Append only to an explicit local evidence log; never open the RVT for writing.\n    # Invalid configuration cannot grant permission to write an output file.\n    validate_config(config)\n    if config.get(\"evidence_jsonl\"):\n        output = config[\"evidence_jsonl\"]\n        if os.path.exists(output):\n            if os.path.getsize(output) > 10 * 1024 * 1024:\n                raise ProbeRefused(\"Evidence log exceeds 10 MiB\")\n            with open(output, \"r\", encoding=\"utf-8\") as stream:\n                for line in stream:\n                    if line.strip() and json.loads(line).get(\"schema\") != result[\"schema\"]:\n                        raise ProbeRefused(\"Existing file is not a D0 evidence log\")\n        with open(output, \"a\", encoding=\"utf-8\", newline=\"\\n\") as stream:\n            stream.write(json.dumps(result, ensure_ascii=False, sort_keys=True) + \"\\n\")\n    return json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)\n\n\n\n\"\"\"Local Python -> unchanged JS calculator. No Revit API, transactions or shell.\n\nThis client transports PREVIEW results only. It cannot approve BIM/norm evidence.\nUse absolute paths to the installed Node executable and the packaged runner.\n\"\"\"\nimport json\nimport math\nimport os\nimport subprocess\nimport tempfile\nimport time\n\nSCHEMA = \"keo-runner-preview/0.1\"\nINPUT_LIMIT = 2 * 1024 * 1024\nOUTPUT_LIMIT = 16 * 1024 * 1024\n\n\ndef failure(code, detail):\n    return {\"schema\": SCHEMA, \"ok\": False, \"previewOnly\": True,\n            \"status\": \"ERROR\", \"color\": \"gray\", \"previewImportJson\": None,\n            \"errors\": [{\"code\": code, \"detail\": detail}]}\n\n\ndef calculate(envelope, node_executable, runner_path, timeout_seconds=30,\n              cancelled=None):\n    \"\"\"Cancellation callback is polled between waits (<=100 ms). No shell=True.\"\"\"\n    process = None\n    try:\n        if cancelled and cancelled():\n            return failure(\"cancelled\", \"Отменено до запуска\")\n        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:\n            return failure(\"invalid-timeout\", \"Нужен положительный тайм-аут\")\n        for value in (node_executable, runner_path):\n            if not os.path.isabs(value) or not os.path.isfile(value):\n                return failure(\"runtime-path\", \"Нужны абсолютные пути к Node и runner\")\n        payload = json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode(\"utf-8\")\n        if len(payload) > INPUT_LIMIT:\n            return failure(\"input-too-large\", \"Превышен размер входного JSON\")\n        env = dict(os.environ)\n        env.pop(\"NODE_OPTIONS\", None)\n        env.pop(\"NODE_PATH\", None)\n        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:\n            process = subprocess.Popen(\n                [node_executable, runner_path], stdin=subprocess.PIPE,\n                stdout=stdout, stderr=stderr, cwd=os.path.dirname(runner_path),\n                shell=False, env=env,\n                creationflags=getattr(subprocess, \"CREATE_NO_WINDOW\", 0))\n            deadline = time.monotonic() + timeout_seconds\n            first = True\n            while True:\n                if cancelled and cancelled():\n                    return failure(\"cancelled\", \"Расчёт отменён; результат не принят\")\n                remaining = deadline - time.monotonic()\n                if remaining <= 0:\n                    return failure(\"timeout\", \"Расчёт превысил тайм-аут\")\n                if max(os.fstat(stdout.fileno()).st_size, os.fstat(stderr.fileno()).st_size) > OUTPUT_LIMIT:\n                    return failure(\"output-too-large\", \"Превышен размер ответа\")\n                try:\n                    process.communicate(input=payload if first else None, timeout=min(.1, remaining))\n                    break\n                except subprocess.TimeoutExpired:\n                    first = False\n            stdout.seek(0)\n            raw = stdout.read(OUTPUT_LIMIT + 1)\n            if len(raw) > OUTPUT_LIMIT or os.fstat(stderr.fileno()).st_size > OUTPUT_LIMIT:\n                return failure(\"output-too-large\", \"Превышен размер ответа\")\n            response = json.loads(raw.decode(\"utf-8\"))\n            if not isinstance(response, dict) or response.get(\"schema\") != SCHEMA:\n                return failure(\"invalid-response\", \"Неизвестный протокол ответа\")\n            if response.get(\"previewOnly\") is not True or response.get(\"color\") != \"gray\" or response.get(\"status\") not in (\"PENDING\", \"ERROR\"):\n                return failure(\"invalid-response\", \"Runner не имеет права подтверждать результат Room\")\n            if process.returncode != 0:\n                return failure(\"runner-exit\", \"Runner завершился с кодом %s: %s\" %\n                               (process.returncode, response.get(\"errors\", [])))\n            if response.get(\"ok\") is not True:\n                return failure(\"invalid-response\", \"Runner не подтвердил вычисление\")\n            result = response.get(\"coreResult\", {})\n            value = result.get(\"res\", {}).get(\"eFinal\")\n            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):\n                return failure(\"invalid-response\", \"Нет конечного значения КЕО\")\n            return response\n    except (OSError, ValueError, TypeError) as error:\n        return failure(\"client-error\", str(error))\n    finally:\n        if process is not None:\n            if process.poll() is None:\n                process.kill()\n            process.wait()\n\n\n\"\"\"D3 synthetic exchange probe for the existing three-input Dynamo scaffold.\n\nBundled with d0_probe.py (guards) and client.py (process transport). It does not\nextract Room inputs, accept evidence, write transactions or save the model.\n\"\"\"\nimport hashlib\n\n\ndef run_d3(config, enabled, nonce, host_factory):\n    required = {\"schema\", \"documentGuard\", \"node_executable\", \"runner_path\", \"requests_path\", \"evidence_jsonl\"}\n    if not isinstance(config, dict) or set(config) != required or config[\"schema\"] != \"keo-dynamo-d3-config/v1\":\n        raise ProbeRefused(\"Unexpected D3 configuration\")\n    for key, ext in ((\"node_executable\", \".exe\"), (\"runner_path\", \".cjs\"), (\"requests_path\", \".json\"), (\"evidence_jsonl\", \".jsonl\")):\n        canonical_path(config[key], ext)\n    guard = run_probe(config[\"documentGuard\"], enabled, nonce, host_factory)\n    result = {\"schema\": \"keo-dynamo-d3-evidence/v1\", \"bundleSha256\": globals().get(\"BUNDLE_SHA256\", \"unbundled\"),\n              \"runNonce\": str(nonce), \"utc\": datetime.datetime.now(datetime.timezone.utc).isoformat(),\n              \"syntheticOnly\": True, \"geometryAccepted\": False, \"normativeAccepted\": False,\n              \"modelWriteRequested\": False, \"status\": guard[\"status\"], \"guard\": guard}\n    if guard[\"status\"] != \"READ_ONLY_OK\":\n        return result\n    host = host_factory()\n    try:\n        if host.snapshot() != guard[\"after\"]:\n            raise ProbeRefused(\"Document changed before runner\")\n        if os.path.getsize(config[\"requests_path\"]) > INPUT_LIMIT:\n            raise ProbeRefused(\"Synthetic fixture file too large\")\n        with open(config[\"requests_path\"], \"rb\") as stream:\n            request_bytes = stream.read()\n        requests = json.loads(request_bytes.decode(\"utf-8-sig\"))\n        if not isinstance(requests, list) or not 1 <= len(requests) <= 5:\n            raise ProbeRefused(\"Expected 1 to 5 synthetic requests\")\n        if any(q.get(\"state\", {}).get(\"meta\", {}).get(\"code\") != \"SYNTHETIC\" for q in requests):\n            raise ProbeRefused(\"D3 probe accepts synthetic fixtures only\")\n        result[\"requestsSha256\"] = hashlib.sha256(request_bytes).hexdigest()\n        result[\"responses\"] = [calculate(q, config[\"node_executable\"], config[\"runner_path\"], 10) for q in requests]\n        result[\"status\"] = \"SYNTHETIC_REPLAY_OK\" if all(r[\"ok\"] for r in result[\"responses\"]) else \"ERROR\"\n    except Exception as exc:\n        result.update(status=\"ERROR\", reason=type(exc).__name__ + \": \" + str(exc))\n    finally:\n        result[\"afterRunner\"] = host.snapshot()\n        result[\"documentUnchanged\"] = result[\"afterRunner\"] == guard[\"before\"]\n        if not result[\"documentUnchanged\"]:\n            result.update(status=\"ERROR\", reason=\"Document changed during runner\")\n    return result\n\n\ndef d3_entry(inputs):\n    if len(inputs) != 3:\n        raise ProbeRefused(\"Expected config, Boolean enabled, nonce\")\n    canonical_path(inputs[0], \".json\")\n    if os.path.getsize(inputs[0]) > 65536:\n        raise ProbeRefused(\"Configuration too large\")\n    with open(inputs[0], \"r\", encoding=\"utf-8-sig\") as stream:\n        config = json.load(stream)\n    result = run_d3(config, inputs[1], inputs[2], RevitHost)\n    output = config[\"evidence_jsonl\"]\n    if os.path.exists(output):\n        if os.path.getsize(output) > 10 * 1024 * 1024:\n            raise ProbeRefused(\"Evidence log too large\")\n        with open(output, \"r\", encoding=\"utf-8\") as stream:\n            for line in stream:\n                if line.strip() and json.loads(line).get(\"schema\") != result[\"schema\"]:\n                    raise ProbeRefused(\"Existing output is not D3 evidence\")\n    with open(output, \"a\", encoding=\"utf-8\", newline=\"\\n\") as stream:\n        stream.write(json.dumps(result, ensure_ascii=False, sort_keys=True) + \"\\n\")\n    # Keep the Watch compact; the full responses are in the explicit evidence log.\n    return json.dumps({k: v for k, v in result.items() if k not in (\"guard\", \"responses\", \"afterRunner\")}, ensure_ascii=False, indent=2)\n\n\nif \"IN\" in globals():\n    try:\n        OUT = d3_entry(IN)\n    except Exception as exc:\n        OUT = json.dumps({\"schema\": \"keo-dynamo-d3-evidence/v1\", \"status\": \"ERROR\", \"reason\": str(exc),\n                          \"geometryAccepted\": False, \"normativeAccepted\": False}, ensure_ascii=False)\n",
+      "Engine": "PythonNet3",
+      "VariableInputPorts": true,
+      "Id": "9a33243ab61efb5a8a8d41151b80a7ed",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "8c7150bd7beb3118367e4631054cba36",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "1946e872355933e5850109991742fb6e",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "3f09ae8f8f034f086bceb7fbe67d33de",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "07b15b62096f71f69dcf8dfbe369e864",
+          "Name": "OUT",
+          "Description": "D0 diagnostic JSON; no KEO result",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Read-only environment probe; explicit test-copy path and hash required."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "Id": "879b1faea998651a443a7e71b15afdb3",
+      "NodeType": "ExtensionNode",
+      "WatchWidth": 520,
+      "WatchHeight": 430,
+      "Inputs": [
+        {
+          "Id": "09a86c93745e1adbfe090c7f6f003f59",
+          "Name": "",
+          "Description": "D0 JSON",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "52122da03d5aadd5c8234014db33e02a",
+          "Name": "",
+          "Description": "D0 JSON",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Probe result"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "47f36c88d4f7a124d9780eeee0daa056",
+      "End": "8c7150bd7beb3118367e4631054cba36",
+      "Id": "196fb407ba90ae6cb5c0c43c92ab0aca",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "e741ba30105fa7efae3963bec6ea9ff3",
+      "End": "1946e872355933e5850109991742fb6e",
+      "Id": "22f97294cdb629415bdf6196c4f2656b",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "e29eec744d3fce0c1dad4a1f406faa01",
+      "End": "3f09ae8f8f034f086bceb7fbe67d33de",
+      "Id": "ecb7233eedc8d12885543f491339e839",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "07b15b62096f71f69dcf8dfbe369e864",
+      "End": "09a86c93745e1adbfe090c7f6f003f59",
+      "Id": "879b64612c2030999a4909aa74f5374c",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": false,
+  "Thumbnail": "",
+  "GraphDocumentationURL": "",
+  "ExtensionWorkspaceData": [],
+  "Author": "keo-calc",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "0",
+    "WarningCount": 0,
+    "ErrorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1,
+      "HasRunWithoutCrash": false,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "4.2.1.5887",
+      "RunType": "Manual",
+      "RunPeriod": "100"
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "8ea7661785c44ff9acb85da684425547",
+        "Name": "Config JSON path (local only)",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": false,
+        "X": 20,
+        "Y": 20
+      },
+      {
+        "Id": "3b478761b24dcc46ba5c526cf6298eea",
+        "Name": "Read test RVT (False = cancel)",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": false,
+        "X": 20,
+        "Y": 190
+      },
+      {
+        "Id": "14f662a54fb16f27f15622a39a54bc88",
+        "Name": "Run number (change to repeat)",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": false,
+        "X": 20,
+        "Y": 330
+      },
+      {
+        "Id": "9a33243ab61efb5a8a8d41151b80a7ed",
+        "Name": "D3 - Synthetic core replay",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": false,
+        "X": 440,
+        "Y": 160
+      },
+      {
+        "Id": "879b1faea998651a443a7e71b15afdb3",
+        "Name": "D3 summary",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": true,
+        "Excluded": false,
+        "ShowGeometry": false,
+        "X": 700,
+        "Y": 20
+      }
+    ],
+    "Annotations": [],
+    "X": 20,
+    "Y": 30,
+    "Zoom": 0.8
+  }
+}
