@@ -1,0 +1,13 @@
+{
+  "schema": "keo-dynamo-inputs-config/v1",
+  "documentGuard": {
+    "schema": "keo-dynamo-d0-config/v1",
+    "expected_rvt_path": "",
+    "expected_sha256": "",
+    "expected_revit_version": "2027",
+    "expected_revit_build": "27.3.0.28"
+  },
+  "selected_room_uid": "",
+  "phase_uid": "",
+  "evidence_jsonl": ""
+}
